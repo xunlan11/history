@@ -1,0 +1,251 @@
+let documents = normalizeDocuments(loadDocuments());
+let selectedDocumentId = documents[0]?.id || null;
+let selectedPageId = documents[0]?.pages?.[0]?.id || null;
+
+function loadDocuments() {
+  try {
+    const current = localStorage.getItem(STORAGE_KEY);
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    return JSON.parse(current || legacy) || [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeDocuments(items) {
+  return items.map((item) => {
+    const pages = Array.isArray(item.pages) && item.pages.length
+      ? item.pages
+      : [createPage(1, item.ocrText || "")];
+
+    const normalized = {
+      ...item,
+      processMode: item.processMode || "online",
+      offlineTask: item.offlineTask || null,
+      pages: pages
+        .map((page, index) => ({
+          id: page.id || newId(),
+          pageNumber: Number(page.pageNumber) || index + 1,
+          text: page.text || "",
+          notes: page.notes || "",
+          status: page.status || (page.text ? "已保存文字" : "待整理"),
+          imageDataUrl: page.imageDataUrl || "",
+          imageUrl: page.imageUrl || "",
+          imageName: page.imageName || "",
+          ocr: page.ocr || null,
+          updatedAt: page.updatedAt || item.updatedAt || item.createdAt || "",
+        }))
+        .sort((a, b) => a.pageNumber - b.pageNumber),
+    };
+
+    delete normalized.ocrText;
+    normalized.status = summarizeDocumentStatus(normalized);
+    return normalized;
+  });
+}
+
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
+}
+
+function createPage(pageNumber, text = "") {
+  return {
+    id: newId(),
+    pageNumber,
+    text,
+    notes: "",
+    status: text ? "已保存文字" : "待整理",
+    imageDataUrl: "",
+    imageUrl: "",
+    imageName: "",
+    ocr: null,
+    updatedAt: "",
+  };
+}
+
+function getSelectedDocument() {
+  return documents.find((item) => item.id === selectedDocumentId) || null;
+}
+
+function getSelectedPage() {
+  const item = getSelectedDocument();
+  if (!item) {
+    return null;
+  }
+
+  return item.pages.find((page) => page.id === selectedPageId) || item.pages[0] || null;
+}
+
+function ensureSelectedPage(item) {
+  if (!item.pages.length) {
+    const page = createPage(1);
+    item.pages.push(page);
+    selectedPageId = page.id;
+  }
+
+  if (!item.pages.some((page) => page.id === selectedPageId)) {
+    selectedPageId = item.pages[0].id;
+  }
+}
+
+function nextPageNumber(item) {
+  return Math.max(0, ...item.pages.map((page) => page.pageNumber)) + 1;
+}
+
+function saveCurrentPage(statusOverride) {
+  const item = getSelectedDocument();
+  const page = getSelectedPage();
+  if (!item || !page) {
+    return false;
+  }
+
+  page.text = ocrText.value.trim();
+  page.notes = pageNotes.value.trim();
+  page.status = statusOverride || (page.text ? "已保存文字" : "待整理");
+  page.updatedAt = new Date().toISOString();
+  item.status = summarizeDocumentStatus(item);
+  item.updatedAt = new Date().toISOString();
+  persist();
+  return true;
+}
+
+function moveToAdjacentPage(direction, options = {}) {
+  const item = getSelectedDocument();
+  if (!item) {
+    return;
+  }
+
+  ensureSelectedPage(item);
+  const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
+  const currentIndex = Math.max(0, pages.findIndex((page) => page.id === selectedPageId));
+  const nextIndex = currentIndex + direction;
+
+  if (pages[nextIndex]) {
+    selectedPageId = pages[nextIndex].id;
+    renderAll();
+    return;
+  }
+
+  if (direction > 0 && options.createIfMissing) {
+    const page = createPage(nextPageNumber(item));
+    item.pages.push(page);
+    item.pages.sort((a, b) => a.pageNumber - b.pageNumber);
+    selectedPageId = page.id;
+    item.status = summarizeDocumentStatus(item);
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+    return;
+  }
+
+  renderAll();
+}
+
+function summarizeDocumentStatus(item) {
+  if (!item.pages.length || item.pages.every((page) => !page.text)) {
+    return "待整理";
+  }
+
+  if (item.pages.some((page) => page.status === "待核对")) {
+    return "有文字待核对";
+  }
+
+  if (item.pages.some((page) => page.text)) {
+    return "已保存文字";
+  }
+
+  return "待整理";
+}
+
+function createOfflineTask(file) {
+  return {
+    id: newId(),
+    status: "提交中",
+    createdAt: new Date().toISOString(),
+    submittedAt: "",
+    finishedAt: "",
+    remoteTaskId: "",
+    totalPages: 0,
+    sourceFileName: file.name,
+    serviceUrl: OCR_BATCH_SERVICE_URL,
+    message: "正在提交给本机整本处理服务",
+  };
+}
+
+function getOfflineTaskLabel(item) {
+  if (item.processMode !== "offline") {
+    return "不适用";
+  }
+
+  return item.offlineTask?.status || "等待处理";
+}
+
+function getProcessModeHelp(item) {
+  if (item.processMode === "offline") {
+    return "导入后由本机整本处理服务统一识别，完成后再进入逐页核对。";
+  }
+
+  return "在整理工作台中逐页选择原图，并逐页自动识别、核对。";
+}
+
+function applyBatchPages(item, pages) {
+  item.pages = pages
+    .map((page, index) => normalizeBatchPage(page, index))
+    .sort((a, b) => a.pageNumber - b.pageNumber);
+  selectedPageId = item.pages[0]?.id || null;
+}
+
+function normalizeBatchPage(page, index) {
+  const text = page.text || "";
+  const warnings = Array.isArray(page.warnings) ? page.warnings : [];
+  const notes = [
+    page.notes || "",
+    typeof page.confidence === "number" ? `自动识别置信度：${Math.round(page.confidence * 100)}%。` : "",
+    warnings.length ? `识别提示：${warnings.join("；")}` : "",
+    "本页由离线整本处理生成，需对照原图逐字核对。",
+  ].filter(Boolean).join("\n");
+
+  return {
+    id: page.id || newId(),
+    pageNumber: Number(page.pageNumber) || index + 1,
+    text,
+    notes,
+    status: page.status || (text ? "待核对" : "待整理"),
+    imageDataUrl: page.imageDataUrl || "",
+    imageUrl: page.imageUrl || "",
+    imageName: page.imageName || `第 ${Number(page.pageNumber) || index + 1} 页`,
+    ocr: {
+      confidence: page.confidence ?? null,
+      engine: page.engine || "本机整本处理服务",
+      recognizedAt: page.recognizedAt || new Date().toISOString(),
+    },
+    updatedAt: page.updatedAt || new Date().toISOString(),
+  };
+}
+
+function buildOcrNote(result) {
+  const notes = [];
+
+  if (typeof result.confidence === "number") {
+    notes.push(`自动识别置信度：${Math.round(result.confidence * 100)}%。`);
+  }
+
+  if (Array.isArray(result.warnings) && result.warnings.length) {
+    notes.push(`识别提示：${result.warnings.join("；")}`);
+  }
+
+  notes.push("本页文字由自动识别生成，需对照原图逐字核对。");
+  return notes.join("\n");
+}
+
+function mergeNotes(existing, addition) {
+  if (!existing) {
+    return addition;
+  }
+
+  if (!addition) {
+    return existing;
+  }
+
+  return `${existing}\n\n${addition}`;
+}

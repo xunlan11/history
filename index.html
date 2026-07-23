@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>近代军史数智平台</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>近代军史数智平台</h1>
+          <p>文献整理试用版</p>
+        </div>
+
+        <nav class="nav-list" aria-label="主导航">
+          <button class="nav-item active" type="button" data-view="library">文献库</button>
+          <button class="nav-item" type="button" data-view="workspace">整理工作台</button>
+          <button class="nav-item" type="button" data-view="search">全文检索</button>
+          <button class="nav-item" type="button" data-view="chronicle">史事编年</button>
+        </nav>
+
+        <section class="status-panel" aria-label="阶段状态">
+          <h2>使用提示</h2>
+          <ul>
+            <li>先登记文献</li>
+            <li>再整理文字</li>
+            <li>最后检索内容</li>
+            <li>OCR：<span id="ocr-service-status">检测中</span></li>
+          </ul>
+        </section>
+      </aside>
+
+      <main class="main">
+        <section class="toolbar">
+          <div>
+            <p class="eyebrow">第一阶段</p>
+            <h2 id="view-title">文献库</h2>
+          </div>
+          <div class="toolbar-actions">
+            <button class="secondary-button" id="export-pdf" type="button">导出 PDF</button>
+            <button class="secondary-button" id="export-json" type="button">导出数据备份</button>
+          </div>
+        </section>
+
+        <section class="view active" id="library-view" aria-labelledby="view-title">
+          <div class="two-column">
+            <form class="panel form-panel" id="document-form">
+              <h3>新增文献</h3>
+              <label>
+                上传 PDF 或图片
+                <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
+              </label>
+              <label>
+                文献名
+                <input id="title-input" name="title" type="text" required />
+              </label>
+              <div class="field-grid">
+                <label>
+                  著者
+                  <input id="author-input" name="author" type="text" />
+                </label>
+                <label>
+                  年份
+                  <input id="year-input" name="year" type="text" />
+                </label>
+              </div>
+              <div class="field-grid">
+                <label>
+                  出版社
+                  <input id="publisher-input" name="publisher" type="text" />
+                </label>
+                <label>
+                  版权信息
+                  <input id="rights-input" name="rights" type="text" />
+                </label>
+              </div>
+              <label>
+                来源信息
+                <input id="source-input" name="source" type="text" />
+              </label>
+              <label>
+                主题标签
+                <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
+              </label>
+              <fieldset class="mode-field">
+                <legend>处理方式</legend>
+                <label class="radio-row">
+                  <input type="radio" name="processMode" value="online" checked />
+                  在线逐页整理
+                </label>
+                <label class="radio-row">
+                  <input type="radio" name="processMode" value="offline" />
+                  离线整本处理
+                </label>
+              </fieldset>
+              <button class="primary-button" type="submit">登记文献</button>
+            </form>
+
+            <section class="panel">
+              <div class="section-heading">
+                <h3>文献列表</h3>
+                <span id="document-count">0 项</span>
+              </div>
+              <div class="document-list" id="document-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="workspace-view" aria-labelledby="view-title">
+          <div class="workspace-grid">
+            <section class="panel document-detail">
+              <div class="section-heading">
+                <h3>当前文献</h3>
+                <span id="selected-status">未选择</span>
+              </div>
+              <dl id="document-detail"></dl>
+              <div class="offline-actions hidden" id="offline-actions">
+                <button class="primary-button" id="refresh-offline" type="button">刷新整本结果</button>
+                <span class="inline-status" id="offline-status">等待处理</span>
+              </div>
+
+              <div class="page-tools">
+                <div class="section-heading compact-heading">
+                  <h3>页目</h3>
+                  <span id="page-count">0 页</span>
+                </div>
+                <div class="page-add-row">
+                  <label>
+                    页码
+                    <input id="page-number-input" type="number" min="1" value="1" />
+                  </label>
+                  <button class="secondary-button" id="add-page" type="button">新增或打开</button>
+                </div>
+                <div class="page-list" id="page-list"></div>
+              </div>
+            </section>
+
+            <section class="compare-workspace">
+              <section class="panel original-panel">
+                <div class="section-heading">
+                  <h3>本页原始资料</h3>
+                  <span id="original-page-status">未选择页</span>
+                </div>
+                <label class="page-image-picker">
+                  选择本页图片
+                  <input id="page-image-input" type="file" accept="image/*" />
+                </label>
+                <div class="action-row">
+                  <button class="primary-button" id="recognize-page" type="button">自动识别本页</button>
+                  <span class="inline-status" id="recognize-status">等待原图</span>
+                </div>
+                <div class="original-viewer" id="original-preview"></div>
+              </section>
+
+              <section class="panel transcription-panel">
+                <div class="section-heading">
+                  <h3>整理后的文字</h3>
+                  <span id="selected-page-status">未选择页</span>
+                </div>
+                <div class="page-nav-row">
+                  <button class="secondary-button" id="prev-page" type="button">上一页</button>
+                  <button class="secondary-button" id="next-page" type="button">下一页</button>
+                  <button class="primary-button" id="save-next" type="button">保存并下一页</button>
+                </div>
+                <textarea id="ocr-text" rows="18" placeholder="请先在左侧新增或打开页码，再录入本页识别出的文字。后续阶段会逐步加入自动识别能力。"></textarea>
+                <label>
+                  疑难字与核对说明
+                  <textarea id="page-notes" class="notes-textarea" rows="5" placeholder="可记录本页不确定字、残缺处、需回看原图的位置，例如：第3行第5字待核。"></textarea>
+                </label>
+                <div class="action-row">
+                  <button class="primary-button" id="save-ocr" type="button">保存文字</button>
+                  <button class="secondary-button" id="mark-reviewed" type="button">标记待核对</button>
+                </div>
+              </section>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="search-view" aria-labelledby="view-title">
+          <section class="panel">
+            <div class="search-row">
+              <label>
+                检索词
+                <input id="search-input" type="search" placeholder="输入人名、地名、机构、部队番号或原文短语" />
+              </label>
+              <button class="primary-button" id="search-button" type="button">检索</button>
+            </div>
+            <div class="result-list" id="search-results"></div>
+          </section>
+        </section>
+
+        <section class="view" id="chronicle-view" aria-labelledby="view-title">
+          <section class="panel">
+            <div class="search-row">
+              <label>
+                编年主题
+                <input id="chronicle-topic" type="search" placeholder="输入人物、地点、机构、战事或关键词；留空则扫描全部已整理文字" />
+              </label>
+              <button class="primary-button" id="build-chronicle" type="button">生成编年</button>
+            </div>
+            <div class="result-list" id="chronicle-results"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="document-card-template">
+      <article class="document-card">
+        <div>
+          <h4></h4>
+          <p class="meta-line"></p>
+        </div>
+        <div class="card-actions">
+          <button class="secondary-button select-document" type="button">打开</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/store.js"></script>
+    <script src="js/dom.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/service-status.js"></script>
+    <script src="js/ocr.js"></script>
+    <script src="js/search.js"></script>
+    <script src="js/chronicle.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/main.js"></script>
+  </body>
+</html>

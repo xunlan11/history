@@ -1,0 +1,4 @@
+ocr-service/.venv/
+ocr-service/storage/
+ocr-service/__pycache__/
+ocr-service/*.pyc
