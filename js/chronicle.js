@@ -44,7 +44,7 @@ function collectChronicleEntries(topic) {
 
   documents.forEach((item) => {
     item.pages.forEach((page) => {
-      splitSentences(page.text).forEach((sentence) => {
+      splitSentences(getPagePrimaryText(page)).forEach((sentence) => {
         if (topic && !matchesTopic(item, page, sentence, topic)) {
           return;
         }

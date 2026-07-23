@@ -101,6 +101,16 @@ document.querySelector("#mark-reviewed").addEventListener("click", () => {
   }
 });
 
+document.querySelector("#copy-ocr-to-clean").addEventListener("click", () => {
+  cleanText.value = ocrRawText.value.trim();
+  cleanText.focus();
+});
+
+document.querySelector("#copy-clean-to-punctuated").addEventListener("click", () => {
+  punctuatedText.value = cleanText.value.trim();
+  punctuatedText.focus();
+});
+
 document.querySelector("#prev-page").addEventListener("click", () => {
   saveCurrentPage();
   moveToAdjacentPage(-1);

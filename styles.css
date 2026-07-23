@@ -252,6 +252,10 @@ textarea {
   line-height: 1.7;
 }
 
+.layer-textarea {
+  min-height: 160px;
+}
+
 .notes-textarea {
   min-height: 120px;
 }
@@ -389,6 +393,16 @@ button:focus-visible {
 .transcription-panel {
   display: grid;
   gap: 14px;
+}
+
+.text-layer {
+  gap: 8px;
+}
+
+.layer-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
 }
 
 .original-panel {

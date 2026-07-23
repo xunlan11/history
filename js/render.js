@@ -63,7 +63,9 @@ function renderDetail() {
     offlineActions.classList.add("hidden");
     offlineStatus.textContent = "等待处理";
     pageCount.textContent = "0 页";
-    ocrText.value = "";
+    ocrRawText.value = "";
+    cleanText.value = "";
+    punctuatedText.value = "";
     pageNotes.value = "";
     renderOriginalPreview(null);
     detailNode.append(emptyState("请先在文献库登记或打开一项文献"));
@@ -82,7 +84,9 @@ function renderDetail() {
   recognizeStatus.textContent = getRecognizeStatusText(page);
   pageCount.textContent = `${item.pages.length} 页`;
   pageNumberInput.value = page?.pageNumber || nextPageNumber(item);
-  ocrText.value = page?.text || "";
+  ocrRawText.value = page?.ocrText || "";
+  cleanText.value = page?.cleanText || page?.text || "";
+  punctuatedText.value = page?.punctuatedText || "";
   pageNotes.value = page?.notes || "";
   renderOriginalPreview(page);
 

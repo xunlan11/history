@@ -42,7 +42,8 @@ async function recognizeCurrentPage() {
       return;
     }
 
-    page.text = recognizedText.trim();
+    page.ocrText = recognizedText.trim();
+    page.text = page.cleanText || "";
     page.notes = mergeNotes(page.notes, buildOcrNote(result));
     page.status = "待核对";
     page.ocr = {

@@ -156,7 +156,7 @@
 
               <section class="panel transcription-panel">
                 <div class="section-heading">
-                  <h3>整理后的文字</h3>
+                  <h3>本页文字整理</h3>
                   <span id="selected-page-status">未选择页</span>
                 </div>
                 <div class="page-nav-row">
@@ -164,13 +164,30 @@
                   <button class="secondary-button" id="next-page" type="button">下一页</button>
                   <button class="primary-button" id="save-next" type="button">保存并下一页</button>
                 </div>
-                <textarea id="ocr-text" rows="18" placeholder="请先在左侧新增或打开页码，再录入本页识别出的文字。后续阶段会逐步加入自动识别能力。"></textarea>
+                <label class="text-layer">
+                  OCR 原始录文
+                  <textarea id="ocr-raw-text" class="layer-textarea" rows="7" placeholder="自动识别结果会先进入这里。这里保留原始识别文本，不直接作为最终整理稿。"></textarea>
+                </label>
+                <div class="layer-tools">
+                  <button class="secondary-button" id="copy-ocr-to-clean" type="button">带入整理文本</button>
+                </div>
+                <label class="text-layer">
+                  忠实整理文本
+                  <textarea id="clean-text" class="layer-textarea" rows="7" placeholder="在原始录文基础上逐字核对、修正识别错误，保持原文原貌。"></textarea>
+                </label>
+                <div class="layer-tools">
+                  <button class="secondary-button" id="copy-clean-to-punctuated" type="button">带入简体标点文本</button>
+                </div>
+                <label class="text-layer">
+                  简体标点文本
+                  <textarea id="punctuated-text" class="layer-textarea" rows="7" placeholder="在忠实整理文本基础上转换简体、断句、加标点，便于阅读、检索和编年。"></textarea>
+                </label>
                 <label>
                   疑难字与核对说明
                   <textarea id="page-notes" class="notes-textarea" rows="5" placeholder="可记录本页不确定字、残缺处、需回看原图的位置，例如：第3行第5字待核。"></textarea>
                 </label>
                 <div class="action-row">
-                  <button class="primary-button" id="save-ocr" type="button">保存文字</button>
+                  <button class="primary-button" id="save-ocr" type="button">保存本页</button>
                   <button class="secondary-button" id="mark-reviewed" type="button">标记待核对</button>
                 </div>
               </section>

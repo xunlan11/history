@@ -56,6 +56,19 @@ function buildPrintHtml(item) {
       const notesHtml = page.notes
         ? `<h3>疑难字与核对说明</h3><div class="notes">${escapeHtml(page.notes)}</div>`
         : "";
+      const layers = [
+        ["OCR 原始录文", page.ocrText],
+        ["忠实整理文本", page.cleanText || page.text],
+        ["简体标点文本", page.punctuatedText],
+      ];
+      const layerHtml = layers
+        .map(([label, value]) => `
+          <section class="text-layer">
+            <h3>${escapeHtml(label)}</h3>
+            <div class="transcription">${escapeHtml(value || "（本层尚未整理文字）")}</div>
+          </section>
+        `)
+        .join("");
 
       return `
         <section class="page-section">
@@ -67,8 +80,7 @@ function buildPrintHtml(item) {
               ${imageHtml}
             </div>
             <div>
-              <h3>整理文字</h3>
-              <div class="transcription">${escapeHtml(page.text || "（本页尚未整理文字）")}</div>
+              ${layerHtml}
               ${notesHtml}
             </div>
           </div>
@@ -103,7 +115,8 @@ function buildPrintHtml(item) {
       figure { margin: 0; }
       img { max-width: 100%; height: auto; border: 1px solid #d9e0dc; }
       figcaption, .no-image { margin: 6px 0 0; color: #66736d; font-size: 12px; }
-      .transcription { min-height: 120px; white-space: pre-wrap; border: 1px solid #d9e0dc; padding: 12px; background: #fbfcfb; }
+      .text-layer { margin-bottom: 14px; }
+      .transcription { min-height: 88px; white-space: pre-wrap; border: 1px solid #d9e0dc; padding: 12px; background: #fbfcfb; }
       .notes { margin-top: 8px; white-space: pre-wrap; border-left: 3px solid #8f4a3d; padding: 8px 10px; background: #f8f4ef; }
       @media print { .print-actions { display: none; } main { padding: 0; } }
     </style>

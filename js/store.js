@@ -16,7 +16,7 @@ function normalizeDocuments(items) {
   return items.map((item) => {
     const pages = Array.isArray(item.pages) && item.pages.length
       ? item.pages
-      : [createPage(1, item.ocrText || "")];
+      : [createPage(1, { cleanText: item.ocrText || "" })];
 
     const normalized = {
       ...item,
@@ -26,9 +26,12 @@ function normalizeDocuments(items) {
         .map((page, index) => ({
           id: page.id || newId(),
           pageNumber: Number(page.pageNumber) || index + 1,
-          text: page.text || "",
+          ocrText: page.ocrText || page.rawText || "",
+          cleanText: page.cleanText || page.text || "",
+          punctuatedText: page.punctuatedText || page.readingText || "",
+          text: page.cleanText || page.text || "",
           notes: page.notes || "",
-          status: page.status || (page.text ? "已保存文字" : "待整理"),
+          status: page.status || (hasPageText(page) ? "已保存文字" : "待整理"),
           imageDataUrl: page.imageDataUrl || "",
           imageUrl: page.imageUrl || "",
           imageName: page.imageName || "",
@@ -48,13 +51,21 @@ function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
 }
 
-function createPage(pageNumber, text = "") {
+function createPage(pageNumber, textLayers = "") {
+  const layers = typeof textLayers === "string"
+    ? { cleanText: textLayers }
+    : textLayers || {};
+  const initialText = layers.cleanText || layers.ocrText || layers.punctuatedText || "";
+
   return {
     id: newId(),
     pageNumber,
-    text,
+    ocrText: layers.ocrText || "",
+    cleanText: layers.cleanText || "",
+    punctuatedText: layers.punctuatedText || "",
+    text: layers.cleanText || "",
     notes: "",
-    status: text ? "已保存文字" : "待整理",
+    status: initialText ? "已保存文字" : "待整理",
     imageDataUrl: "",
     imageUrl: "",
     imageName: "",
@@ -99,9 +110,12 @@ function saveCurrentPage(statusOverride) {
     return false;
   }
 
-  page.text = ocrText.value.trim();
+  page.ocrText = ocrRawText.value.trim();
+  page.cleanText = cleanText.value.trim();
+  page.punctuatedText = punctuatedText.value.trim();
+  page.text = page.cleanText;
   page.notes = pageNotes.value.trim();
-  page.status = statusOverride || (page.text ? "已保存文字" : "待整理");
+  page.status = statusOverride || (hasPageText(page) ? "已保存文字" : "待整理");
   page.updatedAt = new Date().toISOString();
   item.status = summarizeDocumentStatus(item);
   item.updatedAt = new Date().toISOString();
@@ -142,7 +156,7 @@ function moveToAdjacentPage(direction, options = {}) {
 }
 
 function summarizeDocumentStatus(item) {
-  if (!item.pages.length || item.pages.every((page) => !page.text)) {
+  if (!item.pages.length || item.pages.every((page) => !hasPageText(page))) {
     return "待整理";
   }
 
@@ -150,11 +164,29 @@ function summarizeDocumentStatus(item) {
     return "有文字待核对";
   }
 
-  if (item.pages.some((page) => page.text)) {
+  if (item.pages.some((page) => hasPageText(page))) {
     return "已保存文字";
   }
 
   return "待整理";
+}
+
+function hasPageText(page) {
+  return Boolean(page.ocrText || page.cleanText || page.punctuatedText || page.text);
+}
+
+function getPagePrimaryText(page) {
+  return page?.punctuatedText || page?.cleanText || page?.ocrText || page?.text || "";
+}
+
+function getPageSearchText(page) {
+  return [
+    page?.ocrText,
+    page?.cleanText,
+    page?.punctuatedText,
+    page?.text,
+    page?.notes,
+  ].filter(Boolean).join("\n");
 }
 
 function createOfflineTask(file) {
@@ -196,7 +228,7 @@ function applyBatchPages(item, pages) {
 }
 
 function normalizeBatchPage(page, index) {
-  const text = page.text || "";
+  const text = page.ocrText || page.text || "";
   const warnings = Array.isArray(page.warnings) ? page.warnings : [];
   const notes = [
     page.notes || "",
@@ -208,7 +240,10 @@ function normalizeBatchPage(page, index) {
   return {
     id: page.id || newId(),
     pageNumber: Number(page.pageNumber) || index + 1,
-    text,
+    ocrText: text,
+    cleanText: page.cleanText || "",
+    punctuatedText: page.punctuatedText || "",
+    text: page.cleanText || "",
     notes,
     status: page.status || (text ? "待核对" : "待整理"),
     imageDataUrl: page.imageDataUrl || "",

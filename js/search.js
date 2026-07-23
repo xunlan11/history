@@ -62,7 +62,7 @@ function buildSearchEntries(item, query) {
   }
 
   item.pages.forEach((page) => {
-    const pageSnippet = buildSnippet([page.text, page.notes].join("\n"), query);
+    const pageSnippet = buildSnippet(getPageSearchText(page), query);
     if (pageSnippet) {
       entries.push({ item, page, snippet: pageSnippet });
     }
