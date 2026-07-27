@@ -58,6 +58,7 @@ async function recognizeCurrentPage() {
     persist();
     renderAll();
     recognizeStatus.textContent = "已识别，待核对";
+    autoExtractDocumentMetadata(item, recognizedText, page, "ocr");
   } catch (error) {
     recognizeStatus.textContent = "识别服务未连接";
     alert("暂时无法连接本机识别服务。请确认技术人员已在本机启动 OCR 服务后再试。");
@@ -94,6 +95,7 @@ async function submitOfflineTask(item, file) {
       applyBatchPages(item, result.pages);
       item.offlineTask.status = result.status || "已回填";
       item.offlineTask.finishedAt = result.finishedAt || new Date().toISOString();
+      autoExtractDocumentMetadata(item, collectMetadataCandidateText(item), item.pages[0], "ocr");
     }
 
     item.status = item.offlineTask.status;
@@ -147,6 +149,7 @@ async function refreshOfflineTask() {
       applyBatchPages(item, result.pages);
       item.offlineTask.status = result.status || "已回填";
       item.offlineTask.finishedAt = result.finishedAt || new Date().toISOString();
+      autoExtractDocumentMetadata(item, collectMetadataCandidateText(item), item.pages[0], "ocr");
     }
 
     item.status = item.offlineTask.status;
@@ -157,4 +160,14 @@ async function refreshOfflineTask() {
     offlineStatus.textContent = "刷新失败";
     alert("暂时无法刷新整本处理结果。请确认本机整本处理服务仍在运行。");
   }
+}
+
+function collectMetadataCandidateText(item) {
+  return item.pages
+    .slice()
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .slice(0, 3)
+    .map((page) => page.ocrText || page.cleanText || page.punctuatedText || "")
+    .filter(Boolean)
+    .join("\n\n");
 }

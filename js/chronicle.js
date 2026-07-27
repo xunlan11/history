@@ -2,9 +2,13 @@ function buildChronicle() {
   const topic = chronicleTopic.value.trim();
   const entries = collectChronicleEntries(topic);
   chronicleResults.innerHTML = "";
+  chronicleResults.classList.remove("empty-result-list");
 
   if (!entries.length) {
-    chronicleResults.append(emptyState("未找到可生成编年的日期条目。可先补充整理文字，或换一个主题。"));
+    const empty = emptyState("未找到可生成编年的日期条目。");
+    empty.classList.add("result-empty");
+    chronicleResults.classList.add("empty-result-list");
+    chronicleResults.append(empty);
     return;
   }
 

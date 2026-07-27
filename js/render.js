@@ -1,45 +1,197 @@
 function setView(name) {
   Object.entries(views).forEach(([key, node]) => {
+    if (!node) {
+      return;
+    }
+
     node.classList.toggle("active", key === name);
   });
 
-  document.querySelectorAll(".nav-item").forEach((button) => {
+  document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === name);
   });
 
-  document.querySelector("#view-title").textContent = viewTitles[name];
+  const title = document.querySelector("#view-title");
+  if (title && viewTitles[name]) {
+    title.textContent = viewTitles[name];
+  }
 }
 
 function renderAll() {
+  renderConversationList();
+  renderActiveConversation();
   renderDocumentList();
   renderDetail();
-  renderSearchEmpty();
-  renderChronicleEmpty();
+  renderSmartEmpty();
+  if (typeof renderSmartModeButtons === "function") {
+    renderSmartModeButtons();
+  }
+}
+
+function renderConversationList() {
+  conversationList.innerHTML = "";
+
+  if (!conversations.length) {
+    const empty = document.createElement("div");
+    empty.className = "conversation-empty";
+    empty.textContent = "暂无对话";
+    conversationList.append(empty);
+    return;
+  }
+
+  let activeDateGroup = "";
+  getSortedConversations().forEach((item) => {
+    const dateGroup = getConversationDateGroup(item);
+
+    if (dateGroup !== activeDateGroup) {
+      activeDateGroup = dateGroup;
+      conversationList.append(createConversationDateHeading(dateGroup));
+    }
+
+    const row = document.createElement("article");
+    const button = document.createElement("button");
+    const deleteButton = document.createElement("button");
+    const title = document.createElement("strong");
+    const meta = document.createElement("span");
+
+    row.className = "conversation-row";
+    row.classList.toggle("active", item.id === selectedConversationId);
+    button.className = "conversation-item";
+    button.type = "button";
+    title.textContent = item.title || "新对话";
+    meta.className = "conversation-mode";
+    meta.textContent = getConversationModeLabel(item.mode);
+    button.append(title, meta);
+    button.addEventListener("click", () => {
+      selectedConversationId = item.id;
+      selectedSmartMode = item.mode || "chat";
+      renderSmartModeButtons();
+      searchInput.value = item.title === "新对话" ? "" : item.title;
+      chronicleTopic.value = item.mode === "chronicle" ? searchInput.value : "";
+      searchResults.innerHTML = "";
+      chronicleResults.innerHTML = "";
+      searchResults.classList.remove("empty-result-list");
+      chronicleResults.classList.remove("empty-result-list");
+      renderConversationList();
+      renderActiveConversation();
+
+      if (!searchInput.value.trim()) {
+        renderSmartEmpty();
+        return;
+      }
+
+      if (item.mode === "chat") {
+        runSmartChat();
+        return;
+      }
+
+      if (item.mode === "chronicle") {
+        buildChronicle();
+        return;
+      }
+
+      runSearch();
+    });
+
+    deleteButton.className = "conversation-delete";
+    deleteButton.type = "button";
+    deleteButton.title = "删除对话";
+    deleteButton.setAttribute("aria-label", `删除对话：${item.title || "新对话"}`);
+    deleteButton.textContent = "×";
+    deleteButton.addEventListener("click", () => {
+      openDeleteConversationDialog(item);
+    });
+
+    row.append(button, deleteButton);
+    conversationList.append(row);
+  });
+}
+
+function getSortedConversations() {
+  return conversations.slice().sort((a, b) => {
+    return getConversationTime(b) - getConversationTime(a);
+  });
+}
+
+function getConversationTime(item) {
+  const value = item.updatedAt || item.createdAt || "";
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function getConversationDateGroup(item) {
+  const value = item.updatedAt || item.createdAt || "";
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "未归档";
+  }
+
+  const now = new Date();
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (now.getTime() - date.getTime() <= 30 * dayMs) {
+    return "30 天内";
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function createConversationDateHeading(label) {
+  const node = document.createElement("h3");
+  node.className = "conversation-date-heading";
+  node.textContent = label;
+  return node;
+}
+
+function renderActiveConversation() {
+  const conversation = getSelectedConversation();
+
+  chatTitle.textContent = conversation?.title || "新对话";
+  chatHint.textContent = getConversationModeLabel(selectedSmartMode);
+}
+
+function getConversationModeLabel(mode) {
+  if (mode === "search") {
+    return "检索";
+  }
+
+  if (mode === "chronicle") {
+    return "编年";
+  }
+
+  return "对话";
 }
 
 function renderDocumentList() {
   documentList.innerHTML = "";
-  documentCount.textContent = `${documents.length} 项`;
+  documentCount.textContent = `${documents.length} 项在库`;
+  documentList.append(createAddBookCard());
 
   if (!documents.length) {
-    documentList.append(emptyState("尚未登记文献"));
     return;
   }
 
-  documents.forEach((item) => {
+  documents.forEach((item, index) => {
     const node = cardTemplate.content.cloneNode(true);
     const card = node.querySelector("article");
+    const openButton = node.querySelector(".select-document");
+    const cover = node.querySelector(".book-cover");
+    const progress = getDocumentProgress(item);
+
     card.classList.toggle("selected", item.id === selectedDocumentId);
-    node.querySelector("h4").textContent = item.title;
-    node.querySelector(".meta-line").textContent = [
-      item.author || "著者未录",
+    card.classList.add(`cover-${index % 6}`);
+    node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
+    node.querySelector(".book-author").textContent = item.author || "著者未录";
+    node.querySelector(".book-progress span").style.width = `${progress}%`;
+    node.querySelector(".book-meta strong").textContent = getDocumentDisplayTitle(item);
+    node.querySelector(".book-meta small").textContent = [
       item.year || "年份未录",
-      item.processMode === "offline" ? "离线整本处理" : "在线逐页整理",
       `${item.pages.length} 页`,
       item.status,
     ].join(" · ");
+    cover.setAttribute("aria-hidden", "true");
 
-    node.querySelector(".select-document").addEventListener("click", () => {
+    openButton.addEventListener("click", () => {
       selectedDocumentId = item.id;
       ensureSelectedPage(item);
       renderAll();
@@ -48,6 +200,46 @@ function renderDocumentList() {
 
     documentList.append(node);
   });
+}
+
+function createAddBookCard() {
+  const article = document.createElement("article");
+  const button = document.createElement("button");
+  const plus = document.createElement("span");
+  const label = document.createElement("span");
+  const hint = document.createElement("small");
+
+  article.className = "book-card add-card";
+  button.className = "book-open add-document";
+  button.type = "button";
+  plus.className = "add-plus";
+  plus.textContent = "+";
+  label.className = "book-meta";
+  label.innerHTML = "<strong>新增文献</strong>";
+  hint.textContent = "上传 PDF 或图片";
+
+  button.append(plus, label, hint);
+  button.addEventListener("click", openDocumentForm);
+  article.append(button);
+  return article;
+}
+
+function getDocumentProgress(item) {
+  if (!item.pages.length) {
+    return 0;
+  }
+
+  const finished = item.pages.filter((page) => hasPageText(page)).length;
+  return Math.max(4, Math.round((finished / item.pages.length) * 100));
+}
+
+function openDocumentForm() {
+  formSheet.classList.remove("hidden");
+  document.querySelector("#file-input").focus();
+}
+
+function closeDocumentForm() {
+  formSheet.classList.add("hidden");
 }
 
 function renderDetail() {
@@ -91,7 +283,7 @@ function renderDetail() {
   renderOriginalPreview(page);
 
   const rows = [
-    ["文献名", item.title],
+    ["文献名", item.title || "未识别"],
     ["著者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
@@ -103,6 +295,7 @@ function renderDetail() {
     ["处理方式", item.processMode === "offline" ? "离线整本处理" : "在线逐页整理"],
     ["整本处理", getOfflineTaskLabel(item)],
     ["处理说明", getProcessModeHelp(item)],
+    ["信息识别", item.metadataStatus || "待自动识别"],
     ["已建页目", `${item.pages.length} 页`],
   ];
 
@@ -179,16 +372,21 @@ function renderPageList(item) {
   });
 }
 
-function renderSearchEmpty() {
-  if (!searchInput.value.trim()) {
-    searchResults.innerHTML = "";
-    searchResults.append(emptyState("输入检索词后，将在文献信息和各页文字中查找"));
+function renderSmartEmpty() {
+  if (searchInput.value.trim()) {
+    return;
   }
+
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  searchResults.classList.remove("empty-result-list");
+  chronicleResults.classList.remove("empty-result-list");
+}
+
+function renderSearchEmpty() {
+  renderSmartEmpty();
 }
 
 function renderChronicleEmpty() {
-  if (!chronicleTopic.value.trim()) {
-    chronicleResults.innerHTML = "";
-    chronicleResults.append(emptyState("输入主题后，将从已整理文字中提取带日期的史事条目"));
-  }
+  renderSmartEmpty();
 }

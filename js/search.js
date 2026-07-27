@@ -1,6 +1,7 @@
 function runSearch() {
   const query = searchInput.value.trim();
   searchResults.innerHTML = "";
+  searchResults.classList.remove("empty-result-list");
 
   if (!query) {
     renderSearchEmpty();
@@ -10,7 +11,10 @@ function runSearch() {
   const results = documents.flatMap((item) => buildSearchEntries(item, query));
 
   if (!results.length) {
-    searchResults.append(emptyState("未找到匹配内容"));
+    const empty = emptyState("未找到匹配内容");
+    empty.classList.add("result-empty");
+    searchResults.classList.add("empty-result-list");
+    searchResults.append(empty);
     return;
   }
 

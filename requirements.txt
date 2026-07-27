@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 python-multipart
+pydantic
 paddleocr
 paddlepaddle
 Pillow

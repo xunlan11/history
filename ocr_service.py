@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 APP_DIR = Path(__file__).resolve().parent
-STORAGE_DIR = APP_DIR / "storage"
+STORAGE_DIR = APP_DIR / "ocr-storage"
 TASKS_DIR = STORAGE_DIR / "tasks"
 PUBLIC_BASE_URL = "http://127.0.0.1:8765"
 

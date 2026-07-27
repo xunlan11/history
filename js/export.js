@@ -1,8 +1,3 @@
-function exportDataBackup() {
-  const payload = JSON.stringify(documents, null, 2);
-  downloadTextFile("近代军史数智平台-文献库.json", payload, "application/json;charset=utf-8");
-}
-
 function exportPdf() {
   const item = getSelectedDocument();
 

@@ -6,6 +6,7 @@
 - Python 3.10+
 - PaddleOCR 运行环境
 - 可访问 OCR 服务端口 `8765`
+- 可访问大模型统一接口端口 `8865`
 
 ## 2. 前端部署
 
@@ -24,17 +25,19 @@ http://127.0.0.1:8765/ocr
 http://127.0.0.1:8765/ocr/batch
 ```
 
+确认 `js/config.js` 中大模型统一接口地址：
+
+```text
+http://127.0.0.1:8865/llm
+http://127.0.0.1:8865/health
+```
+
 如前端和 OCR 服务不在同一主机，改为实际 OCR 服务地址。
+如前端和大模型服务不在同一主机，改为实际大模型服务地址。
 
 ## 3. OCR 服务部署
 
-进入 OCR 服务目录：
-
-```text
-cd ocr-service
-```
-
-创建虚拟环境：
+在项目根目录创建虚拟环境：
 
 ```text
 python -m venv .venv
@@ -55,7 +58,7 @@ pip install -r requirements.txt
 启动 OCR 服务：
 
 ```text
-uvicorn app:app --host 127.0.0.1 --port 8765
+uvicorn ocr_service:app --host 127.0.0.1 --port 8765
 ```
 
 ## 4. OCR 服务检查
@@ -74,12 +77,59 @@ http://127.0.0.1:8765/health
 }
 ```
 
-## 5. OCR 数据目录
+## 5. 大模型统一接口部署
+
+大模型统一接口与 OCR 服务共用根目录虚拟环境和根目录 `requirements.txt`。
+
+本地默认使用 Ollama 运行 Qwen3-8B。先确认本机已安装并启动 Ollama，然后拉取模型：
+
+```text
+ollama pull qwen3:8b
+```
+
+启动大模型统一接口：
+
+```text
+uvicorn llm_service:app --host 127.0.0.1 --port 8865
+```
+
+默认配置为：
+
+```text
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen3:8b
+LLM_API_BASE=http://127.0.0.1:11434/v1
+```
+
+如需改用其他本地模型或外部 OpenAI-compatible API，可在启动前设置以上环境变量。
+
+## 6. 大模型统一接口检查
+
+访问：
+
+```text
+http://127.0.0.1:8865/health
+```
+
+模型已连接时返回：
+
+```json
+{
+  "status": "ok",
+  "ready": true,
+  "provider": "ollama",
+  "model": "qwen3:8b"
+}
+```
+
+如果 Ollama 未启动或本机尚未拉取 `qwen3:8b`，`ready` 会返回 `false`，网页左侧“大模型”状态会显示“待配置”。
+
+## 7. OCR 数据目录
 
 OCR 服务运行后生成：
 
 ```text
-ocr-service/storage/
+ocr-storage/
 ```
 
 用途：
@@ -89,7 +139,7 @@ ocr-service/storage/
 - 保存 PDF 拆页图片
 - 保存任务状态文件
 
-## 6. 部署后检查
+## 8. 部署后检查
 
 检查前端：
 
@@ -103,6 +153,12 @@ index.html
 网页左侧 OCR 状态显示为“已连接”
 ```
 
+检查大模型接口状态：
+
+```text
+网页左侧大模型状态显示为“待配置”或“已连接”
+```
+
 检查在线识别：
 
 ```text
@@ -114,4 +170,15 @@ POST /ocr
 ```text
 POST /ocr/batch
 GET /ocr/batch/{taskId}
+```
+
+检查大模型统一接口：
+
+```text
+GET /llm/health
+POST /llm/punctuate
+POST /llm/proofread
+POST /llm/extract-metadata
+POST /llm/extract-events
+POST /llm/chronicle
 ```

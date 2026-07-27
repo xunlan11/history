@@ -8,107 +8,84 @@
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <h1>近代军史数智平台</h1>
-          <p>文献整理试用版</p>
-        </div>
-
-        <nav class="nav-list" aria-label="主导航">
-          <button class="nav-item active" type="button" data-view="library">文献库</button>
-          <button class="nav-item" type="button" data-view="workspace">整理工作台</button>
-          <button class="nav-item" type="button" data-view="search">全文检索</button>
-          <button class="nav-item" type="button" data-view="chronicle">史事编年</button>
-        </nav>
-
-        <section class="status-panel" aria-label="阶段状态">
-          <h2>使用提示</h2>
-          <ul>
-            <li>先登记文献</li>
-            <li>再整理文字</li>
-            <li>最后检索内容</li>
-            <li>OCR：<span id="ocr-service-status">检测中</span></li>
-          </ul>
-        </section>
-      </aside>
-
       <main class="main">
-        <section class="toolbar">
-          <div>
-            <p class="eyebrow">第一阶段</p>
-            <h2 id="view-title">文献库</h2>
-          </div>
-          <div class="toolbar-actions">
-            <button class="secondary-button" id="export-pdf" type="button">导出 PDF</button>
-            <button class="secondary-button" id="export-json" type="button">导出数据备份</button>
-          </div>
-        </section>
+        <section class="view active" id="library-view" aria-label="首页">
+          <header class="home-statusbar">
+            <div class="service-strip" aria-label="服务链接状态">
+              <span>OCR：<b id="ocr-service-status" class="service-warn">未连接</b></span>
+              <span>大模型：<b id="llm-service-status" class="service-warn">未连接</b></span>
+            </div>
+            <div class="status-title">
+              <p class="eyebrow">近代军史数智平台</p>
+            </div>
+            <div class="status-spacer" aria-hidden="true"></div>
+          </header>
 
-        <section class="view active" id="library-view" aria-labelledby="view-title">
-          <div class="two-column">
-            <form class="panel form-panel" id="document-form">
-              <h3>新增文献</h3>
-              <label>
-                上传 PDF 或图片
-                <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
-              </label>
-              <label>
-                文献名
-                <input id="title-input" name="title" type="text" required />
-              </label>
-              <div class="field-grid">
-                <label>
-                  著者
-                  <input id="author-input" name="author" type="text" />
-                </label>
-                <label>
-                  年份
-                  <input id="year-input" name="year" type="text" />
-                </label>
+          <div class="home-board">
+            <aside class="home-sidebar chat-sidebar" aria-label="对话记录">
+              <div class="sidebar-heading">
+                <h2>对话记录</h2>
+                <button class="ghost-link" id="new-conversation" type="button">新建 ＋</button>
               </div>
-              <div class="field-grid">
-                <label>
-                  出版社
-                  <input id="publisher-input" name="publisher" type="text" />
-                </label>
-                <label>
-                  版权信息
-                  <input id="rights-input" name="rights" type="text" />
-                </label>
-              </div>
-              <label>
-                来源信息
-                <input id="source-input" name="source" type="text" />
-              </label>
-              <label>
-                主题标签
-                <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
-              </label>
-              <fieldset class="mode-field">
-                <legend>处理方式</legend>
-                <label class="radio-row">
-                  <input type="radio" name="processMode" value="online" checked />
-                  在线逐页整理
-                </label>
-                <label class="radio-row">
-                  <input type="radio" name="processMode" value="offline" />
-                  离线整本处理
-                </label>
-              </fieldset>
-              <button class="primary-button" type="submit">登记文献</button>
-            </form>
+              <div class="conversation-list" id="conversation-list"></div>
+            </aside>
 
-            <section class="panel">
-              <div class="section-heading">
-                <h3>文献列表</h3>
-                <span id="document-count">0 项</span>
+            <div class="center-stack">
+              <section class="message-panel" aria-label="书库问答消息">
+                <div class="message-head">
+                  <h2 id="chat-title">新对话</h2>
+                  <span id="chat-hint">输入后在这里显示检索或编年结果</span>
+                </div>
+                <div class="message-scroll" id="message-feed">
+                  <div class="smart-results">
+                    <div class="result-list" id="search-results"></div>
+                    <div class="result-list" id="chronicle-results"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="smart-dock" id="smart-dock" aria-label="全文检索与史事编年">
+                <div class="smart-input-box">
+                  <label class="sr-only" for="search-input">输入检索词或编年主题</label>
+                  <textarea id="search-input" rows="3" placeholder="问书库：输入问题，系统会结合已整理文献回答"></textarea>
+                  <input id="chronicle-topic" type="hidden" />
+                  <div class="smart-actions">
+                    <button class="chip-button active" id="chat-button" type="button" data-smart-mode="chat">对话</button>
+                    <button class="chip-button" id="search-button" type="button" data-smart-mode="search">检索</button>
+                    <button class="chip-button" id="build-chronicle" type="button" data-smart-mode="chronicle">编年</button>
+                    <button class="round-send" id="smart-send" type="button" title="发送">↑</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="home-sidebar library-sidebar" aria-label="书库">
+              <div class="sidebar-heading">
+                <h2>文献库 <span class="sidebar-count" id="document-count">0 项在库</span></h2>
+                <button class="ghost-link" id="jump-workspace" type="button">整理台 ›</button>
               </div>
-              <div class="document-list" id="document-list"></div>
-            </section>
+              <nav class="shelf-tabs" aria-label="书库筛选">
+                <button class="shelf-tab active" type="button">最近</button>
+                <button class="shelf-tab" type="button">全部</button>
+                <button class="shelf-tab" type="button">待整理</button>
+                <button class="shelf-tab" type="button">已整理</button>
+              </nav>
+              <section class="shelf-stage" aria-label="书架">
+                <div class="document-list" id="document-list"></div>
+              </section>
+            </aside>
           </div>
         </section>
 
-        <section class="view" id="workspace-view" aria-labelledby="view-title">
+        <section class="view" id="workspace-view" aria-label="整理工作台">
+          <header class="workspace-topbar">
+            <button class="back-button" type="button" data-view="library">‹ 返回书库</button>
+            <div>
+              <p class="eyebrow">当前整理台</p>
+              <h2>文献整理</h2>
+            </div>
+          </header>
+
           <div class="workspace-grid">
             <section class="panel document-detail">
               <div class="section-heading">
@@ -177,6 +154,7 @@
                 </label>
                 <div class="layer-tools">
                   <button class="secondary-button" id="copy-clean-to-punctuated" type="button">带入简体标点文本</button>
+                  <button class="primary-button" id="generate-punctuated" type="button">生成简体标点文本</button>
                 </div>
                 <label class="text-layer">
                   简体标点文本
@@ -189,49 +167,97 @@
                 <div class="action-row">
                   <button class="primary-button" id="save-ocr" type="button">保存本页</button>
                   <button class="secondary-button" id="mark-reviewed" type="button">标记待核对</button>
+                  <button class="secondary-button" id="generate-proofread" type="button">生成校对报告</button>
+                  <span class="inline-status" id="llm-task-status">等待文字</span>
                 </div>
               </section>
             </section>
           </div>
         </section>
-
-        <section class="view" id="search-view" aria-labelledby="view-title">
-          <section class="panel">
-            <div class="search-row">
-              <label>
-                检索词
-                <input id="search-input" type="search" placeholder="输入人名、地名、机构、部队番号或原文短语" />
-              </label>
-              <button class="primary-button" id="search-button" type="button">检索</button>
-            </div>
-            <div class="result-list" id="search-results"></div>
-          </section>
-        </section>
-
-        <section class="view" id="chronicle-view" aria-labelledby="view-title">
-          <section class="panel">
-            <div class="search-row">
-              <label>
-                编年主题
-                <input id="chronicle-topic" type="search" placeholder="输入人物、地点、机构、战事或关键词；留空则扫描全部已整理文字" />
-              </label>
-              <button class="primary-button" id="build-chronicle" type="button">生成编年</button>
-            </div>
-            <div class="result-list" id="chronicle-results"></div>
-          </section>
-        </section>
       </main>
     </div>
 
+    <div class="confirm-dialog hidden" id="delete-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-conversation-title">
+      <div class="confirm-card">
+        <h2 id="delete-conversation-title">删除对话</h2>
+        <p id="delete-conversation-message">确定删除这条对话吗？</p>
+        <div class="confirm-actions">
+          <button class="secondary-button" id="cancel-delete-conversation" type="button">取消</button>
+          <button class="danger-button" id="confirm-delete-conversation" type="button">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-sheet hidden" id="document-form-sheet" role="dialog" aria-modal="true" aria-labelledby="add-document-title">
+      <form class="panel form-panel" id="document-form">
+        <div class="section-heading">
+          <h3 id="add-document-title">新增文献</h3>
+          <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
+        </div>
+        <label>
+          上传 PDF 或图片
+          <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
+        </label>
+        <label>
+          文献名
+          <input id="title-input" name="title" type="text" placeholder="可留空，系统会优先自动识别" />
+        </label>
+        <div class="field-grid">
+          <label>
+            著者
+            <input id="author-input" name="author" type="text" placeholder="可留空" />
+          </label>
+          <label>
+            年份
+            <input id="year-input" name="year" type="text" placeholder="可留空" />
+          </label>
+        </div>
+        <div class="field-grid">
+          <label>
+            出版社
+            <input id="publisher-input" name="publisher" type="text" placeholder="可留空" />
+          </label>
+          <label>
+            版权信息
+            <input id="rights-input" name="rights" type="text" placeholder="可留空" />
+          </label>
+        </div>
+        <label>
+          来源信息
+          <input id="source-input" name="source" type="text" placeholder="可留空" />
+        </label>
+        <label>
+          主题标签
+          <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
+        </label>
+        <fieldset class="mode-field">
+          <legend>处理方式</legend>
+          <label class="radio-row">
+            <input type="radio" name="processMode" value="online" checked />
+            在线逐页整理
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="processMode" value="offline" />
+            离线整本处理
+          </label>
+        </fieldset>
+        <button class="primary-button" type="submit">登记并进入整理台</button>
+      </form>
+    </div>
+
     <template id="document-card-template">
-      <article class="document-card">
-        <div>
-          <h4></h4>
-          <p class="meta-line"></p>
-        </div>
-        <div class="card-actions">
-          <button class="secondary-button select-document" type="button">打开</button>
-        </div>
+      <article class="book-card">
+        <button class="book-open select-document" type="button">
+          <span class="book-cover">
+            <span class="book-title"></span>
+            <span class="book-author"></span>
+          </span>
+          <span class="book-progress"><span></span></span>
+          <span class="book-meta">
+            <strong></strong>
+            <small></small>
+          </span>
+        </button>
       </article>
     </template>
 
@@ -242,6 +268,7 @@
     <script src="js/render.js"></script>
     <script src="js/service-status.js"></script>
     <script src="js/ocr.js"></script>
+    <script src="js/llm.js"></script>
     <script src="js/search.js"></script>
     <script src="js/chronicle.js"></script>
     <script src="js/export.js"></script>

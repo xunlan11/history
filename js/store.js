@@ -1,6 +1,8 @@
 let documents = normalizeDocuments(loadDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
+let conversations = loadConversations();
+let selectedConversationId = conversations[0]?.id || null;
 
 function loadDocuments() {
   try {
@@ -20,6 +22,14 @@ function normalizeDocuments(items) {
 
     const normalized = {
       ...item,
+      title: item.title || "",
+      author: item.author || "",
+      year: item.year || "",
+      publisher: item.publisher || "",
+      rights: item.rights || "",
+      source: item.source || "",
+      tags: item.tags || "",
+      metadataStatus: item.metadataStatus || "待自动识别",
       processMode: item.processMode || "online",
       offlineTask: item.offlineTask || null,
       pages: pages
@@ -49,6 +59,103 @@ function normalizeDocuments(items) {
 
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
+}
+
+function loadConversations() {
+  try {
+    const items = JSON.parse(localStorage.getItem("modernMilitaryHistory.conversations.v1")) || [];
+    return items.map((item) => {
+      const fallbackDate = item.updatedAt || item.createdAt || new Date().toISOString();
+      return {
+        ...item,
+        mode: item.mode || "chat",
+        locked: Boolean(item.locked || (item.title && item.title !== "新对话")),
+        createdAt: item.createdAt || fallbackDate,
+        updatedAt: item.updatedAt || fallbackDate,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function persistConversations() {
+  localStorage.setItem("modernMilitaryHistory.conversations.v1", JSON.stringify(conversations));
+}
+
+function getSelectedConversation() {
+  return conversations.find((item) => item.id === selectedConversationId) || null;
+}
+
+function createConversation(title = "新对话", mode = "chat") {
+  const conversation = {
+    id: newId(),
+    title,
+    mode,
+    locked: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  conversations.unshift(conversation);
+  selectedConversationId = conversation.id;
+  persistConversations();
+  return conversation;
+}
+
+function upsertConversationFromPrompt(prompt, mode) {
+  const title = prompt || "新对话";
+  let conversation = getSelectedConversation();
+
+  if (!conversation) {
+    conversation = createConversation(title, mode);
+  } else {
+    conversation.title = title;
+    conversation.mode = mode;
+    conversation.locked = true;
+    conversation.updatedAt = new Date().toISOString();
+    conversations = [
+      conversation,
+      ...conversations.filter((item) => item.id !== conversation.id),
+    ];
+    selectedConversationId = conversation.id;
+    persistConversations();
+  }
+
+  return conversation;
+}
+
+function setDraftConversationMode(mode) {
+  const conversation = getSelectedConversation();
+
+  if (!conversation || conversation.locked) {
+    return false;
+  }
+
+  conversation.mode = mode;
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  return true;
+}
+
+function deleteConversation(id) {
+  const index = conversations.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return;
+  }
+
+  conversations.splice(index, 1);
+
+  if (selectedConversationId === id) {
+    selectedConversationId = conversations[index]?.id || conversations[index - 1]?.id || null;
+  }
+
+  persistConversations();
+}
+
+function getDocumentDisplayTitle(item) {
+  return item?.title || item?.fileName || "未命名文献";
 }
 
 function createPage(pageNumber, textLayers = "") {

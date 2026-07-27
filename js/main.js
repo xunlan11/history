@@ -1,7 +1,72 @@
 persist();
+let selectedSmartMode = getSelectedConversation()?.mode || "chat";
+let pendingDeleteConversationId = null;
 
-document.querySelectorAll(".nav-item").forEach((button) => {
+document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
+});
+
+document.querySelectorAll("[data-smart-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    selectSmartMode(button.dataset.smartMode);
+  });
+});
+
+document.querySelector("#close-document-form").addEventListener("click", closeDocumentForm);
+
+formSheet.addEventListener("click", (event) => {
+  if (event.target === formSheet) {
+    closeDocumentForm();
+  }
+});
+
+deleteConversationDialog.addEventListener("click", (event) => {
+  if (event.target === deleteConversationDialog) {
+    closeDeleteConversationDialog();
+  }
+});
+
+cancelDeleteConversation.addEventListener("click", closeDeleteConversationDialog);
+
+confirmDeleteConversation.addEventListener("click", () => {
+  if (!pendingDeleteConversationId) {
+    closeDeleteConversationDialog();
+    return;
+  }
+
+  deleteConversation(pendingDeleteConversationId);
+  pendingDeleteConversationId = null;
+  searchInput.value = "";
+  chronicleTopic.value = "";
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  closeDeleteConversationDialog();
+  renderAll();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !deleteConversationDialog.classList.contains("hidden")) {
+    closeDeleteConversationDialog();
+  }
+});
+
+newConversationButton.addEventListener("click", () => {
+  createConversation("新对话", selectedSmartMode);
+  searchInput.value = "";
+  chronicleTopic.value = "";
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  renderAll();
+  searchInput.focus();
+});
+
+document.querySelector("#jump-workspace").addEventListener("click", () => {
+  if (getSelectedDocument()) {
+    setView("workspace");
+    return;
+  }
+
+  openDocumentForm();
 });
 
 form.addEventListener("submit", (event) => {
@@ -16,13 +81,14 @@ form.addEventListener("submit", (event) => {
   const firstPage = createPage(1);
   const item = {
     id: newId(),
-    title: textValue("title") || file.name,
+    title: textValue("title"),
     author: textValue("author"),
     year: textValue("year"),
     publisher: textValue("publisher"),
     rights: textValue("rights"),
     source: textValue("source"),
     tags: textValue("tags"),
+    metadataStatus: "待自动识别",
     fileName: file.name,
     fileType: file.type || "unknown",
     fileSize: file.size,
@@ -42,6 +108,7 @@ form.addEventListener("submit", (event) => {
     item.status = "提交整本处理中";
     persist();
     form.reset();
+    closeDocumentForm();
     renderAll();
     setView("workspace");
     submitOfflineTask(item, file);
@@ -55,6 +122,7 @@ form.addEventListener("submit", (event) => {
       firstPage.updatedAt = new Date().toISOString();
       persist();
       form.reset();
+      closeDocumentForm();
       renderAll();
       setView("workspace");
     });
@@ -63,6 +131,7 @@ form.addEventListener("submit", (event) => {
 
   persist();
   form.reset();
+  closeDocumentForm();
   renderAll();
   setView("workspace");
 });
@@ -152,28 +221,242 @@ pageImageInput.addEventListener("change", () => {
 });
 
 document.querySelector("#recognize-page").addEventListener("click", recognizeCurrentPage);
+document.querySelector("#generate-punctuated").addEventListener("click", generatePunctuatedText);
+document.querySelector("#generate-proofread").addEventListener("click", generateProofreadReport);
 document.querySelector("#refresh-offline").addEventListener("click", refreshOfflineTask);
-document.querySelector("#search-button").addEventListener("click", runSearch);
-document.querySelector("#build-chronicle").addEventListener("click", buildChronicle);
-document.querySelector("#export-json").addEventListener("click", exportDataBackup);
-document.querySelector("#export-pdf").addEventListener("click", exportPdf);
+document.querySelector("#smart-send").addEventListener("click", () => {
+  if (selectedSmartMode === "search") {
+    runSmartSearch();
+    return;
+  }
+
+  if (selectedSmartMode === "chronicle") {
+    runSmartChronicle();
+    return;
+  }
+
+  runSmartChat();
+});
+const exportPdfButton = document.querySelector("#export-pdf");
+if (exportPdfButton) {
+  exportPdfButton.addEventListener("click", exportPdf);
+}
 
 searchInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    runSearch();
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    if (selectedSmartMode === "search") {
+      runSmartSearch();
+      return;
+    }
+
+    if (selectedSmartMode === "chronicle") {
+      runSmartChronicle();
+      return;
+    }
+
+    runSmartChat();
   }
 });
 
-chronicleTopic.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    buildChronicle();
+function renderSmartModeButtons() {
+  const conversation = getSelectedConversation();
+  const lockedMode = conversation?.locked ? conversation.mode : "";
+
+  if (lockedMode) {
+    selectedSmartMode = lockedMode;
   }
-});
+
+  document.querySelectorAll("[data-smart-mode]").forEach((button) => {
+    const isActive = button.dataset.smartMode === selectedSmartMode;
+    button.classList.toggle("active", isActive);
+    button.disabled = Boolean(lockedMode && button.dataset.smartMode !== lockedMode);
+  });
+  updateSmartPlaceholder();
+}
+
+function selectSmartMode(mode) {
+  const conversation = getSelectedConversation();
+
+  if (conversation?.locked && conversation.mode !== mode) {
+    selectedSmartMode = conversation.mode;
+    renderSmartModeButtons();
+    renderActiveConversation();
+    return;
+  }
+
+  selectedSmartMode = mode;
+  setDraftConversationMode(mode);
+  renderSmartModeButtons();
+  renderConversationList();
+  renderActiveConversation();
+}
+
+function updateSmartPlaceholder() {
+  const placeholders = {
+    chat: "输入问题，系统会结合已整理文献回答",
+    search: "输入人名、地名、机构、部队番号或原文短语",
+    chronicle: "输入人物、地点、机构、战事或关键词",
+  };
+
+  searchInput.placeholder = placeholders[selectedSmartMode] || placeholders.chat;
+}
+
+function openDeleteConversationDialog(item) {
+  pendingDeleteConversationId = item.id;
+  deleteConversationMessage.textContent = `确定删除“${item.title || "新对话"}”吗？`;
+  deleteConversationDialog.classList.remove("hidden");
+  confirmDeleteConversation.focus();
+}
+
+function closeDeleteConversationDialog() {
+  deleteConversationDialog.classList.add("hidden");
+  pendingDeleteConversationId = null;
+}
+
+async function runSmartChat() {
+  const prompt = searchInput.value.trim();
+
+  if (!prompt) {
+    renderSmartEmpty();
+    return;
+  }
+
+  upsertConversationFromPrompt(prompt, "chat");
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  searchResults.classList.remove("empty-result-list");
+  chronicleResults.classList.remove("empty-result-list");
+  renderSmartModeButtons();
+  renderConversationList();
+  renderActiveConversation();
+  messageFeed.scrollTop = 0;
+
+  if (!isLlmServiceConnected()) {
+    renderChatNotice("未连接大模型。");
+    return;
+  }
+
+  renderChatMessage(prompt, "正在思考...");
+
+  try {
+    const result = await requestLlmTask("/chat", {
+      prompt,
+      context: buildLibraryChatContext(prompt),
+    });
+
+    if (!result.ready) {
+      renderChatNotice(result.message || "未连接大模型。");
+      return;
+    }
+
+    renderChatMessage(prompt, result.answer || "未生成回答。");
+  } catch (error) {
+    renderChatNotice("暂时无法调用大模型服务。");
+  }
+}
+
+function runSmartSearch() {
+  const prompt = searchInput.value.trim();
+
+  if (prompt) {
+    upsertConversationFromPrompt(prompt, "search");
+  }
+
+  chronicleTopic.value = "";
+  chronicleResults.innerHTML = "";
+  chronicleResults.classList.remove("empty-result-list");
+  renderSmartModeButtons();
+  renderConversationList();
+  renderActiveConversation();
+  runSearch();
+  messageFeed.scrollTop = 0;
+}
+
+function runSmartChronicle() {
+  const prompt = searchInput.value.trim();
+
+  if (prompt) {
+    upsertConversationFromPrompt(prompt, "chronicle");
+  }
+
+  chronicleTopic.value = prompt;
+  searchResults.innerHTML = "";
+  searchResults.classList.remove("empty-result-list");
+  renderSmartModeButtons();
+  renderConversationList();
+  renderActiveConversation();
+  buildChronicle();
+  messageFeed.scrollTop = 0;
+}
+
+function buildLibraryChatContext(prompt) {
+  const entries = [];
+
+  documents.forEach((item) => {
+    item.pages.forEach((page) => {
+      const text = getPagePrimaryText(page);
+      if (!text) {
+        return;
+      }
+
+      const snippet = buildSnippet(text, prompt) || text.slice(0, 260);
+      entries.push({
+        documentTitle: getDocumentDisplayTitle(item),
+        author: item.author || "",
+        year: item.year || "",
+        pageNumber: page.pageNumber,
+        text: snippet,
+      });
+    });
+  });
+
+  return entries.slice(0, 8);
+}
+
+function renderChatMessage(prompt, answer) {
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  searchResults.classList.remove("empty-result-list");
+  chronicleResults.classList.remove("empty-result-list");
+
+  const result = document.createElement("article");
+  const content = document.createElement("div");
+  const title = document.createElement("h4");
+  const question = document.createElement("p");
+  const response = document.createElement("p");
+
+  result.className = "result-item chat-result";
+  title.textContent = "对话";
+  question.textContent = `问：${prompt}`;
+  response.textContent = answer;
+  content.append(title, question, response);
+  result.append(content);
+  searchResults.append(result);
+}
+
+function renderChatNotice(message) {
+  searchResults.innerHTML = "";
+  chronicleResults.innerHTML = "";
+  chronicleResults.classList.remove("empty-result-list");
+  searchResults.classList.add("empty-result-list");
+
+  const empty = emptyState(message);
+  empty.classList.add("result-empty");
+  searchResults.append(empty);
+}
+
+function isLlmServiceConnected() {
+  return llmServiceStatus?.classList.contains("service-ok");
+}
 
 function textValue(name) {
   return form.elements[name].value.trim();
 }
 
 renderAll();
+renderSmartModeButtons();
 refreshOcrServiceStatus();
+refreshLlmServiceStatus();
 setInterval(refreshOcrServiceStatus, 10000);
+setInterval(refreshLlmServiceStatus, 10000);
