@@ -163,43 +163,54 @@ function getConversationModeLabel(mode) {
 }
 
 function renderDocumentList() {
-  documentList.innerHTML = "";
-  documentCount.textContent = `${documents.length} 项在库`;
-  documentList.append(createAddBookCard());
+  renderBookShelf(documentList, documentCount);
+  renderBookShelf(allDocumentList, allDocumentCount);
+}
+
+function renderBookShelf(listNode, countNode) {
+  if (!listNode || !countNode) {
+    return;
+  }
+
+  listNode.innerHTML = "";
+  countNode.textContent = `${documents.length} 项在库`;
+  listNode.append(createAddBookCard());
 
   if (!documents.length) {
     return;
   }
 
   documents.forEach((item, index) => {
-    const node = cardTemplate.content.cloneNode(true);
-    const card = node.querySelector("article");
-    const openButton = node.querySelector(".select-document");
-    const cover = node.querySelector(".book-cover");
-    const progress = getDocumentProgress(item);
-
-    card.classList.toggle("selected", item.id === selectedDocumentId);
-    card.classList.add(`cover-${index % 6}`);
-    node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
-    node.querySelector(".book-author").textContent = item.author || "著者未录";
-    node.querySelector(".book-progress span").style.width = `${progress}%`;
-    node.querySelector(".book-meta strong").textContent = getDocumentDisplayTitle(item);
-    node.querySelector(".book-meta small").textContent = [
-      item.year || "年份未录",
-      `${item.pages.length} 页`,
-      item.status,
-    ].join(" · ");
-    cover.setAttribute("aria-hidden", "true");
-
-    openButton.addEventListener("click", () => {
-      selectedDocumentId = item.id;
-      ensureSelectedPage(item);
-      renderAll();
-      setView("workspace");
-    });
-
-    documentList.append(node);
+    listNode.append(createBookCard(item, index));
   });
+}
+
+function createBookCard(item, index) {
+  const node = cardTemplate.content.cloneNode(true);
+  const card = node.querySelector("article");
+  const openButton = node.querySelector(".select-document");
+  const cover = node.querySelector(".book-cover");
+
+  card.classList.toggle("selected", item.id === selectedDocumentId);
+  card.classList.add(`cover-${index % 6}`);
+  node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
+  node.querySelector(".book-year").textContent = item.year || "年份未录";
+  node.querySelector(".book-pages").textContent = `${item.pages.length} 页`;
+  node.querySelector(".book-author").textContent = item.author || "著者未录";
+  cover.setAttribute("aria-hidden", "true");
+  if (item.coverImageDataUrl) {
+    cover.classList.add("image-cover");
+    cover.style.setProperty("--cover-image", `url("${item.coverImageDataUrl}")`);
+  }
+
+  openButton.addEventListener("click", () => {
+    selectedDocumentId = item.id;
+    ensureSelectedPage(item);
+    renderAll();
+    setView("workspace");
+  });
+
+  return node;
 }
 
 function createAddBookCard() {
@@ -207,7 +218,6 @@ function createAddBookCard() {
   const button = document.createElement("button");
   const plus = document.createElement("span");
   const label = document.createElement("span");
-  const hint = document.createElement("small");
 
   article.className = "book-card add-card";
   button.className = "book-open add-document";
@@ -216,9 +226,8 @@ function createAddBookCard() {
   plus.textContent = "+";
   label.className = "book-meta";
   label.innerHTML = "<strong>新增文献</strong>";
-  hint.textContent = "上传 PDF 或图片";
 
-  button.append(plus, label, hint);
+  button.append(plus, label);
   button.addEventListener("click", openDocumentForm);
   article.append(button);
   return article;
@@ -290,6 +299,7 @@ function renderDetail() {
     ["版权", item.rights || "未录"],
     ["来源", item.source || "未录"],
     ["标签", item.tags || "未录"],
+    ["封面识别", item.coverStatus || "待识别封面"],
     ["文件", item.fileName],
     ["文件类型", item.fileType],
     ["处理方式", item.processMode === "offline" ? "离线整本处理" : "在线逐页整理"],

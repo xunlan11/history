@@ -30,6 +30,8 @@ function normalizeDocuments(items) {
       source: item.source || "",
       tags: item.tags || "",
       metadataStatus: item.metadataStatus || "待自动识别",
+      coverImageDataUrl: item.coverImageDataUrl || "",
+      coverStatus: item.coverStatus || "待识别封面",
       processMode: item.processMode || "online",
       offlineTask: item.offlineTask || null,
       pages: pages

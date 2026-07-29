@@ -160,6 +160,68 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
   }
 }
 
+async function detectDocumentCover(item, file) {
+  if (!item || !file || !file.name) {
+    return;
+  }
+
+  item.coverStatus = "正在识别封面";
+  item.updatedAt = new Date().toISOString();
+  persist();
+  renderAll();
+
+  try {
+    const candidate = await requestCoverCandidate(file);
+    if (!candidate.imageDataUrl) {
+      item.coverStatus = "未提取到候选封面";
+      item.updatedAt = new Date().toISOString();
+      persist();
+      renderAll();
+      return;
+    }
+
+    const result = await requestLlmTask("/detect-cover", {
+      imageDataUrl: candidate.imageDataUrl,
+      fileName: file.name,
+      metadata: buildLlmMetadata(item),
+    });
+
+    if (result.ready && result.hasCover) {
+      item.coverImageDataUrl = candidate.imageDataUrl;
+      item.coverStatus = "已使用上传封面";
+    } else if (result.ready) {
+      item.coverStatus = "未识别到封面";
+    } else {
+      item.coverStatus = "封面识别未连接";
+    }
+
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  } catch (error) {
+    item.coverStatus = "封面识别失败";
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  }
+}
+
+async function requestCoverCandidate(file) {
+  const body = new FormData();
+  body.append("document", file, file.name);
+
+  const response = await fetch(OCR_COVER_SERVICE_URL, {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Cover candidate request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 function needsMetadataAutoFill(item) {
   return ["title", "author", "year", "publisher", "rights", "source"].some((field) => {
     return !String(item[field] || "").trim();

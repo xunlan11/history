@@ -62,19 +62,31 @@
             <aside class="home-sidebar library-sidebar" aria-label="书库">
               <div class="sidebar-heading">
                 <h2>文献库 <span class="sidebar-count" id="document-count">0 项在库</span></h2>
-                <button class="ghost-link" id="jump-workspace" type="button">整理台 ›</button>
+                <button class="ghost-link" id="jump-documents" type="button">全部 ›</button>
               </div>
-              <nav class="shelf-tabs" aria-label="书库筛选">
-                <button class="shelf-tab active" type="button">最近</button>
-                <button class="shelf-tab" type="button">全部</button>
-                <button class="shelf-tab" type="button">待整理</button>
-                <button class="shelf-tab" type="button">已整理</button>
-              </nav>
               <section class="shelf-stage" aria-label="书架">
                 <div class="document-list" id="document-list"></div>
               </section>
             </aside>
           </div>
+        </section>
+
+        <section class="view" id="documents-view" aria-label="文献库">
+          <header class="documents-topbar">
+            <div class="documents-nav">
+              <button class="ghost-link" type="button" data-view="library">‹ 返回</button>
+            </div>
+            <div class="status-title">
+              <p class="eyebrow">文献库</p>
+            </div>
+            <span class="documents-count" id="all-document-count">0 项在库</span>
+          </header>
+
+          <section class="shelf-stage documents-stage" aria-label="书架">
+            <div class="document-list" id="all-document-list"></div>
+          </section>
+
+          <footer class="documents-bottombar" aria-label="文献库操作栏"></footer>
         </section>
 
         <section class="view" id="workspace-view" aria-label="整理工作台">
@@ -195,7 +207,7 @@
           <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
         </div>
         <label>
-          上传 PDF 或图片
+          <span class="sr-only">选择 PDF 或图片文件</span>
           <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
         </label>
         <label>
@@ -250,12 +262,11 @@
         <button class="book-open select-document" type="button">
           <span class="book-cover">
             <span class="book-title"></span>
+            <span class="book-facts">
+              <span class="book-year"></span>
+              <span class="book-pages"></span>
+            </span>
             <span class="book-author"></span>
-          </span>
-          <span class="book-progress"><span></span></span>
-          <span class="book-meta">
-            <strong></strong>
-            <small></small>
           </span>
         </button>
       </article>

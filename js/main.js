@@ -60,13 +60,8 @@ newConversationButton.addEventListener("click", () => {
   searchInput.focus();
 });
 
-document.querySelector("#jump-workspace").addEventListener("click", () => {
-  if (getSelectedDocument()) {
-    setView("workspace");
-    return;
-  }
-
-  openDocumentForm();
+document.querySelector("#jump-documents").addEventListener("click", () => {
+  setView("documents");
 });
 
 form.addEventListener("submit", (event) => {
@@ -89,6 +84,8 @@ form.addEventListener("submit", (event) => {
     source: textValue("source"),
     tags: textValue("tags"),
     metadataStatus: "待自动识别",
+    coverImageDataUrl: "",
+    coverStatus: "待识别封面",
     fileName: file.name,
     fileType: file.type || "unknown",
     fileSize: file.size,
@@ -102,6 +99,7 @@ form.addEventListener("submit", (event) => {
   documents.unshift(item);
   selectedDocumentId = item.id;
   selectedPageId = firstPage.id;
+  detectDocumentCover(item, file);
 
   if (item.processMode === "offline") {
     item.offlineTask = createOfflineTask(file);

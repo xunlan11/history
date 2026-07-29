@@ -69,6 +69,13 @@ class ExtractMetadataRequest(LlmTaskRequest):
     source: Literal["filename", "ocr", "clean", "punctuated"] = "ocr"
 
 
+class DetectCoverRequest(BaseModel):
+    imageDataUrl: str
+    fileName: str = ""
+    metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
 class ChronicleRequest(BaseModel):
     topic: str = ""
     events: list[dict[str, Any]] = Field(default_factory=list)
@@ -393,6 +400,53 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
     return response
 
 
+@app.post("/llm/detect-cover")
+def detect_cover(payload: DetectCoverRequest) -> dict[str, Any]:
+    prompt = f"""
+/no_think
+请判断这张上传文件候选图是否适合作为文献封面。
+
+判断标准：
+1. 如果画面像书籍、期刊、档案册、报告、文献首页、扉页、题名页，且能代表整本文献，返回 hasCover=true。
+2. 如果只是正文页、扫描空白页、目录页、普通内页、照片、表格或无法判断，返回 hasCover=false。
+3. 只基于图片判断，不要猜测。
+4. 输出必须是 JSON，不要输出解释文字。
+
+返回格式：
+{{
+  "hasCover": true,
+  "confidence": 0.0,
+  "reason": "简短判断依据"
+}}
+
+文件名：{payload.fileName}
+现有文献信息：
+{format_metadata(payload.metadata)}
+""".strip()
+
+    try:
+        result = call_json_vision_task(prompt, payload.imageDataUrl)
+        has_cover = bool_value(result.get("hasCover"))
+        confidence = float_value(result.get("confidence"))
+        reason = string_value(result.get("reason"))
+        response = base_response("detect-cover", ready=True)
+    except LlmServiceError as exc:
+        has_cover = False
+        confidence = 0.0
+        reason = str(exc)
+        response = base_response("detect-cover", ready=False, message=str(exc))
+
+    response.update(
+        {
+            "fileName": payload.fileName,
+            "hasCover": has_cover,
+            "confidence": confidence,
+            "reason": reason,
+        }
+    )
+    return response
+
+
 @app.post("/llm/chronicle")
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     prompt = f"""
@@ -523,8 +577,31 @@ def call_json_task(prompt: str) -> dict[str, Any]:
     return parse_json_object(content)
 
 
+def call_json_vision_task(prompt: str, image_data_url: str) -> dict[str, Any]:
+    content = call_chat_completion(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "你是近代军史文献图像整理助手。你必须只依据图片判断，"
+                    "只输出合法 JSON，不得输出 Markdown，不得输出解释。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            },
+        ],
+        temperature=0.1,
+    )
+    return parse_json_object(content)
+
+
 def call_chat_completion(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     temperature: float = 0.1,
     json_response: bool = True,
 ) -> str:
@@ -553,7 +630,7 @@ def call_chat_completion(
 
 
 def call_ollama_chat_completion(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     temperature: float = 0.1,
     json_response: bool = True,
 ) -> str:
@@ -562,7 +639,7 @@ def call_ollama_chat_completion(
     url = f"{ollama_root}/api/chat"
     payload = {
         "model": LLM_MODEL,
-        "messages": messages,
+        "messages": normalize_ollama_messages(messages),
         "stream": False,
         "options": {
             "temperature": temperature,
@@ -577,6 +654,42 @@ def call_ollama_chat_completion(
         return str(result["message"]["content"])
     except (KeyError, TypeError) as exc:
         raise LlmServiceError("Ollama 返回格式异常。") from exc
+
+
+def normalize_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content", "")
+        if not isinstance(content, list):
+            normalized.append(message)
+            continue
+
+        text_parts: list[str] = []
+        images: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                text_parts.append(str(part.get("text", "")))
+            if part.get("type") == "image_url":
+                image_url = part.get("image_url", {})
+                if isinstance(image_url, dict):
+                    images.append(strip_data_url(str(image_url.get("url", ""))))
+
+        normalized_message = {
+            "role": message.get("role", "user"),
+            "content": "\n".join([text for text in text_parts if text]),
+        }
+        if images:
+            normalized_message["images"] = images
+        normalized.append(normalized_message)
+    return normalized
+
+
+def strip_data_url(value: str) -> str:
+    if "," in value and value.startswith("data:"):
+        return value.split(",", 1)[1]
+    return value
 
 
 def request_json(
@@ -647,6 +760,21 @@ def format_metadata(metadata: DocumentMetadata) -> str:
 
 def string_value(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def float_value(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "是", "有"}
+    return False
 
 
 def list_value(value: Any) -> list[Any]:

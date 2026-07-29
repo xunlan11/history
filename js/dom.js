@@ -1,10 +1,12 @@
 const views = {
   library: document.querySelector("#library-view"),
+  documents: document.querySelector("#documents-view"),
   workspace: document.querySelector("#workspace-view"),
 };
 
 const viewTitles = {
   library: "书库",
+  documents: "文献库",
   workspace: "整理工作台",
 };
 
@@ -12,6 +14,8 @@ const form = document.querySelector("#document-form");
 const formSheet = document.querySelector("#document-form-sheet");
 const documentList = document.querySelector("#document-list");
 const documentCount = document.querySelector("#document-count");
+const allDocumentList = document.querySelector("#all-document-list");
+const allDocumentCount = document.querySelector("#all-document-count");
 const detailNode = document.querySelector("#document-detail");
 const selectedStatus = document.querySelector("#selected-status");
 const selectedPageStatus = document.querySelector("#selected-page-status");

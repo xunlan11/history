@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,14 @@ async def recognize_page(image: UploadFile = File(...), pageNumber: str = Form("
     result = recognize_image(page_path)
     result["pageNumber"] = int(pageNumber or 1)
     return JSONResponse(result)
+
+
+@app.post("/ocr/cover-candidate")
+async def extract_cover_candidate(document: UploadFile = File(...)):
+    source_path = await save_upload(document, prefix=f"cover-{uuid.uuid4().hex[:8]}")
+    candidate = build_cover_candidate(source_path)
+    candidate["sourceFileName"] = document.filename
+    return JSONResponse(candidate)
 
 
 @app.post("/ocr/batch")
@@ -161,6 +170,46 @@ def process_pdf(path: Path, task_id: str) -> list[dict[str, Any]]:
     return pages
 
 
+def build_cover_candidate(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".pdf":
+        image_path = render_pdf_first_page(path)
+        return {
+            "imageDataUrl": image_to_cover_data_url(image_path),
+            "imageName": image_path.name,
+            "source": "pdf-first-page",
+        }
+
+    ensure_image_readable(path)
+    return {
+        "imageDataUrl": image_to_cover_data_url(path),
+        "imageName": path.name,
+        "source": "uploaded-image",
+    }
+
+
+def render_pdf_first_page(path: Path) -> Path:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("未安装 PDF 拆页组件 PyMuPDF") from exc
+
+    output_dir = STORAGE_DIR / "temp"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_path = output_dir / f"{path.stem}-cover.png"
+
+    doc = fitz.open(path)
+    try:
+        if doc.page_count < 1:
+            raise RuntimeError("PDF 没有可提取的页面")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        pix.save(image_path)
+    finally:
+        doc.close()
+
+    return image_path
+
+
 def copy_image_to_page(path: Path, task_id: str, page_number: int) -> Path:
     output_dir = TASKS_DIR / task_id / "pages"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +285,15 @@ def image_to_data_url(path: Path) -> str:
         mime = "image/jpeg"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
+
+
+def image_to_cover_data_url(path: Path) -> str:
+    with Image.open(path) as image:
+        image.thumbnail((900, 1200))
+        output = BytesIO()
+        image.convert("RGB").save(output, format="JPEG", quality=86, optimize=True)
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def build_file_url(path: Path) -> str:
