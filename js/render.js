@@ -1,3 +1,8 @@
+const DOCUMENT_DRAG_LONG_PRESS_MS = 420;
+const DOCUMENT_DRAG_CANCEL_DISTANCE = 8;
+let documentDragState = null;
+let suppressDocumentClickUntil = 0;
+
 function setView(name) {
   Object.entries(views).forEach(([key, node]) => {
     if (!node) {
@@ -192,7 +197,10 @@ function createBookCard(item, index) {
   const cover = node.querySelector(".book-cover");
 
   card.classList.toggle("selected", item.id === selectedDocumentId);
-  card.classList.add(`cover-${index % 6}`);
+  card.classList.add(`cover-${normalizeCoverVariant(item.coverVariant, index)}`);
+  card.dataset.documentId = item.id;
+  card.dataset.documentIndex = String(index);
+  card.setAttribute("aria-grabbed", "false");
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
   node.querySelector(".book-pages").textContent = `${item.pages.length} 页`;
@@ -204,13 +212,276 @@ function createBookCard(item, index) {
   }
 
   openButton.addEventListener("click", () => {
+    if (Date.now() < suppressDocumentClickUntil) {
+      return;
+    }
+
     selectedDocumentId = item.id;
     ensureSelectedPage(item);
     renderAll();
     setView("workspace");
   });
+  card.addEventListener("pointerdown", (event) => {
+    prepareDocumentDrag(event, card, item.id);
+  });
+  card.addEventListener("contextmenu", (event) => {
+    if (documentDragState?.documentId === item.id) {
+      event.preventDefault();
+    }
+  });
 
   return node;
+}
+
+function prepareDocumentDrag(event, card, documentId) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
+
+  const listNode = card.closest(".document-list");
+  if (!listNode) {
+    return;
+  }
+
+  clearDocumentDragState();
+  card.setPointerCapture?.(event.pointerId);
+  documentDragState = {
+    phase: "pending",
+    documentId,
+    card,
+    listNode,
+    originalDocuments: documents.slice(),
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    timer: window.setTimeout(startDocumentDrag, DOCUMENT_DRAG_LONG_PRESS_MS),
+  };
+
+  document.addEventListener("pointermove", handleDocumentDragMove, { passive: false });
+  document.addEventListener("pointerup", finishDocumentDrag, { passive: false });
+  document.addEventListener("pointercancel", finishDocumentDrag, { passive: false });
+}
+
+function startDocumentDrag() {
+  if (!documentDragState || documentDragState.phase !== "pending") {
+    return;
+  }
+
+  const rect = documentDragState.card.getBoundingClientRect();
+  const previewNode = documentDragState.card.cloneNode(true);
+  previewNode.classList.add("book-drag-preview");
+  previewNode.classList.remove("selected");
+  previewNode.style.width = `${rect.width}px`;
+  previewNode.style.height = `${rect.height}px`;
+  document.body.append(previewNode);
+  documentDragState.previewNode = previewNode;
+  documentDragState.offsetX = documentDragState.startX - rect.left;
+  documentDragState.offsetY = documentDragState.startY - rect.top;
+  documentDragState.phase = "dragging";
+  documentDragState.card.classList.add("dragging");
+  documentDragState.card.setAttribute("aria-grabbed", "true");
+  documentDragState.listNode.classList.add("is-reordering");
+  setDocumentTrashMode(documentDragState.listNode, true);
+  document.body.classList.add("document-drag-active");
+  updateDocumentDragPreview(documentDragState.startX, documentDragState.startY);
+}
+
+function handleDocumentDragMove(event) {
+  if (!documentDragState || event.pointerId !== documentDragState.pointerId) {
+    return;
+  }
+
+  const distance = Math.hypot(
+    event.clientX - documentDragState.startX,
+    event.clientY - documentDragState.startY,
+  );
+
+  if (documentDragState.phase === "pending") {
+    if (distance > DOCUMENT_DRAG_CANCEL_DISTANCE) {
+      clearDocumentDragState();
+    }
+    return;
+  }
+
+  event.preventDefault();
+  updateDocumentDragPreview(event.clientX, event.clientY);
+  updateDocumentTrashHover(event);
+  const target = document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest(".book-card[data-document-id]");
+
+  if (
+    !target ||
+    target === documentDragState.card ||
+    target.closest(".document-list") !== documentDragState.listNode
+  ) {
+    return;
+  }
+
+  const targetRect = target.getBoundingClientRect();
+  const shouldPlaceAfter = isPointerAfterCard(event, targetRect);
+  documentDragState.listNode.insertBefore(
+    documentDragState.card,
+    shouldPlaceAfter ? target.nextSibling : target,
+  );
+  syncDocumentOrderFromList(documentDragState.listNode);
+}
+
+function updateDocumentDragPreview(clientX, clientY) {
+  if (!documentDragState?.previewNode) {
+    return;
+  }
+
+  const x = clientX - documentDragState.offsetX;
+  const y = clientY - documentDragState.offsetY;
+  documentDragState.previewNode.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(-2deg)`;
+}
+
+function isPointerAfterCard(event, rect) {
+  const centerY = rect.top + rect.height / 2;
+  const centerX = rect.left + rect.width / 2;
+
+  if (Math.abs(event.clientY - centerY) > rect.height / 3) {
+    return event.clientY > centerY;
+  }
+
+  return event.clientX > centerX;
+}
+
+function finishDocumentDrag(event) {
+  if (!documentDragState || event.pointerId !== documentDragState.pointerId) {
+    return;
+  }
+
+  const wasDragging = documentDragState.phase === "dragging";
+
+  if (wasDragging) {
+    const state = documentDragState;
+    const droppedOnTrash = getDocumentTrashTarget(event, state.listNode);
+    const item = state.originalDocuments.find((entry) => entry.id === state.documentId);
+
+    event.preventDefault();
+    suppressDocumentClickUntil = Date.now() + 450;
+
+    if (droppedOnTrash) {
+      documents = state.originalDocuments.slice();
+      clearDocumentDragState();
+      renderDocumentList();
+
+      if (item && typeof openDeleteDocumentDialog === "function") {
+        openDeleteDocumentDialog(item);
+      }
+      return;
+    }
+
+    syncDocumentOrderFromList(state.listNode);
+    persist();
+  }
+
+  clearDocumentDragState();
+
+  if (wasDragging) {
+    renderDocumentList();
+  }
+}
+
+function clearDocumentDragState() {
+  if (!documentDragState) {
+    return;
+  }
+
+  window.clearTimeout(documentDragState.timer);
+  try {
+    documentDragState.card.releasePointerCapture?.(documentDragState.pointerId);
+  } catch {
+    // The browser may already have released capture on pointer cancellation.
+  }
+  documentDragState.card.classList.remove("dragging");
+  documentDragState.card.setAttribute("aria-grabbed", "false");
+  documentDragState.listNode.classList.remove("is-reordering");
+  setDocumentTrashMode(documentDragState.listNode, false);
+  documentDragState.previewNode?.remove();
+  document.body.classList.remove("document-drag-active");
+  document.removeEventListener("pointermove", handleDocumentDragMove);
+  document.removeEventListener("pointerup", finishDocumentDrag);
+  document.removeEventListener("pointercancel", finishDocumentDrag);
+  documentDragState = null;
+}
+
+function syncDocumentOrderFromList(listNode) {
+  const orderedIds = Array.from(listNode.querySelectorAll(".book-card[data-document-id]"))
+    .map((card) => card.dataset.documentId);
+
+  if (orderedIds.length !== documents.length) {
+    return false;
+  }
+
+  const documentsById = new Map(documents.map((item) => [item.id, item]));
+  const nextDocuments = orderedIds.map((id) => documentsById.get(id)).filter(Boolean);
+
+  if (nextDocuments.length !== documents.length) {
+    return false;
+  }
+
+  documents = nextDocuments;
+  return true;
+}
+
+function getDocumentTrashTarget(event, listNode) {
+  const target = document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest(".add-card");
+
+  if (!target || target.closest(".document-list") !== listNode) {
+    return null;
+  }
+
+  return target;
+}
+
+function updateDocumentTrashHover(event) {
+  if (!documentDragState) {
+    return;
+  }
+
+  const trashTarget = getDocumentTrashTarget(event, documentDragState.listNode);
+  const addCard = documentDragState.listNode.querySelector(".add-card");
+
+  if (addCard) {
+    addCard.classList.toggle("trash-hover", Boolean(trashTarget));
+  }
+}
+
+function setDocumentTrashMode(listNode, isActive) {
+  const addCard = listNode.querySelector(".add-card");
+
+  if (!addCard) {
+    return;
+  }
+
+  const addButton = addCard.querySelector(".add-document");
+  const plus = addCard.querySelector(".add-plus");
+  const title = addCard.querySelector(".book-meta strong");
+
+  addCard.classList.toggle("trash-card", isActive);
+  addCard.classList.remove("trash-hover");
+
+  if (plus) {
+    plus.textContent = isActive ? "×" : "+";
+  }
+
+  if (title) {
+    title.textContent = isActive ? "故纸堆" : "新增文献";
+  }
+
+  if (addButton) {
+    if (isActive) {
+      addButton.title = "拖到此处删除文献";
+      return;
+    }
+
+    addButton.removeAttribute("title");
+  }
 }
 
 function createAddBookCard() {

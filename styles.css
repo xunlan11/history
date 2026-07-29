@@ -1,6 +1,8 @@
 :root {
   color-scheme: light;
-  --font-ui: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+  --font-hei: "SimHei", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+  --font-kai: "KaiTi", "STKaiti", "Kaiti SC", "SimKai", "KaiTi_GB2312", serif;
+  --font-ui: var(--font-hei);
   --bg: #f4f6f5;
   --surface: #ffffff;
   --surface-2: #eef3f0;
@@ -12,6 +14,14 @@
   --accent: #8f4a3d;
   --focus: #d19a38;
   --shadow: 0 16px 40px rgba(28, 37, 33, 0.08);
+}
+
+:root[data-font="hei"] {
+  --font-ui: var(--font-hei);
+}
+
+:root[data-font="kai"] {
+  --font-ui: var(--font-kai);
 }
 
 * {
@@ -737,6 +747,41 @@ body {
   min-width: 0;
 }
 
+.book-card[data-document-id] {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.book-card.dragging {
+  z-index: 3;
+  cursor: grabbing;
+  opacity: 0.28;
+  transform: scale(0.98);
+}
+
+.book-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.94;
+  filter: drop-shadow(0 18px 28px rgba(32, 36, 31, 0.24));
+}
+
+.document-list.is-reordering .book-card {
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.document-drag-active,
+.document-drag-active * {
+  cursor: grabbing !important;
+}
+
 .book-card::after {
   content: "";
   position: absolute;
@@ -926,6 +971,28 @@ body {
   background: rgba(255, 255, 255, 0.88);
   box-shadow: var(--book-shadow);
   text-align: center;
+}
+
+.add-card.trash-card .add-document {
+  border-color: #d9aaa4;
+  background: #fff4f2;
+  color: #a83228;
+}
+
+.add-card.trash-card .add-plus {
+  color: #c94437;
+  font-weight: 400;
+}
+
+.add-card.trash-card .book-meta strong {
+  color: #a83228;
+}
+
+.add-card.trash-card.trash-hover .add-document {
+  border-color: #c94437;
+  background: #f8dedb;
+  box-shadow: 0 18px 32px rgba(201, 68, 55, 0.2);
+  transform: translateY(-2px);
 }
 
 .add-plus {
@@ -1256,8 +1323,55 @@ body {
   font-family: inherit;
 }
 
-.status-spacer {
+.font-setting {
+  display: inline-flex;
+  justify-self: end;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+  color: #69716a;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.font-setting-label {
+  font-weight: 700;
+}
+
+.font-options {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid rgba(174, 184, 175, 0.78);
+  border-radius: 8px;
+  background: #f7faf6;
+}
+
+.font-option {
+  min-width: 48px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #414842;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.font-option[data-font-option="hei"] {
+  font-family: var(--font-hei);
+}
+
+.font-option[data-font-option="kai"] {
+  font-family: var(--font-kai);
+}
+
+.font-option.active,
+.font-option:hover {
+  background: #2f6f5e;
+  color: #ffffff;
 }
 
 .service-strip strong,
@@ -1644,6 +1758,16 @@ body {
   min-height: 58px;
 }
 
+.documents-hint {
+  grid-column: 1 / -1;
+  justify-self: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .documents-nav {
   min-width: 0;
 }
@@ -1728,8 +1852,9 @@ body {
     grid-row: 1;
   }
 
-  .status-spacer {
-    display: none;
+  .font-setting {
+    grid-row: 3;
+    justify-self: center;
   }
 
   .home-board {

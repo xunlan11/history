@@ -1,6 +1,15 @@
 persist();
 let selectedSmartMode = getSelectedConversation()?.mode || "chat";
 let pendingDeleteConversationId = null;
+let pendingDeleteDocumentId = null;
+
+applyGlobalFont(localStorage.getItem(FONT_STORAGE_KEY) || "hei");
+
+fontOptionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    applyGlobalFont(button.dataset.fontOption);
+  });
+});
 
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
@@ -29,6 +38,14 @@ deleteConversationDialog.addEventListener("click", (event) => {
 cancelDeleteConversation.addEventListener("click", closeDeleteConversationDialog);
 
 confirmDeleteConversation.addEventListener("click", () => {
+  if (pendingDeleteDocumentId) {
+    deleteDocument(pendingDeleteDocumentId);
+    pendingDeleteDocumentId = null;
+    closeDeleteConversationDialog();
+    renderAll();
+    return;
+  }
+
   if (!pendingDeleteConversationId) {
     closeDeleteConversationDialog();
     return;
@@ -85,6 +102,7 @@ form.addEventListener("submit", (event) => {
     tags: textValue("tags"),
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
+    coverVariant: getNextDocumentCoverVariant(),
     coverStatus: "待识别封面",
     fileName: file.name,
     fileType: file.type || "unknown",
@@ -302,7 +320,18 @@ function updateSmartPlaceholder() {
 
 function openDeleteConversationDialog(item) {
   pendingDeleteConversationId = item.id;
+  pendingDeleteDocumentId = null;
+  deleteConversationTitle.textContent = "删除对话";
   deleteConversationMessage.textContent = `确定删除“${item.title || "新对话"}”吗？`;
+  deleteConversationDialog.classList.remove("hidden");
+  confirmDeleteConversation.focus();
+}
+
+function openDeleteDocumentDialog(item) {
+  pendingDeleteDocumentId = item.id;
+  pendingDeleteConversationId = null;
+  deleteConversationTitle.textContent = "删除文献";
+  deleteConversationMessage.textContent = `确定删除“${getDocumentDisplayTitle(item)}”吗？删除后不可找回。`;
   deleteConversationDialog.classList.remove("hidden");
   confirmDeleteConversation.focus();
 }
@@ -310,6 +339,7 @@ function openDeleteConversationDialog(item) {
 function closeDeleteConversationDialog() {
   deleteConversationDialog.classList.add("hidden");
   pendingDeleteConversationId = null;
+  pendingDeleteDocumentId = null;
 }
 
 async function runSmartChat() {
@@ -450,6 +480,18 @@ function isLlmServiceConnected() {
 
 function textValue(name) {
   return form.elements[name].value.trim();
+}
+
+function applyGlobalFont(fontKey) {
+  const nextFont = fontKey === "kai" ? "kai" : "hei";
+  document.documentElement.dataset.font = nextFont;
+  localStorage.setItem(FONT_STORAGE_KEY, nextFont);
+
+  fontOptionButtons.forEach((button) => {
+    const isActive = button.dataset.fontOption === nextFont;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
 }
 
 renderAll();

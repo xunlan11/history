@@ -1,3 +1,4 @@
+const DOCUMENT_COVER_VARIANT_COUNT = 6;
 let documents = normalizeDocuments(loadDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
@@ -15,7 +16,7 @@ function loadDocuments() {
 }
 
 function normalizeDocuments(items) {
-  return items.map((item) => {
+  return items.map((item, index) => {
     const pages = Array.isArray(item.pages) && item.pages.length
       ? item.pages
       : [createPage(1, { cleanText: item.ocrText || "" })];
@@ -31,6 +32,7 @@ function normalizeDocuments(items) {
       tags: item.tags || "",
       metadataStatus: item.metadataStatus || "待自动识别",
       coverImageDataUrl: item.coverImageDataUrl || "",
+      coverVariant: normalizeCoverVariant(item.coverVariant, index),
       coverStatus: item.coverStatus || "待识别封面",
       processMode: item.processMode || "online",
       offlineTask: item.offlineTask || null,
@@ -57,6 +59,24 @@ function normalizeDocuments(items) {
     normalized.status = summarizeDocumentStatus(normalized);
     return normalized;
   });
+}
+
+function normalizeCoverVariant(value, fallbackIndex = 0) {
+  const variant = Number(value);
+
+  if (
+    Number.isInteger(variant) &&
+    variant >= 0 &&
+    variant < DOCUMENT_COVER_VARIANT_COUNT
+  ) {
+    return variant;
+  }
+
+  return Math.abs(fallbackIndex) % DOCUMENT_COVER_VARIANT_COUNT;
+}
+
+function getNextDocumentCoverVariant() {
+  return documents.length % DOCUMENT_COVER_VARIANT_COUNT;
 }
 
 function persist() {
@@ -154,6 +174,24 @@ function deleteConversation(id) {
   }
 
   persistConversations();
+}
+
+function deleteDocument(id) {
+  const index = documents.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return;
+  }
+
+  documents.splice(index, 1);
+
+  if (selectedDocumentId === id) {
+    const nextDocument = documents[index] || documents[index - 1] || null;
+    selectedDocumentId = nextDocument?.id || null;
+    selectedPageId = nextDocument?.pages?.[0]?.id || null;
+  }
+
+  persist();
 }
 
 function getDocumentDisplayTitle(item) {

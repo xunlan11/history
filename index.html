@@ -22,7 +22,13 @@
             <div class="status-title">
               <p class="eyebrow">近代军史数智平台</p>
             </div>
-            <div class="status-spacer" aria-hidden="true"></div>
+            <div class="font-setting" aria-label="全局字体设置">
+              <span class="font-setting-label">字体</span>
+              <div class="font-options" role="group" aria-label="字体">
+                <button class="font-option" type="button" data-font-option="hei">黑体</button>
+                <button class="font-option" type="button" data-font-option="kai">楷体</button>
+              </div>
+            </div>
           </header>
 
           <div class="home-board">
@@ -90,7 +96,9 @@
             <div class="document-list" id="all-document-list"></div>
           </section>
 
-          <footer class="documents-bottombar" aria-label="文献库操作栏"></footer>
+          <footer class="documents-bottombar" aria-label="文献库操作栏">
+            <p class="documents-hint">长按文献可换序或删除</p>
+          </footer>
         </section>
 
         <section class="view" id="workspace-view" aria-label="整理工作台">
