@@ -58,7 +58,7 @@ pip install -r requirements.txt
 启动 OCR 服务：
 
 ```text
-uvicorn ocr_service:app --host 127.0.0.1 --port 8765
+uvicorn service.ocr:app --host 127.0.0.1 --port 8765
 ```
 
 ## 4. OCR 服务检查
@@ -90,7 +90,7 @@ ollama pull qwen3:8b
 启动大模型统一接口：
 
 ```text
-uvicorn llm_service:app --host 127.0.0.1 --port 8865
+uvicorn service.llm:app --host 127.0.0.1 --port 8865
 ```
 
 默认配置为：
@@ -182,3 +182,38 @@ POST /llm/extract-metadata
 POST /llm/extract-events
 POST /llm/chronicle
 ```
+
+## 9. 版本检测与整站更新
+
+版本服务用于首页左侧“版本”检测。它只轮询 Git 远程仓库是否有新提交；发现新版本时，页面显示“更新”按钮。点击后服务会在后台抓取整个项目，发布到新的 release 目录，检查成功后再切换 `current` 软链接。
+
+启动版本服务：
+
+```text
+uvicorn service.version:app --host 127.0.0.1 --port 8965
+```
+
+推荐将静态 Web 服务根目录指向：
+
+```text
+.deploy/current
+```
+
+默认发布目录：
+
+```text
+.deploy/releases/
+```
+
+可选环境变量：
+
+```text
+VERSION_REMOTE=origin
+VERSION_BRANCH=main
+VERSION_RELEASES_DIR=/var/www/app/releases
+VERSION_CURRENT_LINK=/var/www/app/current
+VERSION_BUILD_COMMAND=npm run build
+VERSION_HEALTH_PATH=index.html
+```
+
+如果当前没有新提交，首页显示“最新”；如果远程仓库有新提交，首页显示“更新”按钮。更新不会强制刷新正在使用中的浏览器页面，用户完成当前操作后再手动刷新即可进入新版本。

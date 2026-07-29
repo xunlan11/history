@@ -1,5 +1,6 @@
 .venv/
 ocr-storage/
+.deploy/
 __pycache__/
 *.pyc
 .agents

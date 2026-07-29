@@ -456,5 +456,8 @@ renderAll();
 renderSmartModeButtons();
 refreshOcrServiceStatus();
 refreshLlmServiceStatus();
+refreshVersionStatus();
 setInterval(refreshOcrServiceStatus, 10000);
 setInterval(refreshLlmServiceStatus, 10000);
+setInterval(refreshVersionStatus, 30000);
+versionUpdateButton?.addEventListener("click", requestProjectUpdate);

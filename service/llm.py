@@ -83,6 +83,12 @@ class ChronicleRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class SearchRequest(BaseModel):
+    query: str
+    documents: list[dict[str, Any]] = Field(default_factory=list)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
 class ChatRequest(BaseModel):
     prompt: str
     context: list[dict[str, Any]] = Field(default_factory=list)
@@ -451,26 +457,33 @@ def detect_cover(payload: DetectCoverRequest) -> dict[str, Any]:
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     prompt = f"""
 /no_think
-请基于库内事件生成史事编年草稿。
+请基于库内材料生成史事编年草稿。输入可能包含两类材料：
+1. events：已经抽取过的事件。
+2. documents：文献及其 pages，每页包含 pageId、pageNumber、text、notes。
 
-原则：
-1. 只使用输入 events 和 documents，不引入外部材料。
-2. 严格按照时间先后排序。
-3. 同日多件事情，应在条目中标注同日。
-4. 公历、农历双重标注；缺失或无法换算时写“待核”。
-5. 史事表述必须客观、精要，不加入立场褒贬。
-6. 每条必须保留来源信息和原文依据。
-7. 输出必须是 JSON，不要输出解释文字。
+任务：
+1. 先从 events 和 documents.pages.text 中识别与主题相关的史事；主题为空时，抽取全部有明确时间依据的史事。
+2. 识别并换算复杂纪年，包括民国纪年、清代/民国前后常见年号纪年、干支纪年、公历日期、农历日期、上下文省略的年份或月份。
+3. 无法可靠换算时不要硬编，dateLabel 写明原文纪年并标注“公历待核”或“月日待核”。
+4. 严格只使用输入材料，不引入外部史实；可以做历法/纪年换算，但不补充材料外事件。
+5. 严格按照可判断的时间先后排序；同日多条 sameDay=true。
+6. 史事表述必须客观、精要，不加入立场褒贬。
+7. 每条必须保留来源信息、documentId、pageId、pageNumber 和原文依据 quote。
+8. 输出必须是 JSON，不要输出解释文字或 Markdown。
 
 返回格式：
 {{
   "entries": [
     {{
-      "dateLabel": "公历年月日（农历年月日）",
+      "dateLabel": "公历年月日（原文纪年；农历/公历待核信息）",
+      "dateGregorian": "YYYY-MM-DD 或 YYYY-MM 或 YYYY 或空",
+      "dateOriginal": "原文时间表述",
       "sameDay": false,
       "summary": "客观史事",
       "sources": [
         {{
+          "documentId": "输入中的 documentId",
+          "pageId": "输入中的 pageId",
           "author": "著者",
           "title": "文献名",
           "publisher": "出版信息",
@@ -508,6 +521,80 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
         {
             "topic": payload.topic,
             "entries": entries,
+            "warnings": warnings,
+        }
+    )
+    return response
+
+
+@app.post("/llm/search")
+def search(payload: SearchRequest) -> dict[str, Any]:
+    prompt = f"""
+/no_think
+请在用户书库材料中做智能检索。
+
+任务：
+1. 根据 query 在 documents.pages.text 和 notes 中找相关内容。
+2. 不只做字面匹配，还要识别同一对象的不同称呼：
+   - 人物：姓名、字、号、别名、旧译名、职务代称。
+   - 战役/事件：中外不同称呼、敌我双方不同称呼、简称、旧称。
+   - 机构/部队：全称、简称、番号变化、上级/下级常见代称。
+   - 地名：旧地名、异体写法、简称。
+3. 可以使用通用历史常识判断别称关系，但匹配结果必须能在输入材料中找到原文依据 quote。
+4. 不要把只是同一时代、同一地区但无直接关联的内容列为结果。
+5. 每条结果必须保留 documentId、pageId、pageNumber，方便前端跳转。
+6. 按相关性排序：直接命中、明确别称、强上下文关联优先。
+7. 最多返回 options.maxMatches 条；如果命中更多，在 warnings 中说明还有更多结果。
+8. 输出必须是 JSON，不要输出解释文字或 Markdown。
+
+返回格式：
+{{
+  "matches": [
+    {{
+      "documentId": "输入中的 documentId",
+      "pageId": "输入中的 pageId",
+      "pageNumber": 1,
+      "title": "文献名",
+      "author": "著者",
+      "year": "年份",
+      "matchedAs": "材料中实际出现的称呼",
+      "matchType": "直接命中/别称/字号/战役异称/部队番号/地名旧称/上下文关联",
+      "reason": "为什么判断与 query 相关",
+      "quote": "原文依据",
+      "score": 0.0
+    }}
+  ],
+  "expandedTerms": ["模型识别出的同义称谓"],
+  "warnings": ["处理提示"]
+}}
+
+query：
+{payload.query}
+
+options：
+{json.dumps(payload.options, ensure_ascii=False)}
+
+documents：
+{json.dumps(payload.documents, ensure_ascii=False)}
+""".strip()
+
+    try:
+        result = call_json_task(prompt)
+        matches = normalize_entries(result.get("matches"))
+        expanded_terms = list_value(result.get("expandedTerms"))
+        warnings = list_value(result.get("warnings"))
+        response = base_response("search", ready=True)
+    except LlmServiceError as exc:
+        matches = []
+        expanded_terms = []
+        warnings = [str(exc)]
+        response = base_response("search", ready=False, message=str(exc))
+
+    response.update(
+        {
+            "query": payload.query,
+            "matches": matches,
+            "expandedTerms": expanded_terms,
             "warnings": warnings,
         }
     )

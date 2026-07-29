@@ -12,8 +12,12 @@
         <section class="view active" id="library-view" aria-label="首页">
           <header class="home-statusbar">
             <div class="service-strip" aria-label="服务链接状态">
-              <span>OCR：<b id="ocr-service-status" class="service-warn">未连接</b></span>
-              <span>大模型：<b id="llm-service-status" class="service-warn">未连接</b></span>
+              <span class="service-item service-item-version">
+                版本：<b id="version-service-status" class="service-warn">检查中</b>
+                <button class="status-action hidden" id="version-update-button" type="button">更新</button>
+              </span>
+              <span class="service-item">OCR：<b id="ocr-service-status" class="service-warn">未连接</b></span>
+              <span class="service-item service-item-llm">大模型：<b id="llm-service-status" class="service-warn">未连接</b></span>
             </div>
             <div class="status-title">
               <p class="eyebrow">近代军史数智平台</p>
@@ -277,7 +281,7 @@
     <script src="js/store.js"></script>
     <script src="js/dom.js"></script>
     <script src="js/render.js"></script>
-    <script src="js/service-status.js"></script>
+    <script src="js/service.js"></script>
     <script src="js/ocr.js"></script>
     <script src="js/llm.js"></script>
     <script src="js/search.js"></script>

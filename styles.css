@@ -1221,11 +1221,29 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
   color: #69716a;
   font-size: 14px;
   white-space: nowrap;
+}
+
+.service-item {
+  display: inline-flex;
+  flex: 0 0 112px;
+  align-items: center;
+  gap: 4px;
+  min-width: 112px;
+}
+
+.service-item-version {
+  flex-basis: 118px;
+  min-width: 118px;
+}
+
+.service-item-llm {
+  flex-basis: 136px;
+  min-width: 136px;
 }
 
 .status-title {
@@ -1244,7 +1262,27 @@ body {
 
 .service-strip strong,
 .service-strip b {
+  display: inline-block;
+  min-width: 48px;
   color: #414842;
+}
+
+.status-action {
+  width: 52px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #aeb8af;
+  border-radius: 6px;
+  background: #f7faf6;
+  color: #414842;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 24px;
+}
+
+.status-action:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .home-board {
