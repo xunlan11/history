@@ -46,78 +46,6 @@ button {
   cursor: pointer;
 }
 
-.app-shell {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 100vh;
-}
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 28px 22px;
-  border-right: 1px solid var(--line);
-  background: #26312d;
-  color: #f6fbf8;
-}
-
-.brand h1 {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.25;
-  font-weight: 700;
-}
-
-.brand p,
-.eyebrow {
-  margin: 8px 0 0;
-  color: #b8c8c0;
-  font-size: 13px;
-}
-
-.nav-list {
-  display: grid;
-  gap: 8px;
-}
-
-.nav-item {
-  width: 100%;
-  min-height: 42px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  background: transparent;
-  color: #edf5f1;
-  text-align: left;
-  padding: 10px 12px;
-}
-
-.nav-item.active,
-.nav-item:hover {
-  background: #f2f7f4;
-  color: #20342d;
-}
-
-.status-panel {
-  margin-top: auto;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  padding: 16px;
-  color: #dbe8e2;
-}
-
-.status-panel h2 {
-  margin: 0 0 10px;
-  font-size: 15px;
-}
-
-.status-panel ul {
-  margin: 0;
-  padding-left: 18px;
-  line-height: 1.8;
-  font-size: 13px;
-}
-
 .service-ok {
   color: #bce2ce;
   font-weight: 700;
@@ -128,50 +56,12 @@ button {
   font-weight: 700;
 }
 
-.main {
-  padding: 28px;
-}
-
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  margin-bottom: 22px;
-}
-
-.toolbar-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.toolbar h2 {
-  margin: 2px 0 0;
-  font-size: 28px;
-}
-
-.eyebrow {
-  color: var(--accent);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
 .view {
   display: none;
 }
 
 .view.active {
   display: block;
-}
-
-.two-column {
-  display: grid;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
 }
 
 .workspace-grid {
@@ -450,12 +340,6 @@ button:focus-visible {
   font-size: 13px;
 }
 
-.card-actions {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-}
-
 .document-detail dl,
 #document-detail {
   margin: 0;
@@ -543,8 +427,7 @@ button:focus-visible {
 .action-row,
 .page-nav-row,
 .reader-nav-row,
-.page-add-row,
-.search-row {
+.page-add-row {
   display: flex;
   gap: 12px;
   align-items: end;
@@ -612,10 +495,6 @@ button:focus-visible {
 }
 
 .page-add-row label {
-  flex: 1;
-}
-
-.search-row label {
   flex: 1;
 }
 
@@ -710,7 +589,6 @@ mark {
 
 @media (max-width: 900px) {
   .app-shell,
-  .two-column,
   .workspace-grid,
   .compare-workspace,
   .reader-layout,
@@ -718,21 +596,13 @@ mark {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    min-height: auto;
-  }
-
-  .toolbar,
-  .toolbar-actions,
-  .document-card,
   .page-item,
   .result-item,
   .action-row,
   .page-nav-row,
   .reader-nav-row,
   .offline-actions,
-  .page-add-row,
-  .search-row {
+  .page-add-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -777,7 +647,6 @@ body {
   padding: 34px 24px 56px;
 }
 
-.library-topbar,
 .reader-topbar,
 .workspace-topbar {
   display: flex;
@@ -787,7 +656,6 @@ body {
   margin-bottom: 24px;
 }
 
-.library-topbar h1,
 .reader-topbar h2,
 .workspace-topbar h2 {
   margin: 4px 0 0;
@@ -872,16 +740,9 @@ body {
   text-transform: none;
 }
 
-.topbar-actions {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-}
-
 .icon-button,
 .back-button,
 .ghost-link,
-.shelf-tab,
 .chip-button,
 .round-send {
   border: 0;
@@ -912,43 +773,6 @@ body {
   font-size: 24px;
 }
 
-.reading-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 72px;
-  margin-bottom: 34px;
-  padding: 16px 22px;
-  border-radius: 8px;
-  background: #e9ece9;
-  color: #7b817b;
-}
-
-.reading-stat {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  flex-wrap: wrap;
-}
-
-.reading-stat strong,
-.reading-stat b {
-  color: #555c55;
-}
-
-.stat-icon {
-  color: #9aa29c;
-  font-size: 23px;
-}
-
-.status-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--red);
-}
-
 .ghost-link {
   flex: 0 0 auto;
   min-height: 38px;
@@ -957,46 +781,6 @@ body {
   background: transparent;
   color: #7b817b;
   font-weight: 700;
-}
-
-.shelf-tabs {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-  color: #323632;
-  font-size: 25px;
-  font-family: inherit;
-  font-weight: 700;
-}
-
-.shelf-tab {
-  position: relative;
-  padding: 4px 0;
-  background: transparent;
-  font: inherit;
-}
-
-.shelf-tab:not(:last-child)::after {
-  content: "|";
-  margin-left: 16px;
-  color: #9ba19d;
-}
-
-.shelf-tab.active {
-  color: var(--ink);
-}
-
-.shelf-tab:nth-child(3)::before,
-.shelf-tab:nth-child(4)::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  right: -9px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--red);
 }
 
 .shelf-stage {
@@ -1472,10 +1256,8 @@ body {
     padding: 22px 16px 40px;
   }
 
-  .library-topbar,
   .reader-topbar,
   .workspace-topbar,
-  .reading-card,
   .page-item,
   .result-item,
   .action-row,
@@ -1487,7 +1269,6 @@ body {
     flex-direction: column;
   }
 
-  .topbar-actions,
   .smart-actions {
     align-self: stretch;
   }
@@ -1501,16 +1282,6 @@ body {
   .book-cover,
   .add-document {
     min-height: 184px;
-  }
-
-  .shelf-tabs {
-    gap: 10px;
-    overflow-x: auto;
-    font-size: 22px;
-  }
-
-  .shelf-tab:not(:last-child)::after {
-    margin-left: 10px;
   }
 
   .smart-input-box {
@@ -1740,11 +1511,6 @@ body {
   line-height: 1.25;
 }
 
-.compact-button {
-  min-height: 32px;
-  padding: 5px 10px;
-}
-
 .conversation-list {
   display: grid;
   flex: 1 1 auto;
@@ -1928,23 +1694,12 @@ body {
   white-space: pre-wrap;
 }
 
-.library-sidebar .shelf-tabs {
-  flex: 0 0 auto;
-  gap: 8px;
-  margin: 0;
-  padding: 12px 14px 4px;
-  overflow-x: auto;
-  font-size: 18px;
-}
-
-.library-sidebar .shelf-tab:not(:last-child)::after {
-  margin-left: 8px;
-}
-
 .library-sidebar .shelf-stage {
+  flex: 1 1 auto;
   min-height: 0;
   padding: 10px 14px 16px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .library-sidebar .document-list {

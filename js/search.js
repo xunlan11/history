@@ -6,7 +6,7 @@ function runLiteralSearch(notice = "") {
   searchResults.classList.remove("empty-result-list");
 
   if (!query) {
-    renderSearchEmpty();
+    renderSmartEmpty();
     return;
   }
 
@@ -62,7 +62,7 @@ async function runSearch() {
   searchResults.classList.remove("empty-result-list");
 
   if (!query) {
-    renderSearchEmpty();
+    renderSmartEmpty();
     return;
   }
 
@@ -220,18 +220,11 @@ function countSearchPages() {
 }
 
 function renderSearchLoading() {
-  const loading = emptyState("正在调用大模型检索...");
-  loading.classList.add("result-empty");
-  searchResults.classList.add("empty-result-list");
-  searchResults.append(loading);
+  renderResultState(searchResults, "正在调用大模型检索...");
 }
 
 function renderSearchNotice(message) {
-  searchResults.innerHTML = "";
-  searchResults.classList.add("empty-result-list");
-  const empty = emptyState(message);
-  empty.classList.add("result-empty");
-  searchResults.append(empty);
+  renderResultState(searchResults, message);
 }
 
 function renderLlmSearchResults(matches, warnings = [], query = "") {
@@ -289,7 +282,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
       content.append(reason);
     }
     if (Array.isArray(warnings) && warnings.length && index === matches.length - 1) {
-      content.append(formatSearchWarnings(warnings));
+      content.append(formatWarnings(warnings));
     }
     result.append(content, action);
     searchResults.append(result);
@@ -302,13 +295,6 @@ function highlightIfLiteral(text, query) {
   }
 
   return buildSnippet(text, query) ? highlight(text, query) : escapeHtml(text);
-}
-
-function formatSearchWarnings(warnings) {
-  const node = document.createElement("p");
-  node.className = "meta-line";
-  node.textContent = `提示：${warnings.join("；")}`;
-  return node;
 }
 
 function resolveSearchMatch(match) {

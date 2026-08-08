@@ -311,7 +311,7 @@ def extract_events(payload: ExtractEventsRequest) -> dict[str, Any]:
 
     try:
         result = call_json_task(prompt)
-        events = normalize_events(result.get("events"))
+        events = normalize_entries(result.get("events"))
         warnings = list_value(result.get("warnings"))
         response = base_response("extract-events", ready=True)
     except LlmServiceError as exc:
@@ -855,12 +855,6 @@ def list_value(value: Any) -> list[Any]:
     if isinstance(value, str) and value:
         return [value]
     return []
-
-
-def normalize_events(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
 
 
 def normalize_entries(value: Any) -> list[dict[str, Any]]:

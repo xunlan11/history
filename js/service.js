@@ -1,22 +1,35 @@
+function setServiceStatus(node, text, className) {
+  if (!node) {
+    return;
+  }
+
+  node.textContent = text;
+  node.className = className;
+}
+
+async function fetchServiceJson(url, errorMessage, options = {}) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...options,
+  });
+
+  if (!response.ok) {
+    throw new Error(`${errorMessage}: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 async function refreshOcrServiceStatus() {
   if (!ocrServiceStatus) {
     return;
   }
 
   try {
-    const response = await fetch("http://127.0.0.1:8765/health", {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(`OCR health check failed: ${response.status}`);
-    }
-
-    ocrServiceStatus.textContent = "已连接";
-    ocrServiceStatus.className = "service-ok";
+    await fetchServiceJson("http://127.0.0.1:8765/health", "OCR health check failed");
+    setServiceStatus(ocrServiceStatus, "已连接", "service-ok");
   } catch (error) {
-    ocrServiceStatus.textContent = "未连接";
-    ocrServiceStatus.className = "service-warn";
+    setServiceStatus(ocrServiceStatus, "未连接", "service-warn");
   }
 }
 
@@ -26,20 +39,14 @@ async function refreshLlmServiceStatus() {
   }
 
   try {
-    const response = await fetch(LLM_HEALTH_URL, {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(`LLM health check failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-    llmServiceStatus.textContent = result.ready ? "已连接" : "待配置";
-    llmServiceStatus.className = result.ready ? "service-ok" : "service-warn";
+    const result = await fetchServiceJson(LLM_HEALTH_URL, "LLM health check failed");
+    setServiceStatus(
+      llmServiceStatus,
+      result.ready ? "已连接" : "待配置",
+      result.ready ? "service-ok" : "service-warn",
+    );
   } catch (error) {
-    llmServiceStatus.textContent = "未连接";
-    llmServiceStatus.className = "service-warn";
+    setServiceStatus(llmServiceStatus, "未连接", "service-warn");
   }
 }
 
@@ -48,8 +55,7 @@ function showVersionStatus(text, className = "service-warn") {
     return;
   }
 
-  versionServiceStatus.textContent = text;
-  versionServiceStatus.className = className;
+  setServiceStatus(versionServiceStatus, text, className);
   versionServiceStatus.classList.remove("hidden");
   versionUpdateButton.classList.add("hidden");
   versionUpdateButton.disabled = false;
@@ -73,15 +79,7 @@ async function refreshVersionStatus() {
   }
 
   try {
-    const response = await fetch(VERSION_STATUS_URL, {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(`Version check failed: ${response.status}`);
-    }
-
-    const result = await response.json();
+    const result = await fetchServiceJson(VERSION_STATUS_URL, "Version check failed");
 
     if (result.updating) {
       showVersionStatus("更新中", "service-warn");
@@ -108,16 +106,9 @@ async function requestProjectUpdate() {
   versionUpdateButton.textContent = "更新中";
 
   try {
-    const response = await fetch(VERSION_UPDATE_URL, {
+    const result = await fetchServiceJson(VERSION_UPDATE_URL, "Project update failed", {
       method: "POST",
-      cache: "no-store",
     });
-
-    if (!response.ok) {
-      throw new Error(`Project update failed: ${response.status}`);
-    }
-
-    const result = await response.json();
     showVersionStatus(result.updating ? "更新中" : "最新", result.updating ? "service-warn" : "service-ok");
   } catch (error) {
     showVersionStatus("更新失败", "service-warn");

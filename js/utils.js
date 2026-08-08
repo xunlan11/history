@@ -20,16 +20,6 @@ function formatDateTime(date) {
   return `${parts.join("-")} ${time}`;
 }
 
-function formatSize(bytes) {
-  if (!bytes) {
-    return "0 B";
-  }
-
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
-}
-
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => {
     const map = {
@@ -54,14 +44,19 @@ function emptyState(message) {
   return node;
 }
 
-function downloadTextFile(fileName, content, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  URL.revokeObjectURL(url);
+function renderResultState(container, message) {
+  container.innerHTML = "";
+  container.classList.add("empty-result-list");
+  const empty = emptyState(message);
+  empty.classList.add("result-empty");
+  container.append(empty);
+}
+
+function formatWarnings(warnings) {
+  const node = document.createElement("p");
+  node.className = "meta-line";
+  node.textContent = `提示：${warnings.join("；")}`;
+  return node;
 }
 
 function readImageFile(file, callback) {

@@ -54,8 +54,7 @@ confirmDeleteConversation.addEventListener("click", () => {
   pendingDeleteConversationId = null;
   searchInput.value = "";
   chronicleTopic.value = "";
-  searchResults.innerHTML = "";
-  chronicleResults.innerHTML = "";
+  clearSmartResults();
   closeDeleteConversationDialog();
   renderAll();
 });
@@ -70,8 +69,7 @@ newConversationButton.addEventListener("click", () => {
   createConversation("新对话", selectedSmartMode);
   searchInput.value = "";
   chronicleTopic.value = "";
-  searchResults.innerHTML = "";
-  chronicleResults.innerHTML = "";
+  clearSmartResults();
   renderAll();
   searchInput.focus();
 });
@@ -267,7 +265,20 @@ document.querySelector("#generate-punctuated").addEventListener("click", generat
 document.querySelector("#generate-final-text").addEventListener("click", generateFinalText);
 generateDocumentTextButton?.addEventListener("click", generateDocumentFinalText);
 document.querySelector("#refresh-offline").addEventListener("click", refreshOfflineTask);
-document.querySelector("#smart-send").addEventListener("click", () => {
+document.querySelector("#smart-send").addEventListener("click", runSelectedSmartMode);
+const exportPdfButton = document.querySelector("#export-pdf");
+if (exportPdfButton) {
+  exportPdfButton.addEventListener("click", exportPdf);
+}
+
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    runSelectedSmartMode();
+  }
+});
+
+function runSelectedSmartMode() {
   if (selectedSmartMode === "search") {
     runSmartSearch();
     return;
@@ -279,28 +290,7 @@ document.querySelector("#smart-send").addEventListener("click", () => {
   }
 
   runSmartChat();
-});
-const exportPdfButton = document.querySelector("#export-pdf");
-if (exportPdfButton) {
-  exportPdfButton.addEventListener("click", exportPdf);
 }
-
-searchInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    if (selectedSmartMode === "search") {
-      runSmartSearch();
-      return;
-    }
-
-    if (selectedSmartMode === "chronicle") {
-      runSmartChronicle();
-      return;
-    }
-
-    runSmartChat();
-  }
-});
 
 function renderSmartModeButtons() {
   const conversation = getSelectedConversation();
@@ -378,10 +368,7 @@ async function runSmartChat() {
   }
 
   upsertConversationFromPrompt(prompt, "chat");
-  searchResults.innerHTML = "";
-  chronicleResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
-  chronicleResults.classList.remove("empty-result-list");
+  clearSmartResults();
   renderSmartModeButtons();
   renderConversationList();
   renderActiveConversation();
@@ -419,8 +406,7 @@ function runSmartSearch() {
   }
 
   chronicleTopic.value = "";
-  chronicleResults.innerHTML = "";
-  chronicleResults.classList.remove("empty-result-list");
+  clearSmartResults();
   renderSmartModeButtons();
   renderConversationList();
   renderActiveConversation();
@@ -436,8 +422,7 @@ function runSmartChronicle() {
   }
 
   chronicleTopic.value = prompt;
-  searchResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
+  clearSmartResults();
   renderSmartModeButtons();
   renderConversationList();
   renderActiveConversation();
@@ -470,10 +455,7 @@ function buildLibraryChatContext(prompt) {
 }
 
 function renderChatMessage(prompt, answer) {
-  searchResults.innerHTML = "";
-  chronicleResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
-  chronicleResults.classList.remove("empty-result-list");
+  clearSmartResults();
 
   const result = document.createElement("article");
   const content = document.createElement("div");
@@ -491,9 +473,7 @@ function renderChatMessage(prompt, answer) {
 }
 
 function renderChatNotice(message) {
-  searchResults.innerHTML = "";
-  chronicleResults.innerHTML = "";
-  chronicleResults.classList.remove("empty-result-list");
+  clearSmartResults();
   searchResults.classList.add("empty-result-list");
 
   const empty = emptyState(message);

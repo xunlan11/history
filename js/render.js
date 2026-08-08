@@ -83,10 +83,7 @@ function renderConversationList() {
       renderSmartModeButtons();
       searchInput.value = item.title === "新对话" ? "" : item.title;
       chronicleTopic.value = item.mode === "chronicle" ? searchInput.value : "";
-      searchResults.innerHTML = "";
-      chronicleResults.innerHTML = "";
-      searchResults.classList.remove("empty-result-list");
-      chronicleResults.classList.remove("empty-result-list");
+      clearSmartResults();
       renderConversationList();
       renderActiveConversation();
 
@@ -523,15 +520,6 @@ function createAddBookCard() {
   return article;
 }
 
-function getDocumentProgress(item) {
-  if (!item.pages.length) {
-    return 0;
-  }
-
-  const finished = item.pages.filter((page) => hasPageText(page)).length;
-  return Math.max(4, Math.round((finished / item.pages.length) * 100));
-}
-
 function openDocumentForm() {
   formSheet.classList.remove("hidden");
   document.querySelector("#file-input").focus();
@@ -772,16 +760,12 @@ function renderSmartEmpty() {
     return;
   }
 
+  clearSmartResults();
+}
+
+function clearSmartResults() {
   searchResults.innerHTML = "";
   chronicleResults.innerHTML = "";
   searchResults.classList.remove("empty-result-list");
   chronicleResults.classList.remove("empty-result-list");
-}
-
-function renderSearchEmpty() {
-  renderSmartEmpty();
-}
-
-function renderChronicleEmpty() {
-  renderSmartEmpty();
 }
