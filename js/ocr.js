@@ -49,6 +49,8 @@ async function recognizeCurrentPage() {
     page.ocr = {
       confidence: result.confidence ?? null,
       engine: result.engine || "本机识别服务",
+      preprocessing: result.preprocessing || null,
+      layout: result.layout || null,
       recognizedAt: new Date().toISOString(),
     };
     page.updatedAt = new Date().toISOString();

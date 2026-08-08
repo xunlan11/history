@@ -628,6 +628,8 @@ function normalizeBatchPage(page, index) {
     page.notes || "",
     typeof page.confidence === "number" ? `自动识别置信度：${Math.round(page.confidence * 100)}%。` : "",
     warnings.length ? `识别提示：${warnings.join("；")}` : "",
+    page.preprocessing?.steps?.length ? `图像预处理：${page.preprocessing.steps.join("、")}。` : "",
+    buildLayoutNote(page.layout),
     "本页由离线整本处理生成，需对照原图逐字核对。",
   ].filter(Boolean).join("\n");
 
@@ -646,6 +648,8 @@ function normalizeBatchPage(page, index) {
     ocr: {
       confidence: page.confidence ?? null,
       engine: page.engine || "本机整本处理服务",
+      preprocessing: page.preprocessing || null,
+      layout: page.layout || null,
       recognizedAt: page.recognizedAt || new Date().toISOString(),
     },
     updatedAt: page.updatedAt || new Date().toISOString(),
@@ -663,8 +667,53 @@ function buildOcrNote(result) {
     notes.push(`识别提示：${result.warnings.join("；")}`);
   }
 
+  if (result.preprocessing?.steps?.length) {
+    notes.push(`图像预处理：${result.preprocessing.steps.join("、")}。`);
+  }
+
+  const layoutNote = buildLayoutNote(result.layout);
+  if (layoutNote) {
+    notes.push(layoutNote);
+  }
+
   notes.push("本页文字由自动识别生成，需对照原图逐字核对。");
   return notes.join("\n");
+}
+
+function buildLayoutNote(layout) {
+  if (!layout) {
+    return "";
+  }
+
+  const parts = [];
+  if (layout.columnCount > 1) {
+    parts.push(`检测到 ${layout.columnCount} 栏`);
+  }
+
+  const roles = new Set((layout.regions || []).map((region) => region.role));
+  const roleLabels = [];
+  if (roles.has("header")) {
+    roleLabels.push("页眉");
+  }
+  if (roles.has("footer")) {
+    roleLabels.push("页脚");
+  }
+  if (roles.has("footnote")) {
+    roleLabels.push("脚注候选");
+  }
+  if (roles.has("caption")) {
+    roleLabels.push("图题/表题候选");
+  }
+
+  if (roleLabels.length) {
+    parts.push(roleLabels.join("、"));
+  }
+
+  if (!parts.length) {
+    return "";
+  }
+
+  return `版面分析：${parts.join("；")}。`;
 }
 
 function mergeNotes(existing, addition) {

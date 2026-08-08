@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -11,11 +12,12 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 APP_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = APP_DIR / "ocr-storage"
 TASKS_DIR = STORAGE_DIR / "tasks"
+PREPROCESS_DIR = STORAGE_DIR / "preprocessed"
 PUBLIC_BASE_URL = "http://127.0.0.1:8765"
 
 TASKS_DIR.mkdir(parents=True, exist_ok=True)
@@ -219,28 +221,136 @@ def copy_image_to_page(path: Path, task_id: str, page_number: int) -> Path:
     return target
 
 
+def preprocess_image(
+    path: Path,
+    page_number: int | None = None,
+    task_id: str | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    target = preprocessed_image_path(path, page_number, task_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    steps: list[str] = []
+
+    with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image)
+        steps.append("方向修正")
+
+        image = image.convert("L")
+        steps.append("灰度化")
+
+        image = ImageOps.autocontrast(image, cutoff=1)
+        steps.append("自动对比度")
+
+        image = image.filter(ImageFilter.MedianFilter(size=3))
+        steps.append("中值降噪")
+
+        image = ImageEnhance.Contrast(image).enhance(1.35)
+        steps.append("对比度增强")
+
+        image = ImageEnhance.Sharpness(image).enhance(1.2)
+        steps.append("轻量锐化")
+
+        angle = estimate_skew_angle(image)
+        if abs(angle) >= 0.25:
+            image = image.rotate(-angle, resample=resampling_bicubic(), expand=False, fillcolor=255)
+            steps.append(f"倾斜校正({angle:+.1f}°)")
+
+        image.save(target, format="PNG", optimize=True)
+
+    return target, {
+        "enabled": True,
+        "imageName": target.name,
+        "steps": steps,
+        "deskewAngle": angle,
+    }
+
+
+def preprocessed_image_path(path: Path, page_number: int | None, task_id: str | None) -> Path:
+    if task_id:
+        name = f"page-{page_number or path.stem}-preprocessed.png"
+        return TASKS_DIR / task_id / "preprocessed" / name
+
+    return PREPROCESS_DIR / f"{path.stem}-{uuid.uuid4().hex[:8]}-preprocessed.png"
+
+
+def estimate_skew_angle(image: Image.Image) -> float:
+    sample = image.copy()
+    max_width = 700
+    if sample.width > max_width:
+        ratio = max_width / sample.width
+        sample = sample.resize(
+            (max_width, max(1, int(sample.height * ratio))),
+            resampling_bicubic(),
+        )
+
+    thresholded = sample.point(lambda pixel: 0 if pixel < 185 else 255)
+    best_angle = 0.0
+    best_score = -math.inf
+
+    for index in range(-6, 7):
+        angle = index * 0.5
+        rotated = thresholded.rotate(angle, resample=resampling_bicubic(), expand=False, fillcolor=255)
+        score = horizontal_projection_score(rotated)
+        if score > best_score:
+            best_score = score
+            best_angle = angle
+
+    return best_angle
+
+
+def horizontal_projection_score(image: Image.Image) -> float:
+    pixels = image.load()
+    width, height = image.size
+    counts: list[int] = []
+
+    for y in range(height):
+        black = 0
+        for x in range(width):
+            if pixels[x, y] < 128:
+                black += 1
+        counts.append(black)
+
+    if not counts:
+        return 0.0
+
+    average = sum(counts) / len(counts)
+    return sum((count - average) ** 2 for count in counts) / len(counts)
+
+
+def resampling_bicubic():
+    return getattr(Image, "Resampling", Image).BICUBIC
+
+
 def recognize_image(
     path: Path,
     page_number: int | None = None,
     task_id: str | None = None,
 ) -> dict[str, Any]:
     ensure_image_readable(path)
+    processed_path, preprocessing = preprocess_image(path, page_number, task_id)
     engine = get_ocr_engine()
-    raw = engine.ocr(str(path), cls=True)
-    text_lines, scores = parse_paddle_result(raw)
+    raw = engine.ocr(str(processed_path), cls=True)
+    ocr_lines = parse_paddle_result(raw)
+    layout = analyze_page_layout(processed_path, ocr_lines)
+    ordered_lines = layout["readingOrder"]
+    text_lines = [line["text"] for line in ordered_lines]
+    scores = [line["confidence"] for line in ocr_lines if isinstance(line.get("confidence"), (int, float))]
 
     payload: dict[str, Any] = {
         "text": "\n".join(text_lines),
         "confidence": sum(scores) / len(scores) if scores else None,
         "engine": "PaddleOCR",
-        "warnings": build_warnings(scores),
+        "warnings": build_warnings(scores, layout),
         "imageName": path.name,
+        "preprocessing": preprocessing,
+        "layout": layout,
     }
 
     if task_id:
         payload["imageUrl"] = build_file_url(path)
+        payload["preprocessedImageUrl"] = build_file_url(processed_path)
     else:
         payload["imageDataUrl"] = image_to_data_url(path)
+        payload["preprocessedImageDataUrl"] = image_to_data_url(processed_path)
 
     if page_number is not None:
         payload["pageNumber"] = page_number
@@ -252,31 +362,310 @@ def ensure_image_readable(path: Path) -> None:
         image.verify()
 
 
-def parse_paddle_result(raw: Any) -> tuple[list[str], list[float]]:
-    text_lines: list[str] = []
-    scores: list[float] = []
+def parse_paddle_result(raw: Any) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
 
     for page_result in raw or []:
         for line in page_result or []:
-            if not line or len(line) < 2:
+            parsed = parse_paddle_line(line)
+            if parsed:
+                lines.append(parsed)
+
+    return lines
+
+
+def parse_paddle_line(line: Any) -> dict[str, Any] | None:
+    if not line or not isinstance(line, (list, tuple)) or len(line) < 2:
+        return None
+
+    points = normalize_points(line[0])
+    text_score = line[1]
+    if not isinstance(text_score, (list, tuple)) or len(text_score) < 2:
+        return None
+
+    text = str(text_score[0]).strip()
+    if not text:
+        return None
+
+    try:
+        confidence = float(text_score[1])
+    except (TypeError, ValueError):
+        confidence = None
+
+    bbox = bbox_from_points(points)
+    return {
+        "text": text,
+        "confidence": confidence,
+        "points": points,
+        "bbox": bbox,
+    }
+
+
+def normalize_points(value: Any) -> list[list[float]]:
+    points: list[list[float]] = []
+    if isinstance(value, (list, tuple)):
+        for point in value:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
                 continue
-            text_score = line[1]
-            if isinstance(text_score, (list, tuple)) and len(text_score) >= 2:
-                text_lines.append(str(text_score[0]))
-                try:
-                    scores.append(float(text_score[1]))
-                except (TypeError, ValueError):
-                    pass
+            try:
+                points.append([float(point[0]), float(point[1])])
+            except (TypeError, ValueError):
+                continue
 
-    return text_lines, scores
-
-
-def build_warnings(scores: list[float]) -> list[str]:
-    if not scores:
-        return ["未返回置信度，请人工核对。"]
-    if min(scores) < 0.75:
-        return ["存在低置信度文字，请重点核对。"]
+    if len(points) >= 4:
+        return points[:4]
     return []
+
+
+def bbox_from_points(points: list[list[float]]) -> dict[str, float]:
+    if not points:
+        return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    left = min(xs)
+    top = min(ys)
+    right = max(xs)
+    bottom = max(ys)
+    return {
+        "x": left,
+        "y": top,
+        "width": max(0.0, right - left),
+        "height": max(0.0, bottom - top),
+    }
+
+
+def analyze_page_layout(path: Path, lines: list[dict[str, Any]]) -> dict[str, Any]:
+    with Image.open(path) as image:
+        width, height = image.size
+
+    enriched = [enrich_line(line, width, height) for line in lines if line.get("text")]
+    body_candidates = [
+        line for line in enriched
+        if 0.08 <= line["bboxNorm"]["y"] <= 0.92
+    ] or enriched
+    columns = detect_columns(body_candidates, width)
+    regions = classify_regions(enriched, columns, width, height)
+    ordered_lines = order_lines_for_reading(enriched, columns)
+
+    return {
+        "imageWidth": width,
+        "imageHeight": height,
+        "lineCount": len(enriched),
+        "columnCount": len(columns),
+        "columns": columns,
+        "regions": regions,
+        "lines": enriched,
+        "readingOrder": ordered_lines,
+        "capabilities": [
+            "line-boxes",
+            "reading-order",
+            "column-detection",
+            "header-footer-candidates",
+            "footnote-caption-candidates",
+        ],
+    }
+
+
+def enrich_line(line: dict[str, Any], image_width: int, image_height: int) -> dict[str, Any]:
+    bbox = line.get("bbox") or {}
+    normalized = normalize_bbox(bbox, image_width, image_height)
+    return {
+        "text": line.get("text", ""),
+        "confidence": line.get("confidence"),
+        "points": line.get("points") or [],
+        "bbox": bbox,
+        "bboxNorm": normalized,
+        "centerX": bbox.get("x", 0.0) + bbox.get("width", 0.0) / 2,
+        "centerY": bbox.get("y", 0.0) + bbox.get("height", 0.0) / 2,
+        "role": "body",
+        "columnIndex": 0,
+    }
+
+
+def normalize_bbox(bbox: dict[str, float], image_width: int, image_height: int) -> dict[str, float]:
+    width = max(1, image_width)
+    height = max(1, image_height)
+    return {
+        "x": round(float(bbox.get("x", 0.0)) / width, 4),
+        "y": round(float(bbox.get("y", 0.0)) / height, 4),
+        "width": round(float(bbox.get("width", 0.0)) / width, 4),
+        "height": round(float(bbox.get("height", 0.0)) / height, 4),
+    }
+
+
+def detect_columns(lines: list[dict[str, Any]], image_width: int) -> list[dict[str, Any]]:
+    if not lines:
+        return [{"index": 0, "xMin": 0.0, "xMax": float(image_width), "lineCount": 0}]
+
+    sorted_lines = sorted(lines, key=lambda item: item["centerX"])
+    median_width = median([line["bbox"].get("width", 0.0) for line in sorted_lines]) or image_width
+    min_gap = max(image_width * 0.08, median_width * 1.4)
+    gaps: list[tuple[float, int]] = []
+
+    for index in range(len(sorted_lines) - 1):
+        left = sorted_lines[index]["bbox"].get("x", 0.0) + sorted_lines[index]["bbox"].get("width", 0.0)
+        right = sorted_lines[index + 1]["bbox"].get("x", 0.0)
+        gap = right - left
+        if gap >= min_gap:
+            gaps.append((gap, index))
+
+    if not gaps:
+        return [build_column(0, lines, image_width)]
+
+    _, split_index = max(gaps, key=lambda item: item[0])
+    left_group = sorted_lines[: split_index + 1]
+    right_group = sorted_lines[split_index + 1 :]
+
+    if len(left_group) < 3 or len(right_group) < 3:
+        return [build_column(0, lines, image_width)]
+
+    return [
+        build_column(0, left_group, image_width),
+        build_column(1, right_group, image_width),
+    ]
+
+
+def build_column(index: int, lines: list[dict[str, Any]], image_width: int) -> dict[str, Any]:
+    if not lines:
+        return {"index": index, "xMin": 0.0, "xMax": float(image_width), "lineCount": 0}
+
+    x_min = min(line["bbox"].get("x", 0.0) for line in lines)
+    x_max = max(line["bbox"].get("x", 0.0) + line["bbox"].get("width", 0.0) for line in lines)
+    return {
+        "index": index,
+        "xMin": round(x_min, 2),
+        "xMax": round(x_max, 2),
+        "xMinNorm": round(x_min / max(1, image_width), 4),
+        "xMaxNorm": round(x_max / max(1, image_width), 4),
+        "lineCount": len(lines),
+    }
+
+
+def classify_regions(
+    lines: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]]:
+    roles: dict[str, list[dict[str, Any]]] = {
+        "header": [],
+        "footer": [],
+        "footnote": [],
+        "caption": [],
+        "body": [],
+    }
+    median_height = median([line["bbox"].get("height", 0.0) for line in lines]) or 1
+
+    for line in lines:
+        assign_column(line, columns)
+        text = line["text"]
+        y = line["bboxNorm"]["y"]
+        line_height = line["bbox"].get("height", 0.0)
+
+        if y < 0.07:
+            role = "header"
+        elif y > 0.94:
+            role = "footer"
+        elif y > 0.82 and (line_height < median_height * 0.86 or looks_like_note(text)):
+            role = "footnote"
+        elif looks_like_caption(text):
+            role = "caption"
+        else:
+            role = "body"
+
+        line["role"] = role
+        roles[role].append(line)
+
+    return [
+        build_region(role, role_lines, image_width, image_height)
+        for role, role_lines in roles.items()
+        if role_lines
+    ]
+
+
+def assign_column(line: dict[str, Any], columns: list[dict[str, Any]]) -> None:
+    if not columns:
+        line["columnIndex"] = 0
+        return
+
+    center = line["centerX"]
+    closest = min(
+        columns,
+        key=lambda column: abs(center - (column["xMin"] + column["xMax"]) / 2),
+    )
+    line["columnIndex"] = closest["index"]
+
+
+def looks_like_note(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith(("注", "附注", "备注", "*", "①", "②", "③", "④", "⑤")) or stripped[:2].isdigit()
+
+
+def looks_like_caption(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith(("图", "表", "照片", "地图", "附图")) and len(stripped) <= 40
+
+
+def build_region(role: str, lines: list[dict[str, Any]], image_width: int, image_height: int) -> dict[str, Any]:
+    x_min = min(line["bbox"].get("x", 0.0) for line in lines)
+    y_min = min(line["bbox"].get("y", 0.0) for line in lines)
+    x_max = max(line["bbox"].get("x", 0.0) + line["bbox"].get("width", 0.0) for line in lines)
+    y_max = max(line["bbox"].get("y", 0.0) + line["bbox"].get("height", 0.0) for line in lines)
+    bbox = {"x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min}
+    return {
+        "role": role,
+        "lineCount": len(lines),
+        "bbox": {key: round(value, 2) for key, value in bbox.items()},
+        "bboxNorm": normalize_bbox(bbox, image_width, image_height),
+    }
+
+
+def order_lines_for_reading(lines: list[dict[str, Any]], columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    body_roles = {"body", "caption", "footnote"}
+    ordered = sorted(
+        lines,
+        key=lambda line: (
+            0 if line["role"] == "header" else 2 if line["role"] == "footer" else 1,
+            line["columnIndex"] if len(columns) > 1 else 0,
+            line["bbox"].get("y", 0.0),
+            line["bbox"].get("x", 0.0),
+        ),
+    )
+    return [
+        line for line in ordered
+        if line["role"] in body_roles or len(lines) < 3
+    ]
+
+
+def median(values: list[float]) -> float:
+    cleaned = sorted(value for value in values if isinstance(value, (int, float)))
+    if not cleaned:
+        return 0.0
+    middle = len(cleaned) // 2
+    if len(cleaned) % 2:
+        return float(cleaned[middle])
+    return float((cleaned[middle - 1] + cleaned[middle]) / 2)
+
+
+def build_warnings(scores: list[float], layout: dict[str, Any] | None = None) -> list[str]:
+    warnings = []
+
+    if not scores:
+        warnings.append("未返回置信度，请人工核对。")
+    elif min(scores) < 0.75:
+        warnings.append("存在低置信度文字，请重点核对。")
+
+    if layout:
+        if layout.get("columnCount", 1) > 1:
+            warnings.append("检测到多栏版面，已按栏位重排阅读顺序，请人工核对。")
+        roles = {region["role"] for region in layout.get("regions", [])}
+        if {"header", "footer"} & roles:
+            warnings.append("检测到页眉或页脚候选区域，正文抽取时已降低其优先级。")
+        if {"footnote", "caption"} & roles:
+            warnings.append("检测到脚注或图题候选区域，请按原图核对归属。")
+
+    return warnings
 
 
 def image_to_data_url(path: Path) -> str:
