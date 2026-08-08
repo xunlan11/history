@@ -2,6 +2,15 @@ const DOCUMENT_DRAG_LONG_PRESS_MS = 420;
 const DOCUMENT_DRAG_CANCEL_DISTANCE = 8;
 let documentDragState = null;
 let suppressDocumentClickUntil = 0;
+let readerReturnView = "library";
+
+function setReaderReturnView(name) {
+  readerReturnView = name === "documents" ? "documents" : "library";
+}
+
+function returnFromReader() {
+  setView(readerReturnView);
+}
 
 function setView(name) {
   Object.entries(views).forEach(([key, node]) => {
@@ -26,6 +35,7 @@ function renderAll() {
   renderConversationList();
   renderActiveConversation();
   renderDocumentList();
+  renderReader();
   renderDetail();
   renderSmartEmpty();
   if (typeof renderSmartModeButtons === "function") {
@@ -211,15 +221,24 @@ function createBookCard(item, index) {
     cover.style.setProperty("--cover-image", `url("${item.coverImageDataUrl}")`);
   }
 
-  openButton.addEventListener("click", () => {
-    if (Date.now() < suppressDocumentClickUntil) {
+  const openDocumentFromCard = () => {
+    if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") {
       return;
     }
 
     selectedDocumentId = item.id;
     ensureSelectedPage(item);
+    setReaderReturnView(card.closest("#documents-view") ? "documents" : "library");
     renderAll();
-    setView("workspace");
+    setView("reader");
+  };
+
+  openButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openDocumentFromCard();
+  });
+  card.addEventListener("click", () => {
+    openDocumentFromCard();
   });
   card.addEventListener("pointerdown", (event) => {
     prepareDocumentDrag(event, card, item.id);
@@ -522,6 +541,103 @@ function closeDocumentForm() {
   formSheet.classList.add("hidden");
 }
 
+function renderReader() {
+  if (!readerTitle || !readerPageStatus || !readerPageInput || !readerPageTotal || !readerOriginalPreview || !readerText) {
+    return;
+  }
+
+  const item = getSelectedDocument();
+  readerOriginalPreview.innerHTML = "";
+  readerText.innerHTML = "";
+  readerNotes.innerHTML = "";
+  readerOriginalPreview.classList.remove("is-empty");
+  readerText.classList.remove("is-empty");
+  readerNotes.classList.add("hidden");
+
+  if (!item) {
+    readerTitle.textContent = "未选择文献";
+    readerAuthor.textContent = "著者未录";
+    readerYear.textContent = "年份未录";
+    readerPageInput.value = "";
+    readerPageInput.disabled = true;
+    readerPageInput.removeAttribute("max");
+    readerPageTotal.textContent = "/ 0 页";
+    readerPageStatus.setAttribute("aria-label", "未选择页");
+    readerPrevPageButton.disabled = true;
+    readerNextPageButton.disabled = true;
+    exportDocumentPdfButton.disabled = true;
+    editDocumentButton.disabled = true;
+    readerOriginalPreview.classList.add("is-empty");
+    readerText.classList.add("is-empty");
+    readerOriginalPreview.append(readerEmptyState("请先在文献库打开一项文献"));
+    readerText.append(readerEmptyState("尚无整理文本"));
+    return;
+  }
+
+  ensureSelectedPage(item);
+  const page = getSelectedPage();
+  const sortedPages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
+  const pageIndex = Math.max(0, sortedPages.findIndex((entry) => entry.id === page?.id));
+
+  readerTitle.textContent = getDocumentDisplayTitle(item);
+  readerAuthor.textContent = item.author || "著者未录";
+  readerYear.textContent = item.year || "年份未录";
+  readerPageInput.value = page ? String(pageIndex + 1) : "";
+  readerPageInput.disabled = !page;
+  readerPageInput.max = String(sortedPages.length);
+  readerPageTotal.textContent = `/ ${sortedPages.length} 页`;
+  readerPageStatus.setAttribute("aria-label", page ? `第 ${pageIndex + 1} 页，共 ${sortedPages.length} 页` : "未选择页");
+  readerPrevPageButton.disabled = pageIndex <= 0;
+  readerNextPageButton.disabled = pageIndex >= sortedPages.length - 1;
+  exportDocumentPdfButton.disabled = false;
+  editDocumentButton.disabled = false;
+
+  renderReaderOriginal(page);
+  renderReaderText(page);
+}
+
+function getReaderTextLayer(page) {
+  return page?.punctuatedText || page?.cleanText || page?.text || page?.ocrText || "";
+}
+
+function renderReaderOriginal(page) {
+  const imageSource = page?.imageDataUrl || page?.imageUrl || "";
+
+  if (!imageSource) {
+    readerOriginalPreview.classList.add("is-empty");
+    readerOriginalPreview.append(readerEmptyState("本页尚未放入原始资料图片"));
+    return;
+  }
+
+  const image = document.createElement("img");
+  image.src = imageSource;
+  image.alt = page.imageName ? `第 ${page.pageNumber} 页原始资料：${page.imageName}` : `第 ${page.pageNumber} 页原始资料`;
+  readerOriginalPreview.append(image);
+}
+
+function renderReaderText(page) {
+  const text = getReaderTextLayer(page);
+
+  if (!text) {
+    readerText.classList.add("is-empty");
+    readerText.append(readerEmptyState("本页尚无整理文本"));
+    return;
+  }
+
+  readerText.textContent = text;
+
+  if (page?.notes) {
+    readerNotes.textContent = page.notes;
+    readerNotes.classList.remove("hidden");
+  }
+}
+
+function readerEmptyState(message) {
+  const node = emptyState(message);
+  node.classList.add("reader-empty-state");
+  return node;
+}
+
 function renderDetail() {
   const item = getSelectedDocument();
   detailNode.innerHTML = "";
@@ -567,8 +683,6 @@ function renderDetail() {
     ["著者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
-    ["版权", item.rights || "未录"],
-    ["来源", item.source || "未录"],
     ["标签", item.tags || "未录"],
     ["封面识别", item.coverStatus || "待识别封面"],
     ["文件", item.fileName],

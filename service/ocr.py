@@ -652,18 +652,18 @@ def build_warnings(scores: list[float], layout: dict[str, Any] | None = None) ->
     warnings = []
 
     if not scores:
-        warnings.append("未返回置信度，请人工核对。")
+        warnings.append("未返回置信度，建议检查原图。")
     elif min(scores) < 0.75:
-        warnings.append("存在低置信度文字，请重点核对。")
+        warnings.append("存在低置信度文字，建议对照原图检查。")
 
     if layout:
         if layout.get("columnCount", 1) > 1:
-            warnings.append("检测到多栏版面，已按栏位重排阅读顺序，请人工核对。")
+            warnings.append("检测到多栏版面，已按栏位重排阅读顺序，建议检查版面顺序。")
         roles = {region["role"] for region in layout.get("regions", [])}
         if {"header", "footer"} & roles:
             warnings.append("检测到页眉或页脚候选区域，正文抽取时已降低其优先级。")
         if {"footnote", "caption"} & roles:
-            warnings.append("检测到脚注或图题候选区域，请按原图核对归属。")
+            warnings.append("检测到脚注或图题候选区域，建议检查原图归属。")
 
     return warnings
 

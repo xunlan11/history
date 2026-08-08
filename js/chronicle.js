@@ -33,8 +33,9 @@ function buildChronicleByRegex() {
       action.addEventListener("click", () => {
         selectedDocumentId = entry.document.id;
         selectedPageId = entry.pageId;
+        setReaderReturnView("library");
         renderAll();
-        setView("workspace");
+        setView("reader");
       });
 
       content.append(title, summary, source);
@@ -86,7 +87,6 @@ function matchesTopic(item, page, sentence, topic) {
     item.title,
     item.author,
     item.publisher,
-    item.source,
     item.tags,
     page.notes,
     sentence,
@@ -135,8 +135,7 @@ function formatSource(item) {
   const title = item.title || "文献名未录";
   const publisher = item.publisher || "出版信息未录";
   const year = item.year || "年份未录";
-  const rights = item.rights ? `，${item.rights}` : "";
-  return `${author}：《${title}》，${publisher}${rights}，${year}`;
+  return `${author}：《${title}》，${publisher}，${year}`;
 }
 
 async function buildChronicle() {
@@ -212,8 +211,6 @@ function collectChronicleDocumentsForLlm(topic) {
           author: item.author || "",
           year: item.year || "",
           publisher: item.publisher || "",
-          rights: item.rights || "",
-          source: item.source || "",
           tags: item.tags || "",
           pages: [],
         });
@@ -240,7 +237,6 @@ function scoreChroniclePageForLlm(item, page, text, topic) {
     item.title,
     item.author,
     item.publisher,
-    item.source,
     item.tags,
     page.notes,
     text,
@@ -305,8 +301,9 @@ function renderChronicleLlmEntries(entries, warnings = []) {
 
       selectedDocumentId = sourceTarget.documentId;
       selectedPageId = sourceTarget.pageId;
+      setReaderReturnView("library");
       renderAll();
-      setView("workspace");
+      setView("reader");
     });
 
     content.append(title, summary, source);

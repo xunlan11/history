@@ -36,8 +36,6 @@ class DocumentMetadata(BaseModel):
     author: str = ""
     year: str = ""
     publisher: str = ""
-    rights: str = ""
-    source: str = ""
 
 
 class LlmTaskRequest(BaseModel):
@@ -53,11 +51,10 @@ class PunctuateRequest(LlmTaskRequest):
     sourceLayer: Literal["ocr", "clean", "punctuated"] = "clean"
 
 
-class ProofreadRequest(LlmTaskRequest):
+class FinalizePageRequest(LlmTaskRequest):
     ocrText: str = ""
     cleanText: str = ""
     punctuatedText: str = ""
-    notes: str = ""
 
 
 class ExtractEventsRequest(LlmTaskRequest):
@@ -131,7 +128,7 @@ def base_response(task: str, ready: bool | None = None, message: str = "") -> di
         "provider": LLM_PROVIDER,
         "model": LLM_MODEL,
         "ready": ready,
-        "reviewRequired": True,
+        "reviewRequired": False,
         "status": "ready" if ready else "unavailable",
         "message": message or ("大模型服务已连接。" if ready else "大模型服务未连接。"),
     }
@@ -208,25 +205,26 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
     return response
 
 
-@app.post("/llm/proofread")
-def proofread(payload: ProofreadRequest) -> dict[str, Any]:
+@app.post("/llm/finalize-page")
+def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
+    source_text = payload.punctuatedText or payload.cleanText or payload.ocrText
     prompt = f"""
 /no_think
-请对一页近代军史文献的多层整理文本做校对报告。
+请将一页近代军史文献 OCR 文本整理成一版可继续人工编辑的正文。
 
-原则：
-1. 只指出疑点，不直接修改正文。
-2. 重点检查 OCR 原始录文、忠实整理文本、简体标点文本之间是否有漏字、错字、重复、顺序错乱或疑难字未标。
-3. 不能凭空判断史实，只能基于输入文本提出待核对建议。
-4. 输出必须是 JSON，不要输出解释文字。
+任务：
+1. 以 OCR 原始录文为底本，参考已有整理文本和简体标点文本。
+2. 修正常见 OCR 错字、漏空格、断行和明显排版噪声。
+3. 进行简体转换、断句和添加现代标点。
+4. 保留原文意思和专名信息，不增补史实，不改写为摘要。
+5. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
+6. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
-  "highRiskPages": [页码],
-  "suspectedMissingText": ["疑似漏字漏句"],
-  "suspectedWrongCharacters": ["疑似错字"],
-  "uncertainCharacters": ["不确定字词"],
-  "reviewNotes": ["需要人工复核的事项"]
+  "cleanText": "忠实整理文本",
+  "punctuatedText": "简体标点文本",
+  "warnings": ["处理提示"]
 }}
 
 页码：{payload.pageNumber or ""}
@@ -236,42 +234,36 @@ def proofread(payload: ProofreadRequest) -> dict[str, Any]:
 OCR 原始录文：
 {payload.ocrText}
 
-忠实整理文本：
+已有忠实整理文本：
 {payload.cleanText}
 
-简体标点文本：
+已有简体标点文本：
 {payload.punctuatedText}
 
-已有核对说明：
-{payload.notes}
+优先处理文本：
+{source_text}
 """.strip()
 
     try:
         result = call_json_task(prompt)
-        report = {
-            "highRiskPages": list_value(result.get("highRiskPages")),
-            "suspectedMissingText": list_value(result.get("suspectedMissingText")),
-            "suspectedWrongCharacters": list_value(result.get("suspectedWrongCharacters")),
-            "uncertainCharacters": list_value(result.get("uncertainCharacters")),
-            "reviewNotes": list_value(result.get("reviewNotes")),
-        }
-        response = base_response("proofread", ready=True)
+        clean_text = string_value(result.get("cleanText"))
+        punctuated_text = string_value(result.get("punctuatedText"))
+        warnings = list_value(result.get("warnings"))
+        response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
-        report = {
-            "highRiskPages": [],
-            "suspectedMissingText": [],
-            "suspectedWrongCharacters": [],
-            "uncertainCharacters": [],
-            "reviewNotes": [str(exc)],
-        }
-        response = base_response("proofread", ready=False, message=str(exc))
+        clean_text = ""
+        punctuated_text = ""
+        warnings = [str(exc)]
+        response = base_response("finalize-page", ready=False, message=str(exc))
 
     response.update(
         {
             "documentId": payload.documentId,
             "pageId": payload.pageId,
             "pageNumber": payload.pageNumber,
-            "report": report,
+            "cleanText": clean_text,
+            "punctuatedText": punctuated_text,
+            "warnings": warnings,
         }
     )
     return response
@@ -349,7 +341,7 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
 原则：
 1. 只依据输入文本，不要猜测。
 2. 未识别到的字段必须返回空字符串。
-3. 不要把正文内容误判为著者、出版社或版权信息。
+3. 不要把正文内容误判为著者或出版社。
 4. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
@@ -358,8 +350,6 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
   "author": "著者或空",
   "year": "出版年份或成书年份或空",
   "publisher": "出版社或出版机构或空",
-  "rights": "版权信息或空",
-  "source": "馆藏、来源、版本信息或空",
   "warnings": ["处理提示"]
 }}
 
@@ -377,8 +367,6 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
             "author": string_value(result.get("author")),
             "year": string_value(result.get("year")),
             "publisher": string_value(result.get("publisher")),
-            "rights": string_value(result.get("rights")),
-            "source": string_value(result.get("source")),
         }
         warnings = list_value(result.get("warnings"))
         response = base_response("extract-metadata", ready=True)
@@ -388,8 +376,6 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
             "author": "",
             "year": "",
             "publisher": "",
-            "rights": "",
-            "source": "",
         }
         warnings = [str(exc)]
         response = base_response("extract-metadata", ready=False, message=str(exc))
@@ -469,7 +455,7 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
 4. 严格只使用输入材料，不引入外部史实；可以做历法/纪年换算，但不补充材料外事件。
 5. 严格按照可判断的时间先后排序；同日多条 sameDay=true。
 6. 史事表述必须客观、精要，不加入立场褒贬。
-7. 每条必须保留来源信息、documentId、pageId、pageNumber 和原文依据 quote。
+7. 每条必须保留文献定位依据、documentId、pageId、pageNumber 和原文依据 quote。
 8. 输出必须是 JSON，不要输出解释文字或 Markdown。
 
 返回格式：
@@ -840,8 +826,6 @@ def format_metadata(metadata: DocumentMetadata) -> str:
             f"著者：{metadata.author}",
             f"年份：{metadata.year}",
             f"出版社：{metadata.publisher}",
-            f"版权信息：{metadata.rights}",
-            f"来源信息：{metadata.source}",
         ]
     )
 

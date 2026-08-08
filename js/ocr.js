@@ -44,13 +44,13 @@ async function recognizeCurrentPage() {
 
     page.ocrText = recognizedText.trim();
     page.text = page.cleanText || "";
-    page.notes = mergeNotes(page.notes, buildOcrNote(result));
-    page.status = "待核对";
+    page.status = "已识别";
     page.ocr = {
       confidence: result.confidence ?? null,
       engine: result.engine || "本机识别服务",
       preprocessing: result.preprocessing || null,
       layout: result.layout || null,
+      warnings: result.warnings || [],
       recognizedAt: new Date().toISOString(),
     };
     page.updatedAt = new Date().toISOString();
@@ -59,8 +59,11 @@ async function recognizeCurrentPage() {
 
     persist();
     renderAll();
-    recognizeStatus.textContent = "已识别，待核对";
+    recognizeStatus.textContent = "已识别";
     autoExtractDocumentMetadata(item, recognizedText, page, "ocr");
+    if (typeof generateFinalText === "function") {
+      await generateFinalText({ silent: true });
+    }
   } catch (error) {
     recognizeStatus.textContent = "识别服务未连接";
     alert("暂时无法连接本机识别服务。请确认技术人员已在本机启动 OCR 服务后再试。");

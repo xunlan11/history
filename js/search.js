@@ -43,8 +43,9 @@ function runLiteralSearch(notice = "") {
     action.addEventListener("click", () => {
       selectedDocumentId = item.id;
       selectedPageId = page?.id || item.pages[0]?.id || null;
+      setReaderReturnView("library");
       renderAll();
-      setView("workspace");
+      setView("reader");
     });
 
     content.append(title, meta, excerpt);
@@ -115,8 +116,6 @@ function buildSearchEntries(item, query) {
     item.author,
     item.year,
     item.publisher,
-    item.rights,
-    item.source,
     item.tags,
     item.fileName,
   ].join("\n");
@@ -169,8 +168,6 @@ function collectSearchDocumentsForLlm(query) {
           author: item.author || "",
           year: item.year || "",
           publisher: item.publisher || "",
-          rights: item.rights || "",
-          source: item.source || "",
           tags: item.tags || "",
           fileName: item.fileName || "",
           pages: [],
@@ -194,8 +191,6 @@ function buildSearchMetadata(item) {
     item.author,
     item.year,
     item.publisher,
-    item.rights,
-    item.source,
     item.tags,
     item.fileName,
   ].filter(Boolean).join("\n");
@@ -284,8 +279,9 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
 
       selectedDocumentId = item.id;
       selectedPageId = page?.id || item.pages[0]?.id || null;
+      setReaderReturnView("library");
       renderAll();
-      setView("workspace");
+      setView("reader");
     });
 
     content.append(title, meta, excerpt);

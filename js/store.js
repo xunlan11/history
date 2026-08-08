@@ -43,8 +43,6 @@ function normalizeDocuments(items) {
       author: item.author || "",
       year: item.year || "",
       publisher: item.publisher || "",
-      rights: item.rights || "",
-      source: item.source || "",
       tags: item.tags || "",
       metadataStatus: item.metadataStatus || "待自动识别",
       coverImageDataUrl: item.coverImageDataUrl || "",
@@ -61,7 +59,7 @@ function normalizeDocuments(items) {
           punctuatedText: page.punctuatedText || page.readingText || "",
           text: page.cleanText || page.text || "",
           notes: page.notes || "",
-          status: page.status || (hasPageText(page) ? "已保存文字" : "待整理"),
+          status: normalizePageStatus(page.status || (hasPageText(page) ? "已保存文字" : "待整理")),
           imageDataUrl: page.imageDataUrl || "",
           imageUrl: page.imageUrl || "",
           imageName: page.imageName || "",
@@ -76,7 +74,6 @@ function normalizeDocuments(items) {
     return normalized;
   });
 }
-
 function loadCachedIdSet(key) {
   try {
     const values = JSON.parse(localStorage.getItem(key)) || [];
@@ -467,7 +464,6 @@ function createPage(pageNumber, textLayers = "") {
     updatedAt: "",
   };
 }
-
 function getSelectedDocument() {
   return documents.find((item) => item.id === selectedDocumentId) || null;
 }
@@ -554,8 +550,8 @@ function summarizeDocumentStatus(item) {
     return "待整理";
   }
 
-  if (item.pages.some((page) => page.status === "待核对")) {
-    return "有文字待核对";
+  if (item.pages.some((page) => page.status === "正在生成整理稿")) {
+    return "正在生成整理稿";
   }
 
   if (item.pages.some((page) => hasPageText(page))) {
@@ -563,6 +559,14 @@ function summarizeDocumentStatus(item) {
   }
 
   return "待整理";
+}
+
+function normalizePageStatus(status) {
+  if (status === "待核对") {
+    return "已保存文字";
+  }
+
+  return status || "待整理";
 }
 
 function hasPageText(page) {
@@ -597,7 +601,6 @@ function createOfflineTask(file) {
     message: "正在提交给本机整本处理服务",
   };
 }
-
 function getOfflineTaskLabel(item) {
   if (item.processMode !== "offline") {
     return "不适用";
@@ -608,10 +611,10 @@ function getOfflineTaskLabel(item) {
 
 function getProcessModeHelp(item) {
   if (item.processMode === "offline") {
-    return "导入后由本机整本处理服务统一识别，完成后再进入逐页核对。";
+    return "导入后由本机整本处理服务统一识别并回填整理文本。";
   }
 
-  return "在整理工作台中逐页选择原图，并逐页自动识别、核对。";
+  return "在整理工作台中逐页选择原图，并逐页自动识别、生成整理文本。";
 }
 
 function applyBatchPages(item, pages) {
@@ -624,14 +627,6 @@ function applyBatchPages(item, pages) {
 function normalizeBatchPage(page, index) {
   const text = page.ocrText || page.text || "";
   const warnings = Array.isArray(page.warnings) ? page.warnings : [];
-  const notes = [
-    page.notes || "",
-    typeof page.confidence === "number" ? `自动识别置信度：${Math.round(page.confidence * 100)}%。` : "",
-    warnings.length ? `识别提示：${warnings.join("；")}` : "",
-    page.preprocessing?.steps?.length ? `图像预处理：${page.preprocessing.steps.join("、")}。` : "",
-    buildLayoutNote(page.layout),
-    "本页由离线整本处理生成，需对照原图逐字核对。",
-  ].filter(Boolean).join("\n");
 
   return {
     id: page.id || newId(),
@@ -640,8 +635,8 @@ function normalizeBatchPage(page, index) {
     cleanText: page.cleanText || "",
     punctuatedText: page.punctuatedText || "",
     text: page.cleanText || "",
-    notes,
-    status: page.status || (text ? "待核对" : "待整理"),
+    notes: page.notes || "",
+    status: normalizePageStatus(page.status || (text ? "已识别" : "待整理")),
     imageDataUrl: page.imageDataUrl || "",
     imageUrl: page.imageUrl || "",
     imageName: page.imageName || `第 ${Number(page.pageNumber) || index + 1} 页`,
@@ -650,80 +645,9 @@ function normalizeBatchPage(page, index) {
       engine: page.engine || "本机整本处理服务",
       preprocessing: page.preprocessing || null,
       layout: page.layout || null,
+      warnings,
       recognizedAt: page.recognizedAt || new Date().toISOString(),
     },
     updatedAt: page.updatedAt || new Date().toISOString(),
   };
-}
-
-function buildOcrNote(result) {
-  const notes = [];
-
-  if (typeof result.confidence === "number") {
-    notes.push(`自动识别置信度：${Math.round(result.confidence * 100)}%。`);
-  }
-
-  if (Array.isArray(result.warnings) && result.warnings.length) {
-    notes.push(`识别提示：${result.warnings.join("；")}`);
-  }
-
-  if (result.preprocessing?.steps?.length) {
-    notes.push(`图像预处理：${result.preprocessing.steps.join("、")}。`);
-  }
-
-  const layoutNote = buildLayoutNote(result.layout);
-  if (layoutNote) {
-    notes.push(layoutNote);
-  }
-
-  notes.push("本页文字由自动识别生成，需对照原图逐字核对。");
-  return notes.join("\n");
-}
-
-function buildLayoutNote(layout) {
-  if (!layout) {
-    return "";
-  }
-
-  const parts = [];
-  if (layout.columnCount > 1) {
-    parts.push(`检测到 ${layout.columnCount} 栏`);
-  }
-
-  const roles = new Set((layout.regions || []).map((region) => region.role));
-  const roleLabels = [];
-  if (roles.has("header")) {
-    roleLabels.push("页眉");
-  }
-  if (roles.has("footer")) {
-    roleLabels.push("页脚");
-  }
-  if (roles.has("footnote")) {
-    roleLabels.push("脚注候选");
-  }
-  if (roles.has("caption")) {
-    roleLabels.push("图题/表题候选");
-  }
-
-  if (roleLabels.length) {
-    parts.push(roleLabels.join("、"));
-  }
-
-  if (!parts.length) {
-    return "";
-  }
-
-  return `版面分析：${parts.join("；")}。`;
-}
-
-function mergeNotes(existing, addition) {
-  if (!existing) {
-    return addition;
-  }
-
-  if (!addition) {
-    return existing;
-  }
-
-  return `${existing}\n\n${addition}`;
 }

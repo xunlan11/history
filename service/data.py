@@ -94,14 +94,6 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             version INTEGER NOT NULL DEFAULT 1
         );
 
-        CREATE TABLE IF NOT EXISTS sync_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entity_type TEXT NOT NULL,
-            entity_id TEXT NOT NULL,
-            operation TEXT NOT NULL,
-            client_id TEXT,
-            created_at TEXT NOT NULL
-        );
         """
     )
     connection.execute(
@@ -146,24 +138,7 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     return [json_load(row["payload"]) for row in rows]
 
 
-def record_event(
-    connection: sqlite3.Connection,
-    entity_type: str,
-    entity_id: str,
-    operation: str,
-    client_id: str,
-    created_at: str,
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO sync_events(entity_type, entity_id, operation, client_id, created_at)
-        VALUES(?, ?, ?, ?, ?)
-        """,
-        (entity_type, entity_id, operation, client_id, created_at),
-    )
-
-
-def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], client_id: str, timestamp: str) -> None:
+def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str) -> None:
     for sort_order, document in enumerate(documents):
         document_id = str(document.get("id") or "").strip()
         if not document_id:
@@ -184,7 +159,6 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
                 """,
                 (payload, sort_order, timestamp, document_id),
             )
-            operation = "update"
         else:
             connection.execute(
                 """
@@ -193,17 +167,14 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
                 """,
                 (document_id, payload, sort_order, timestamp),
             )
-            operation = "create"
 
-        record_event(connection, "document", document_id, operation, client_id, timestamp)
-        upsert_document_pages(connection, document_id, document.get("pages") or [], client_id, timestamp)
+        upsert_document_pages(connection, document_id, document.get("pages") or [], timestamp)
 
 
 def upsert_document_pages(
     connection: sqlite3.Connection,
     document_id: str,
     pages: list[dict[str, Any]],
-    client_id: str,
     timestamp: str,
 ) -> None:
     incoming_ids: set[str] = set()
@@ -230,7 +201,6 @@ def upsert_document_pages(
                 """,
                 (document_id, page_number, payload, timestamp, page_id),
             )
-            operation = "update"
         else:
             connection.execute(
                 """
@@ -239,9 +209,6 @@ def upsert_document_pages(
                 """,
                 (page_id, document_id, page_number, payload, timestamp),
             )
-            operation = "create"
-
-        record_event(connection, "page", page_id, operation, client_id, timestamp)
 
     rows = connection.execute(
         "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
@@ -254,10 +221,9 @@ def upsert_document_pages(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?",
                 (timestamp, timestamp, page_id),
             )
-            record_event(connection, "page", page_id, "delete", client_id, timestamp)
 
 
-def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], client_id: str, timestamp: str) -> None:
+def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], timestamp: str) -> None:
     for sort_order, conversation in enumerate(conversations):
         conversation_id = str(conversation.get("id") or "").strip()
         if not conversation_id:
@@ -278,7 +244,6 @@ def upsert_conversations(connection: sqlite3.Connection, conversations: list[dic
                 """,
                 (payload, sort_order, timestamp, conversation_id),
             )
-            operation = "update"
         else:
             connection.execute(
                 """
@@ -287,16 +252,11 @@ def upsert_conversations(connection: sqlite3.Connection, conversations: list[dic
                 """,
                 (conversation_id, payload, sort_order, timestamp),
             )
-            operation = "create"
-
-        record_event(connection, "conversation", conversation_id, operation, client_id, timestamp)
 
 def soft_delete_entities(
     connection: sqlite3.Connection,
     table: Literal["documents", "conversations"],
     entity_ids: list[str],
-    entity_type: str,
-    client_id: str,
     timestamp: str,
 ) -> None:
     for entity_id in {str(value).strip() for value in entity_ids if str(value).strip()}:
@@ -304,19 +264,12 @@ def soft_delete_entities(
             f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?",
             (timestamp, timestamp, entity_id),
         )
-        record_event(connection, entity_type, entity_id, "delete", client_id, timestamp)
 
         if table == "documents":
-            page_rows = connection.execute(
-                "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
-                (entity_id,),
-            ).fetchall()
             connection.execute(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE document_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
             )
-            for page_row in page_rows:
-                record_event(connection, "page", page_row["id"], "delete", client_id, timestamp)
 
 
 def build_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -373,22 +326,18 @@ def push(payload: SyncPayload) -> dict[str, Any]:
     try:
         with database() as connection:
             with connection:
-                upsert_documents(connection, payload.documents, payload.clientId, timestamp)
-                upsert_conversations(connection, payload.conversations, payload.clientId, timestamp)
+                upsert_documents(connection, payload.documents, timestamp)
+                upsert_conversations(connection, payload.conversations, timestamp)
                 soft_delete_entities(
                     connection,
                     "documents",
                     payload.deletedDocumentIds,
-                    "document",
-                    payload.clientId,
                     timestamp,
                 )
                 soft_delete_entities(
                     connection,
                     "conversations",
                     payload.deletedConversationIds,
-                    "conversation",
-                    payload.clientId,
                     timestamp,
                 )
                 cursor = bump_sync_version(connection)

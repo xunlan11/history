@@ -14,7 +14,7 @@ async function requestLlmTask(path, payload) {
   return response.json();
 }
 
-async function generatePunctuatedText() {
+async function generatePunctuatedText(options = {}) {
   const item = getSelectedDocument();
   const page = getSelectedPage();
 
@@ -45,7 +45,9 @@ async function generatePunctuatedText() {
 
     if (!result.ready) {
       setLlmTaskStatus("大模型未连接");
-      alert(result.message || "大模型服务未连接。");
+      if (!options.silent) {
+        alert(result.message || "大模型服务未连接。");
+      }
       return;
     }
 
@@ -54,22 +56,20 @@ async function generatePunctuatedText() {
       punctuatedText.value = page.punctuatedText;
     }
 
-    const notes = buildLlmNotes("简体标点生成", result.warnings, result.uncertainItems);
-    page.notes = mergeNotes(page.notes, notes);
-    page.status = "待核对";
+    page.status = "已生成整理稿";
     page.updatedAt = new Date().toISOString();
     item.status = summarizeDocumentStatus(item);
     item.updatedAt = new Date().toISOString();
     persist();
     renderAll();
-    setLlmTaskStatus("已生成，待核对");
+    setLlmTaskStatus("已生成整理稿");
   } catch (error) {
     setLlmTaskStatus("生成失败");
     alert("暂时无法调用大模型服务。请确认 Qwen3-8B 和大模型统一接口已启动。");
   }
 }
 
-async function generateProofreadReport() {
+async function generateFinalText(options = {}) {
   const item = getSelectedDocument();
   const page = getSelectedPage();
 
@@ -80,43 +80,122 @@ async function generateProofreadReport() {
 
   saveCurrentPage();
 
-  if (!ocrRawText.value.trim() && !cleanText.value.trim() && !punctuatedText.value.trim()) {
+  if (!hasPageText(page)) {
     alert("请先填写本页文字。");
     return;
   }
 
-  setLlmTaskStatus("正在校对...");
+  setLlmTaskStatus("正在生成整理稿...");
 
   try {
-    const result = await requestLlmTask("/proofread", {
-      documentId: item.id,
-      pageId: page.id,
-      pageNumber: page.pageNumber,
-      metadata: buildLlmMetadata(item),
-      ocrText: ocrRawText.value.trim(),
-      cleanText: cleanText.value.trim(),
-      punctuatedText: punctuatedText.value.trim(),
-      notes: pageNotes.value.trim(),
-    });
-
+    const result = await requestFinalTextForPage(item, page);
     if (!result.ready) {
       setLlmTaskStatus("大模型未连接");
-      alert(result.message || "大模型服务未连接。");
+      if (!options.silent) {
+        alert(result.message || "大模型服务未连接。");
+      }
       return;
     }
 
-    page.notes = mergeNotes(page.notes, formatProofreadReport(result.report));
-    page.status = "待核对";
-    page.updatedAt = new Date().toISOString();
-    item.status = summarizeDocumentStatus(item);
-    item.updatedAt = new Date().toISOString();
+    applyFinalTextResult(item, page, result);
     persist();
     renderAll();
-    setLlmTaskStatus("校对完成，待核对");
+    setLlmTaskStatus("已生成整理稿");
   } catch (error) {
-    setLlmTaskStatus("校对失败");
-    alert("暂时无法调用大模型服务。请确认 Qwen3-8B 和大模型统一接口已启动。");
+    setLlmTaskStatus("生成失败");
+    if (!options.silent) {
+      alert("暂时无法调用大模型服务。请确认 Qwen3-8B 和大模型统一接口已启动。");
+    }
   }
+}
+
+async function generateDocumentFinalText() {
+  const item = getSelectedDocument();
+  if (!item) {
+    alert("请先打开一项文献。");
+    return;
+  }
+
+  saveCurrentPage();
+  const pages = item.pages
+    .slice()
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .filter((page) => hasPageText(page));
+
+  if (!pages.length) {
+    alert("当前文献还没有可整理的文字。");
+    return;
+  }
+
+  const ok = window.confirm(`将重新生成“${getDocumentDisplayTitle(item)}”的 ${pages.length} 页整理文本，并覆盖当前整理文本。继续吗？`);
+  if (!ok) {
+    return;
+  }
+
+  generateDocumentTextButton.disabled = true;
+  let completed = 0;
+  let failed = 0;
+
+  try {
+    for (const page of pages) {
+      selectedPageId = page.id;
+      page.status = "正在生成整理稿";
+      item.status = summarizeDocumentStatus(item);
+      renderAll();
+      setLlmTaskStatus(`正在生成 ${completed + 1}/${pages.length}`);
+
+      try {
+        const result = await requestFinalTextForPage(item, page);
+        if (result.ready) {
+          applyFinalTextResult(item, page, result);
+          completed += 1;
+        } else {
+          page.status = "生成失败";
+          failed += 1;
+        }
+      } catch (error) {
+        page.status = "生成失败";
+        failed += 1;
+      }
+
+      item.status = summarizeDocumentStatus(item);
+      item.updatedAt = new Date().toISOString();
+      persist();
+    }
+  } finally {
+    generateDocumentTextButton.disabled = false;
+  }
+
+  renderAll();
+  setLlmTaskStatus(failed ? `完成 ${completed} 页，失败 ${failed} 页` : `已生成 ${completed} 页`);
+}
+
+async function requestFinalTextForPage(item, page) {
+  return requestLlmTask("/finalize-page", {
+    documentId: item.id,
+    pageId: page.id,
+    pageNumber: page.pageNumber,
+    metadata: buildLlmMetadata(item),
+    ocrText: page.ocrText || "",
+    cleanText: page.cleanText || page.text || "",
+    punctuatedText: page.punctuatedText || "",
+  });
+}
+
+function applyFinalTextResult(item, page, result) {
+  if (result.cleanText) {
+    page.cleanText = result.cleanText.trim();
+    page.text = page.cleanText;
+  }
+
+  if (result.punctuatedText) {
+    page.punctuatedText = result.punctuatedText.trim();
+  }
+
+  page.status = "已生成整理稿";
+  page.updatedAt = new Date().toISOString();
+  item.status = summarizeDocumentStatus(item);
+  item.updatedAt = new Date().toISOString();
 }
 
 async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
@@ -148,7 +227,7 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
     }
 
     const changed = applyExtractedMetadata(item, result.metadata);
-    item.metadataStatus = changed ? "已自动识别，待核对" : "未识别到文献信息";
+    item.metadataStatus = changed ? "已自动识别" : "未识别到文献信息";
     item.updatedAt = new Date().toISOString();
     persist();
     renderAll();
@@ -223,14 +302,14 @@ async function requestCoverCandidate(file) {
 }
 
 function needsMetadataAutoFill(item) {
-  return ["title", "author", "year", "publisher", "rights", "source"].some((field) => {
+  return ["title", "author", "year", "publisher"].some((field) => {
     return !String(item[field] || "").trim();
   });
 }
 
 function applyExtractedMetadata(item, metadata) {
   let changed = false;
-  ["title", "author", "year", "publisher", "rights", "source"].forEach((field) => {
+  ["title", "author", "year", "publisher"].forEach((field) => {
     const value = String(metadata[field] || "").trim();
     if (!String(item[field] || "").trim() && value) {
       item[field] = value;
@@ -246,42 +325,7 @@ function buildLlmMetadata(item) {
     author: item.author || "",
     year: item.year || "",
     publisher: item.publisher || "",
-    rights: item.rights || "",
-    source: item.source || "",
   };
-}
-
-function buildLlmNotes(title, warnings = [], uncertainItems = []) {
-  const lines = [`${title}：模型生成结果，需人工核对。`];
-
-  if (Array.isArray(warnings) && warnings.length) {
-    lines.push(`处理提示：${warnings.join("；")}`);
-  }
-
-  if (Array.isArray(uncertainItems) && uncertainItems.length) {
-    lines.push(`不确定处：${uncertainItems.join("；")}`);
-  }
-
-  return lines.join("\n");
-}
-
-function formatProofreadReport(report = {}) {
-  const lines = ["模型校对报告：需人工核对。"];
-  const fields = [
-    ["高风险页码", report.highRiskPages],
-    ["疑似漏识", report.suspectedMissingText],
-    ["疑似错字", report.suspectedWrongCharacters],
-    ["不确定字词", report.uncertainCharacters],
-    ["复核事项", report.reviewNotes],
-  ];
-
-  fields.forEach(([label, value]) => {
-    if (Array.isArray(value) && value.length) {
-      lines.push(`${label}：${value.join("；")}`);
-    }
-  });
-
-  return lines.join("\n");
 }
 
 function setLlmTaskStatus(text) {

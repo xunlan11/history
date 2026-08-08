@@ -30,8 +30,6 @@ function buildPrintHtml(item) {
     ["著者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
-    ["版权信息", item.rights || "未录"],
-    ["来源信息", item.source || "未录"],
     ["主题标签", item.tags || "未录"],
     ["原始文件", item.fileName || "未录"],
     ["导出时间", formatDateTime(new Date())],
@@ -49,7 +47,7 @@ function buildPrintHtml(item) {
           ? `<figure><img src="${escapeHtml(page.imageUrl)}" alt="第 ${page.pageNumber} 页原始资料" /><figcaption>原始资料：${escapeHtml(page.imageName || `第 ${page.pageNumber} 页`)}</figcaption></figure>`
           : `<p class="no-image">本页未放入原始资料图片。</p>`;
       const notesHtml = page.notes
-        ? `<h3>疑难字与核对说明</h3><div class="notes">${escapeHtml(page.notes)}</div>`
+        ? `<h3>页备注</h3><div class="notes">${escapeHtml(page.notes)}</div>`
         : "";
       const layers = [
         ["OCR 原始录文", page.ocrText],

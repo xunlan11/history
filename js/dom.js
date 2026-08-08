@@ -1,12 +1,14 @@
 const views = {
   library: document.querySelector("#library-view"),
   documents: document.querySelector("#documents-view"),
+  reader: document.querySelector("#reader-view"),
   workspace: document.querySelector("#workspace-view"),
 };
 
 const viewTitles = {
   library: "书库",
   documents: "文献库",
+  reader: "文献浏览",
   workspace: "整理工作台",
 };
 
@@ -16,6 +18,20 @@ const documentList = document.querySelector("#document-list");
 const documentCount = document.querySelector("#document-count");
 const allDocumentList = document.querySelector("#all-document-list");
 const allDocumentCount = document.querySelector("#all-document-count");
+const readerTitle = document.querySelector("#reader-title");
+const readerAuthor = document.querySelector("#reader-author");
+const readerYear = document.querySelector("#reader-year");
+const readerPageStatus = document.querySelector("#reader-page-status");
+const readerPageInput = document.querySelector("#reader-page-input");
+const readerPageTotal = document.querySelector("#reader-page-total");
+const readerOriginalPreview = document.querySelector("#reader-original-preview");
+const readerText = document.querySelector("#reader-text");
+const readerNotes = document.querySelector("#reader-notes");
+const readerPrevPageButton = document.querySelector("#reader-prev-page");
+const readerNextPageButton = document.querySelector("#reader-next-page");
+const readerBackButton = document.querySelector("#reader-back");
+const exportDocumentPdfButton = document.querySelector("#export-document-pdf");
+const editDocumentButton = document.querySelector("#edit-document");
 const detailNode = document.querySelector("#document-detail");
 const selectedStatus = document.querySelector("#selected-status");
 const selectedPageStatus = document.querySelector("#selected-page-status");
@@ -23,6 +39,7 @@ const originalPageStatus = document.querySelector("#original-page-status");
 const pageCount = document.querySelector("#page-count");
 const pageList = document.querySelector("#page-list");
 const pageNumberInput = document.querySelector("#page-number-input");
+const generateDocumentTextButton = document.querySelector("#generate-document-text");
 const pageImageInput = document.querySelector("#page-image-input");
 const originalPreview = document.querySelector("#original-preview");
 const recognizeStatus = document.querySelector("#recognize-status");

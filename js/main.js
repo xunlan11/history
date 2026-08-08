@@ -96,8 +96,6 @@ form.addEventListener("submit", (event) => {
     author: textValue("author"),
     year: textValue("year"),
     publisher: textValue("publisher"),
-    rights: textValue("rights"),
-    source: textValue("source"),
     tags: textValue("tags"),
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
@@ -106,7 +104,7 @@ form.addEventListener("submit", (event) => {
     fileName: file.name,
     fileType: file.type || "unknown",
     fileSize: file.size,
-    processMode: formData.get("processMode") || "online",
+    processMode: formData.get("processMode") || "offline",
     offlineTask: null,
     createdAt: new Date().toISOString(),
     status: "待整理",
@@ -179,12 +177,6 @@ document.querySelector("#save-ocr").addEventListener("click", () => {
   }
 });
 
-document.querySelector("#mark-reviewed").addEventListener("click", () => {
-  if (saveCurrentPage("待核对")) {
-    renderAll();
-  }
-});
-
 document.querySelector("#copy-ocr-to-clean").addEventListener("click", () => {
   cleanText.value = ocrRawText.value.trim();
   cleanText.focus();
@@ -215,6 +207,41 @@ document.querySelector("#save-next").addEventListener("click", () => {
   moveToAdjacentPage(1, { createIfMissing: true });
 });
 
+readerPrevPageButton?.addEventListener("click", () => {
+  moveToAdjacentReaderPage(-1);
+});
+
+readerNextPageButton?.addEventListener("click", () => {
+  moveToAdjacentReaderPage(1);
+});
+
+readerPageInput?.addEventListener("change", () => {
+  moveToReaderPageIndex(readerPageInput.value);
+});
+
+readerPageInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  event.preventDefault();
+  moveToReaderPageIndex(readerPageInput.value);
+  readerPageInput.blur();
+});
+
+readerBackButton?.addEventListener("click", returnFromReader);
+
+exportDocumentPdfButton?.addEventListener("click", exportPdf);
+
+editDocumentButton?.addEventListener("click", () => {
+  if (!getSelectedDocument()) {
+    return;
+  }
+
+  renderAll();
+  setView("workspace");
+});
+
 pageImageInput.addEventListener("change", () => {
   const item = getSelectedDocument();
   const page = getSelectedPage();
@@ -237,7 +264,8 @@ pageImageInput.addEventListener("change", () => {
 
 document.querySelector("#recognize-page").addEventListener("click", recognizeCurrentPage);
 document.querySelector("#generate-punctuated").addEventListener("click", generatePunctuatedText);
-document.querySelector("#generate-proofread").addEventListener("click", generateProofreadReport);
+document.querySelector("#generate-final-text").addEventListener("click", generateFinalText);
+generateDocumentTextButton?.addEventListener("click", generateDocumentFinalText);
 document.querySelector("#refresh-offline").addEventListener("click", refreshOfflineTask);
 document.querySelector("#smart-send").addEventListener("click", () => {
   if (selectedSmartMode === "search") {
@@ -491,6 +519,46 @@ function applyGlobalFont(fontKey) {
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-pressed", String(isActive));
   });
+}
+
+function moveToAdjacentReaderPage(direction) {
+  const item = getSelectedDocument();
+  if (!item) {
+    return;
+  }
+
+  ensureSelectedPage(item);
+  const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
+  const currentIndex = Math.max(0, pages.findIndex((page) => page.id === selectedPageId));
+  const nextPage = pages[currentIndex + direction];
+
+  if (!nextPage) {
+    return;
+  }
+
+  selectedPageId = nextPage.id;
+  renderAll();
+}
+
+function moveToReaderPageIndex(value) {
+  const item = getSelectedDocument();
+  if (!item) {
+    return;
+  }
+
+  const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
+  if (!pages.length) {
+    renderAll();
+    return;
+  }
+
+  const requestedIndex = Number.parseInt(value, 10) - 1;
+  const targetIndex = Number.isFinite(requestedIndex)
+    ? Math.min(Math.max(requestedIndex, 0), pages.length - 1)
+    : 0;
+
+  selectedPageId = pages[targetIndex].id;
+  renderAll();
 }
 
 async function initializeApplication() {
