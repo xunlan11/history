@@ -1,11 +1,27 @@
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-let documents = normalizeDocuments(loadDocuments());
+const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.v1";
+const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.v1";
+const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.v1";
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.v1";
+const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.v1";
+const SYNC_INTERVAL_MS = 30000;
+
+let documents = normalizeDocuments(loadCachedDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
-let conversations = loadConversations();
+let conversations = loadCachedConversations();
 let selectedConversationId = conversations[0]?.id || null;
+let syncCursor = localStorage.getItem(SYNC_CURSOR_STORAGE_KEY) || "";
+let syncReady = false;
+let syncDirty = false;
+let syncPushTimer = null;
+let syncPushInFlight = null;
+let syncPullInFlight = null;
+let syncRevision = 0;
+let deletedDocumentIds = loadCachedIdSet(DELETED_DOCUMENT_IDS_STORAGE_KEY);
+let deletedConversationIds = loadCachedIdSet(DELETED_CONVERSATION_IDS_STORAGE_KEY);
 
-function loadDocuments() {
+function loadCachedDocuments() {
   try {
     const current = localStorage.getItem(STORAGE_KEY);
     const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
@@ -61,6 +77,15 @@ function normalizeDocuments(items) {
   });
 }
 
+function loadCachedIdSet(key) {
+  try {
+    const values = JSON.parse(localStorage.getItem(key)) || [];
+    return new Set(values.map((value) => String(value)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 function normalizeCoverVariant(value, fallbackIndex = 0) {
   const variant = Number(value);
 
@@ -80,29 +105,249 @@ function getNextDocumentCoverVariant() {
 }
 
 function persist() {
+  persistDocumentsCache();
+  scheduleServerPush();
+}
+
+function persistDocumentsCache() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
 }
 
-function loadConversations() {
+function loadCachedConversations() {
   try {
-    const items = JSON.parse(localStorage.getItem("modernMilitaryHistory.conversations.v1")) || [];
-    return items.map((item) => {
-      const fallbackDate = item.updatedAt || item.createdAt || new Date().toISOString();
-      return {
-        ...item,
-        mode: item.mode || "chat",
-        locked: Boolean(item.locked || (item.title && item.title !== "新对话")),
-        createdAt: item.createdAt || fallbackDate,
-        updatedAt: item.updatedAt || fallbackDate,
-      };
-    });
+    const items = JSON.parse(localStorage.getItem(CONVERSATION_STORAGE_KEY)) || [];
+    return normalizeConversations(items);
   } catch {
     return [];
   }
 }
 
 function persistConversations() {
-  localStorage.setItem("modernMilitaryHistory.conversations.v1", JSON.stringify(conversations));
+  persistConversationsCache();
+  scheduleServerPush();
+}
+
+function persistConversationsCache() {
+  localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversations));
+}
+
+function getClientId() {
+  let clientId = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (!clientId) {
+    clientId = newId();
+    localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+  }
+  return clientId;
+}
+
+function hasLocalCacheData() {
+  return documents.length > 0 || conversations.length > 0;
+}
+
+function cacheCurrentState() {
+  persistDocumentsCache();
+  persistConversationsCache();
+  persistDeletedIdCache();
+}
+
+function persistDeletedIdCache() {
+  localStorage.setItem(DELETED_DOCUMENT_IDS_STORAGE_KEY, JSON.stringify(Array.from(deletedDocumentIds)));
+  localStorage.setItem(DELETED_CONVERSATION_IDS_STORAGE_KEY, JSON.stringify(Array.from(deletedConversationIds)));
+}
+
+function applyServerState(payload) {
+  const nextDocuments = normalizeDocuments(payload.documents || []);
+  const nextConversations = normalizeConversations(payload.conversations || []);
+
+  documents = nextDocuments;
+  conversations = nextConversations;
+
+  selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
+    ? selectedDocumentId
+    : documents[0]?.id || null;
+
+  const selectedDocument = getSelectedDocument();
+  selectedPageId = selectedDocument?.pages?.some((page) => page.id === selectedPageId)
+    ? selectedPageId
+    : selectedDocument?.pages?.[0]?.id || null;
+
+  selectedConversationId = conversations.some((item) => item.id === selectedConversationId)
+    ? selectedConversationId
+    : conversations[0]?.id || null;
+
+  syncCursor = String(payload.syncCursor || "");
+  localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+  cacheCurrentState();
+}
+
+function normalizeConversations(items) {
+  return items.map((item) => {
+    const fallbackDate = item.updatedAt || item.createdAt || new Date().toISOString();
+    return {
+      ...item,
+      mode: item.mode || "chat",
+      locked: Boolean(item.locked || (item.title && item.title !== "新对话")),
+      createdAt: item.createdAt || fallbackDate,
+      updatedAt: item.updatedAt || fallbackDate,
+    };
+  });
+}
+
+async function initializeServerData() {
+  const localHadData = hasLocalCacheData();
+
+  try {
+    const response = await fetch(DATA_BOOTSTRAP_URL);
+    if (!response.ok) {
+      throw new Error(`Bootstrap failed: ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const serverHasData = (payload.documents || []).length > 0 || (payload.conversations || []).length > 0;
+
+    syncReady = true;
+    if (syncDirty) {
+      await pushServerSnapshot();
+      return true;
+    }
+
+    if (serverHasData || !localHadData) {
+      applyServerState(payload);
+      syncDirty = false;
+      return true;
+    }
+
+    await pushServerSnapshot();
+    return true;
+  } catch (error) {
+    syncReady = false;
+    return false;
+  }
+}
+
+function scheduleServerPush() {
+  syncDirty = true;
+  syncRevision += 1;
+  persistDeletedIdCache();
+
+  if (!syncReady) {
+    return;
+  }
+
+  window.clearTimeout(syncPushTimer);
+  syncPushTimer = window.setTimeout(() => {
+    pushServerSnapshot();
+  }, 600);
+}
+
+async function pushServerSnapshot() {
+  if (!syncReady) {
+    return false;
+  }
+
+  if (syncPushInFlight) {
+    return syncPushInFlight;
+  }
+
+  const pushedRevision = syncRevision;
+  const payload = {
+    clientId: getClientId(),
+    documents,
+    conversations,
+    deletedDocumentIds: Array.from(deletedDocumentIds),
+    deletedConversationIds: Array.from(deletedConversationIds),
+  };
+
+  syncPushInFlight = fetch(DATA_PUSH_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Push failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      syncCursor = String(result.syncCursor || syncCursor);
+      localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+
+      if (syncRevision === pushedRevision) {
+        syncDirty = false;
+        deletedDocumentIds.clear();
+        deletedConversationIds.clear();
+        cacheCurrentState();
+      } else {
+        scheduleServerPush();
+      }
+
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      syncPushInFlight = null;
+    });
+
+  return syncPushInFlight;
+}
+
+async function syncFromServer(options = {}) {
+  if (!syncReady || syncDirty || syncPullInFlight) {
+    return false;
+  }
+
+  const url = `${DATA_SYNC_URL}?cursor=${encodeURIComponent(syncCursor)}`;
+  syncPullInFlight = fetch(url)
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Sync failed: ${response.status}`);
+      }
+
+      const payload = await response.json();
+      if (payload.changed === false) {
+        syncCursor = String(payload.syncCursor || syncCursor);
+        localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+        return false;
+      }
+
+      applyServerState(payload);
+      if (options.render && typeof renderAll === "function") {
+        renderAll();
+        renderSmartModeButtons();
+      }
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      syncPullInFlight = null;
+    });
+
+  return syncPullInFlight;
+}
+
+function startPeriodicSync() {
+  const syncTick = async () => {
+    if (!syncReady) {
+      const connected = await initializeServerData();
+      if (connected && typeof renderAll === "function") {
+        renderAll();
+        renderSmartModeButtons();
+      }
+      return;
+    }
+
+    syncFromServer({ render: true });
+  };
+
+  window.setInterval(() => {
+    syncTick();
+  }, SYNC_INTERVAL_MS);
+
+  window.addEventListener("focus", () => {
+    syncTick();
+  });
 }
 
 function getSelectedConversation() {
@@ -168,6 +413,7 @@ function deleteConversation(id) {
   }
 
   conversations.splice(index, 1);
+  deletedConversationIds.add(id);
 
   if (selectedConversationId === id) {
     selectedConversationId = conversations[index]?.id || conversations[index - 1]?.id || null;
@@ -184,6 +430,7 @@ function deleteDocument(id) {
   }
 
   documents.splice(index, 1);
+  deletedDocumentIds.add(id);
 
   if (selectedDocumentId === id) {
     const nextDocument = documents[index] || documents[index - 1] || null;

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
+# 修改默认大模型配置时，请同步更新 readme.md。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11434/v1")

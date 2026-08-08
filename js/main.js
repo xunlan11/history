@@ -1,4 +1,3 @@
-persist();
 let selectedSmartMode = getSelectedConversation()?.mode || "chat";
 let pendingDeleteConversationId = null;
 let pendingDeleteDocumentId = null;
@@ -494,8 +493,15 @@ function applyGlobalFont(fontKey) {
   });
 }
 
-renderAll();
-renderSmartModeButtons();
+async function initializeApplication() {
+  await initializeServerData();
+  selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
+  renderAll();
+  renderSmartModeButtons();
+  startPeriodicSync();
+}
+
+initializeApplication();
 refreshOcrServiceStatus();
 refreshLlmServiceStatus();
 refreshVersionStatus();
