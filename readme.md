@@ -1,12 +1,14 @@
 ## 虚拟环境（项目根目录）
 
+uv：
 ```bash
-python --version
-python -m venv .venv
-.venv\Scripts\activate # Windows
-source .venv/bin/activate # Linux
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+winget install astral-sh.uv # Windows
+curl -LsSf https://astral.sh/uv/install.sh | sh # Linux / macOS
+uv sync
+```
+
+```bash
+uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
 ```
 
 ## 服务
@@ -16,7 +18,7 @@ python -m pip install -r requirements.txt
 
 启动：
 ```bash
-python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
+uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
 ```
 
 检查：
@@ -35,7 +37,7 @@ http://127.0.0.1:8765/ocr/batch
 
 启动：
 ```bash
-python -m uvicorn service.ocr:app --host 127.0.0.1 --port 8765
+uv run python -m uvicorn service.ocr:app --host 127.0.0.1 --port 8765
 ```
 
 检查：
@@ -68,7 +70,7 @@ ollama pull qwen3:8b # 新终端
 
 启动：
 ```bash
-python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
+uv run python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
 ```
 
 默认配置为（[service/llm.py#L16-L19](./service/llm.py#L16-L19)）
@@ -90,7 +92,7 @@ http://127.0.0.1:8865/health
 
 启动：
 ```bash
-python -m uvicorn service.version:app --host 127.0.0.1 --port 8965
+uv run python -m uvicorn service.version:app --host 127.0.0.1 --port 8965
 ```
 
 ## 前端

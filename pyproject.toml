@@ -1,0 +1,18 @@
+[project]
+name = "history-platform"
+version = "0.1.0"
+description = "近代军史数智平台"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "pydantic",
+    "paddleocr",
+    "paddlepaddle",
+    "Pillow",
+    "PyMuPDF",
+]
+
+[tool.uv]
+package = false
