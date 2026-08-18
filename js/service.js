@@ -26,7 +26,7 @@ async function refreshOcrServiceStatus() {
   }
 
   try {
-    await fetchServiceJson("http://127.0.0.1:8765/health", "OCR health check failed");
+    await fetchServiceJson(OCR_HEALTH_URL, "OCR health check failed");
     setServiceStatus(ocrServiceStatus, "已连接", "service-ok");
   } catch (error) {
     setServiceStatus(ocrServiceStatus, "未连接", "service-warn");

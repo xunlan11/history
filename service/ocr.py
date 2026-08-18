@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -18,7 +19,7 @@ APP_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = APP_DIR / "ocr-storage"
 TASKS_DIR = STORAGE_DIR / "tasks"
 PREPROCESS_DIR = STORAGE_DIR / "preprocessed"
-PUBLIC_BASE_URL = "http://127.0.0.1:8765"
+PUBLIC_BASE_URL = os.getenv("OCR_PUBLIC_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
 
 TASKS_DIR.mkdir(parents=True, exist_ok=True)
 
