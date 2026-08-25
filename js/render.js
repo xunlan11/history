@@ -646,6 +646,8 @@ function renderDetail() {
     renderOriginalPreview(null);
     detailNode.append(emptyState("请先在文献库登记或打开一项文献"));
     pageList.append(emptyState("尚无页目"));
+    renderOfflineProgress(null);
+    renderOnlineProgress(null);
     return;
   }
 
@@ -693,6 +695,8 @@ function renderDetail() {
   });
 
   renderPageList(item);
+  renderOfflineProgress(item);
+  renderOnlineProgress(item);
 }
 
 function getRecognizeStatusText(page) {

@@ -546,7 +546,28 @@ async function initializeApplication() {
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
   renderAll();
   renderSmartModeButtons();
+  resumePendingOfflineTasks();
   startPeriodicSync();
+}
+
+function resumePendingOfflineTasks() {
+  documents.forEach((item) => {
+    if (item.processMode !== "offline") {
+      return;
+    }
+
+    if (isOfflineTaskPending(item)) {
+      startOfflinePolling(item);
+      return;
+    }
+
+    const task = item.offlineTask;
+    if (task && ["已完成", "已回填"].includes(task.status)) {
+      // OCR 已完成但大模型整理未完成时，恢复前端流水线。
+      enqueueNewOfflinePages(item);
+      maybeFinishOfflinePipeline(item);
+    }
+  });
 }
 
 initializeApplication();

@@ -49,7 +49,7 @@ function normalizeDocuments(items) {
       coverVariant: normalizeCoverVariant(item.coverVariant, index),
       coverStatus: item.coverStatus || "待识别封面",
       processMode: item.processMode || "online",
-      offlineTask: item.offlineTask || null,
+      offlineTask: normalizeOfflineTask(item.offlineTask),
       pages: pages
         .map((page, index) => ({
           id: page.id || newId(),
@@ -596,17 +596,64 @@ function createOfflineTask(file) {
     finishedAt: "",
     remoteTaskId: "",
     totalPages: 0,
+    completedPages: 0,
+    currentPage: 0,
+    currentPageStage: "",
+    currentPageProgress: 0,
     sourceFileName: file.name,
     serviceUrl: OCR_BATCH_SERVICE_URL,
     message: "正在提交给本机整本处理服务",
   };
 }
+
+function normalizeOfflineTask(task) {
+  if (!task) {
+    return null;
+  }
+
+  return {
+    ...task,
+    totalPages: Number(task.totalPages) || 0,
+    completedPages: Number(task.completedPages) || 0,
+    currentPage: Number(task.currentPage) || 0,
+    currentPageStage: task.currentPageStage || "",
+    currentPageProgress: Number(task.currentPageProgress) || 0,
+  };
+}
+
 function getOfflineTaskLabel(item) {
   if (item.processMode !== "offline") {
     return "不适用";
   }
 
-  return item.offlineTask?.status || "等待处理";
+  const task = item.offlineTask;
+  if (!task) {
+    return "等待处理";
+  }
+
+  const total = task.totalPages || 0;
+  const ocrDone = task.completedPages || 0;
+  const finalized = countFinalizedPages(item);
+
+  if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {
+    return `${task.status} 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
+  }
+
+  if (total > 0 && (task.status === "已完成" || task.status === "已回填")) {
+    return `整本完成 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
+  }
+
+  return task.status || "等待处理";
+}
+
+function countFinalizedPages(item) {
+  return item.pages.filter((page) => page.cleanText || page.status === "已生成整理稿").length;
+}
+
+function getOnlinePageProgress(item) {
+  const total = item.pages.length;
+  const processed = item.pages.filter((page) => hasPageText(page)).length;
+  return { processed, total };
 }
 
 function getProcessModeHelp(item) {
@@ -617,11 +664,42 @@ function getProcessModeHelp(item) {
   return "在整理工作台中逐页选择原图，并逐页自动识别、生成整理文本。";
 }
 
-function applyBatchPages(item, pages) {
-  item.pages = pages
-    .map((page, index) => normalizeBatchPage(page, index))
-    .sort((a, b) => a.pageNumber - b.pageNumber);
-  selectedPageId = item.pages[0]?.id || null;
+function mergeBatchPages(item, incomingPages) {
+  if (!Array.isArray(incomingPages) || !incomingPages.length) {
+    return false;
+  }
+
+  const byNumber = new Map(item.pages.map((page) => [page.pageNumber, page]));
+  let added = false;
+
+  incomingPages.forEach((raw, index) => {
+    const incoming = normalizeBatchPage(raw, index);
+    const existing = byNumber.get(incoming.pageNumber);
+
+    if (existing) {
+      // 保留已由大模型生成的整理文本，仅更新 OCR 结果。
+      const ocrChanged = existing.ocrText !== incoming.ocrText;
+      existing.ocrText = incoming.ocrText;
+      existing.imageDataUrl = existing.imageDataUrl || incoming.imageDataUrl;
+      existing.imageUrl = incoming.imageUrl || existing.imageUrl;
+      existing.imageName = existing.imageName || incoming.imageName;
+      existing.ocr = incoming.ocr;
+      if (ocrChanged && existing.status !== "正在生成整理稿") {
+        existing.status = existing.cleanText ? "已生成整理稿" : "已识别";
+        existing.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+
+    item.pages.push(incoming);
+    byNumber.set(incoming.pageNumber, incoming);
+    added = true;
+  });
+
+  item.pages.sort((a, b) => a.pageNumber - b.pageNumber);
+  item.status = summarizeDocumentStatus(item);
+  item.updatedAt = new Date().toISOString();
+  return added;
 }
 
 function normalizeBatchPage(page, index) {

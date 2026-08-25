@@ -519,6 +519,57 @@ button:focus-visible {
   margin-top: 14px;
 }
 
+.progress-stack {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.progress-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 86px;
+  gap: 10px;
+  align-items: center;
+}
+
+.progress-label {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e6ebe6;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), #3e8f76);
+  transition: width 0.3s ease;
+}
+
+.progress-fill-sub {
+  background: linear-gradient(90deg, var(--gold), #d9a566);
+}
+
+.progress-value {
+  color: var(--text);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .reader-original-panel,
 .reader-text-panel {
   min-height: 0;

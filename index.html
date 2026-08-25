@@ -195,6 +195,40 @@
                 <span class="inline-status" id="offline-status">等待处理</span>
               </div>
 
+              <div class="progress-stack hidden" id="offline-progress">
+                <div class="progress-row">
+                  <span class="progress-label" id="offline-main-label">整本进度</span>
+                  <div class="progress-track">
+                    <div class="progress-fill" id="offline-main-fill"></div>
+                  </div>
+                  <span class="progress-value" id="offline-main-value">0 / 0 页</span>
+                </div>
+                <div class="progress-row">
+                  <span class="progress-label" id="offline-sub-label">当前页</span>
+                  <div class="progress-track">
+                    <div class="progress-fill progress-fill-sub" id="offline-sub-fill"></div>
+                  </div>
+                  <span class="progress-value" id="offline-sub-value">等待</span>
+                </div>
+              </div>
+
+              <div class="progress-stack hidden" id="online-progress">
+                <div class="progress-row">
+                  <span class="progress-label" id="online-main-label">在线整理进度</span>
+                  <div class="progress-track">
+                    <div class="progress-fill" id="online-main-fill"></div>
+                  </div>
+                  <span class="progress-value" id="online-main-value">0 / 0 页</span>
+                </div>
+                <div class="progress-row">
+                  <span class="progress-label" id="online-sub-label">当前页</span>
+                  <div class="progress-track">
+                    <div class="progress-fill progress-fill-sub" id="online-sub-fill"></div>
+                  </div>
+                  <span class="progress-value" id="online-sub-value">等待</span>
+                </div>
+              </div>
+
               <div class="page-tools">
                 <div class="section-heading compact-heading">
                   <h3>页目</h3>
@@ -362,6 +396,7 @@
     <script src="js/store.js"></script>
     <script src="js/dom.js"></script>
     <script src="js/render.js"></script>
+    <script src="js/progress.js"></script>
     <script src="js/service.js"></script>
     <script src="js/ocr.js"></script>
     <script src="js/llm.js"></script>

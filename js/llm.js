@@ -86,6 +86,8 @@ async function generateFinalText(options = {}) {
   }
 
   setLlmTaskStatus("正在生成整理稿...");
+  startOnlinePageStage(page, "生成整理文本中", 65);
+  renderOnlineProgress(item);
 
   try {
     const result = await requestFinalTextForPage(item, page);
@@ -106,6 +108,9 @@ async function generateFinalText(options = {}) {
     if (!options.silent) {
       alert("暂时无法调用大模型服务。请确认 Qwen3-8B 和大模型统一接口已启动。");
     }
+  } finally {
+    finishOnlinePageStage(page);
+    renderOnlineProgress(item);
   }
 }
 
@@ -143,6 +148,8 @@ async function generateDocumentFinalText() {
       item.status = summarizeDocumentStatus(item);
       renderAll();
       setLlmTaskStatus(`正在生成 ${completed + 1}/${pages.length}`);
+      startOnlinePageStage(page, "生成整理文本中", 65);
+      renderOnlineProgress(item);
 
       try {
         const result = await requestFinalTextForPage(item, page);
@@ -158,6 +165,8 @@ async function generateDocumentFinalText() {
         failed += 1;
       }
 
+      finishOnlinePageStage(page);
+      renderOnlineProgress(item);
       item.status = summarizeDocumentStatus(item);
       item.updatedAt = new Date().toISOString();
       persist();

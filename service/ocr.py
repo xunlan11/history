@@ -127,12 +127,21 @@ def process_batch_task(task_id: str) -> None:
 
     task["status"] = "处理中"
     task["message"] = "正在拆页和识别，请稍后刷新。"
+    task["totalPages"] = 0
+    task["completedPages"] = 0
+    task["currentPage"] = 0
+    task["currentPageStage"] = "准备中"
+    task["currentPageProgress"] = 0
     save_task(task)
 
     try:
-        pages = process_document(Path(task["sourcePath"]), task_id)
+        pages, total_pages = process_document(Path(task["sourcePath"]), task_id)
         task["pages"] = pages
-        task["totalPages"] = len(pages)
+        task["totalPages"] = total_pages
+        task["completedPages"] = total_pages
+        task["currentPage"] = total_pages
+        task["currentPageStage"] = "已完成"
+        task["currentPageProgress"] = 100
         task["status"] = "已完成"
         task["message"] = "整本处理完成，请回到平台刷新结果。"
     except Exception as exc:  # noqa: BLE001
@@ -142,15 +151,38 @@ def process_batch_task(task_id: str) -> None:
     save_task(task)
 
 
-def process_document(path: Path, task_id: str) -> list[dict[str, Any]]:
+def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
     if path.suffix.lower() == ".pdf":
         return process_pdf(path, task_id)
 
     page_path = copy_image_to_page(path, task_id, 1)
-    return [recognize_image(page_path, page_number=1, task_id=task_id)]
+    set_batch_progress(
+        task_id,
+        completed_pages=0,
+        total_pages=1,
+        current_page=1,
+        stage="预处理中",
+        progress=10,
+    )
+    result = recognize_image(
+        page_path,
+        page_number=1,
+        task_id=task_id,
+        on_progress=make_page_progress_callback(task_id, 1, 1),
+    )
+    set_batch_pages(task_id, [result])
+    set_batch_progress(
+        task_id,
+        completed_pages=1,
+        total_pages=1,
+        current_page=1,
+        stage="已完成",
+        progress=100,
+    )
+    return [result], 1
 
 
-def process_pdf(path: Path, task_id: str) -> list[dict[str, Any]]:
+def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
     try:
         import fitz
     except ImportError as exc:
@@ -158,19 +190,45 @@ def process_pdf(path: Path, task_id: str) -> list[dict[str, Any]]:
 
     pages: list[dict[str, Any]] = []
     doc = fitz.open(path)
+    total_pages = doc.page_count
     output_dir = TASKS_DIR / task_id / "pages"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         for index, page in enumerate(doc, start=1):
+            set_batch_progress(
+                task_id,
+                completed_pages=index - 1,
+                total_pages=total_pages,
+                current_page=index,
+                stage="拆页中",
+                progress=5,
+            )
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             image_path = output_dir / f"page-{index}.png"
             pix.save(image_path)
-            pages.append(recognize_image(image_path, page_number=index, task_id=task_id))
+            pages.append(
+                recognize_image(
+                    image_path,
+                    page_number=index,
+                    task_id=task_id,
+                    on_progress=make_page_progress_callback(task_id, index, total_pages),
+                )
+            )
+            # 每页识别完成后增量写回，前端可边轮询边把已识别页交给大模型整理。
+            set_batch_pages(task_id, pages)
+            set_batch_progress(
+                task_id,
+                completed_pages=index,
+                total_pages=total_pages,
+                current_page=index,
+                stage="已完成",
+                progress=100,
+            )
     finally:
         doc.close()
 
-    return pages
+    return pages, total_pages
 
 
 def build_cover_candidate(path: Path) -> dict[str, Any]:
@@ -325,11 +383,15 @@ def recognize_image(
     path: Path,
     page_number: int | None = None,
     task_id: str | None = None,
+    on_progress: Any = None,
 ) -> dict[str, Any]:
+    report_progress(on_progress, "预处理中", 20)
     ensure_image_readable(path)
     processed_path, preprocessing = preprocess_image(path, page_number, task_id)
+    report_progress(on_progress, "识别中", 55)
     engine = get_ocr_engine()
     raw = engine.ocr(str(processed_path), cls=True)
+    report_progress(on_progress, "版面分析", 85)
     ocr_lines = parse_paddle_result(raw)
     layout = analyze_page_layout(processed_path, ocr_lines)
     ordered_lines = layout["readingOrder"]
@@ -355,6 +417,8 @@ def recognize_image(
 
     if page_number is not None:
         payload["pageNumber"] = page_number
+
+    report_progress(on_progress, "已完成", 100)
     return payload
 
 
@@ -720,6 +784,60 @@ def public_task(task: dict[str, Any]) -> dict[str, Any]:
         "taskId": task["taskId"],
         "status": task["status"],
         "message": task["message"],
-        "totalPages": task["totalPages"],
+        "totalPages": task.get("totalPages", 0),
+        "completedPages": task.get("completedPages", 0),
+        "currentPage": task.get("currentPage", 0),
+        "currentPageStage": task.get("currentPageStage", ""),
+        "currentPageProgress": task.get("currentPageProgress", 0),
         "pages": task["pages"],
     }
+
+
+def report_progress(callback: Any, stage: str, progress: int) -> None:
+    if callback:
+        callback(stage, progress)
+
+
+def make_page_progress_callback(task_id: str, page_number: int, total_pages: int):
+    def on_progress(stage: str, progress: int) -> None:
+        set_batch_progress(
+            task_id,
+            completed_pages=page_number - 1,
+            total_pages=total_pages,
+            current_page=page_number,
+            stage=stage,
+            progress=progress,
+        )
+
+    return on_progress
+
+
+def set_batch_progress(
+    task_id: str,
+    completed_pages: int,
+    total_pages: int,
+    current_page: int,
+    stage: str,
+    progress: int,
+) -> None:
+    task = load_task(task_id)
+    if not task:
+        return
+
+    task["status"] = "处理中"
+    task["totalPages"] = total_pages
+    task["completedPages"] = completed_pages
+    task["currentPage"] = current_page
+    task["currentPageStage"] = stage
+    task["currentPageProgress"] = progress
+    task["message"] = f"正在识别第 {current_page}/{total_pages} 页（{stage}）"
+    save_task(task)
+
+
+def set_batch_pages(task_id: str, pages: list[dict[str, Any]]) -> None:
+    task = load_task(task_id)
+    if not task:
+        return
+
+    task["pages"] = list(pages)
+    save_task(task)
