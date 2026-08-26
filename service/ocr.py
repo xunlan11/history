@@ -43,7 +43,15 @@ def get_ocr_engine():
     if OCR_ENGINE is None:
         from paddleocr import PaddleOCR
 
-        OCR_ENGINE = PaddleOCR(use_angle_cls=True, lang="ch")
+        # paddleocr 3.x：不再接受 2.x 的 use_angle_cls 参数，方向分类由
+        # use_textline_orientation 控制。
+        # enable_mkldnn=False：Paddle 静态模型在新执行器（PIR）+ oneDNN 下会触发
+        # ConvertPirAttribute2RuntimeAttribute 未实现错误，必须关闭。
+        OCR_ENGINE = PaddleOCR(
+            lang="ch",
+            use_textline_orientation=True,
+            enable_mkldnn=False,
+        )
     return OCR_ENGINE
 
 
@@ -390,7 +398,8 @@ def recognize_image(
     processed_path, preprocessing = preprocess_image(path, page_number, task_id)
     report_progress(on_progress, "识别中", 55)
     engine = get_ocr_engine()
-    raw = engine.ocr(str(processed_path), cls=True)
+    # paddleocr 3.x：predict() 取代 ocr()，不再接受 cls 参数
+    raw = engine.predict(str(processed_path))
     report_progress(on_progress, "版面分析", 85)
     ocr_lines = parse_paddle_result(raw)
     layout = analyze_page_layout(processed_path, ocr_lines)
@@ -431,12 +440,89 @@ def parse_paddle_result(raw: Any) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
 
     for page_result in raw or []:
+        parsed = _parse_paddle_page(page_result)
+        if parsed:
+            lines.extend(parsed)
+
+    return lines
+
+
+def _parse_paddle_page(page_result: Any) -> list[dict[str, Any]]:
+    """解析一页的识别结果，兼容 paddleocr 2.x 与 3.x 两种返回格式。"""
+    # paddleocr 2.x 旧格式：[[points, (text, score)], ...]
+    if (
+        isinstance(page_result, (list, tuple))
+        and page_result
+        and _is_legacy_line(page_result[0])
+    ):
+        lines: list[dict[str, Any]] = []
         for line in page_result or []:
             parsed = parse_paddle_line(line)
             if parsed:
                 lines.append(parsed)
+        return lines
 
+    # paddleocr 3.x：OCRResult.json = {"res": {"rec_texts": [...], ...}}
+    data = _extract_ocr3_data(page_result)
+    if not data:
+        return []
+
+    texts = data.get("rec_texts") or []
+    scores = data.get("rec_scores") or []
+    polys = data.get("rec_polys") or []
+    lines: list[dict[str, Any]] = []
+    for index, text in enumerate(texts):
+        text = str(text).strip()
+        if not text:
+            continue
+        points = normalize_points(polys[index] if index < len(polys) else [])
+        confidence = _safe_float(scores[index]) if index < len(scores) else None
+        lines.append(
+            {
+                "text": text,
+                "confidence": confidence,
+                "points": points,
+                "bbox": bbox_from_points(points),
+            }
+        )
     return lines
+
+
+def _is_legacy_line(value: Any) -> bool:
+    """判断是否为 paddleocr 2.x 的行格式：[points, (text, score)]。"""
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) >= 2
+        and isinstance(value[0], (list, tuple))
+    )
+
+
+def _extract_ocr3_data(result: Any) -> dict[str, Any] | None:
+    """从 paddleocr 3.x 的 OCRResult 中提取 res 数据字典。"""
+    js = getattr(result, "json", None)
+    if callable(js):
+        js = js()
+    elif isinstance(result, dict):
+        js = result
+    if not isinstance(js, dict):
+        return None
+    res = js.get("res")
+    if isinstance(res, dict) and _has_ocr3_fields(res):
+        return res
+    if _has_ocr3_fields(js):
+        return js
+    return None
+
+
+def _has_ocr3_fields(data: dict[str, Any]) -> bool:
+    return any(key in data for key in ("rec_texts", "rec_scores", "rec_polys"))
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_paddle_line(line: Any) -> dict[str, Any] | None:
@@ -468,6 +554,14 @@ def parse_paddle_line(line: Any) -> dict[str, Any] | None:
 
 def normalize_points(value: Any) -> list[list[float]]:
     points: list[list[float]] = []
+    # 兼容 numpy 数组（paddleocr 3.x 内部可能返回 ndarray）
+    try:
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+    except Exception:
+        pass
     if isinstance(value, (list, tuple)):
         for point in value:
             if not isinstance(point, (list, tuple)) or len(point) < 2:
