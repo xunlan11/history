@@ -301,6 +301,10 @@ def preprocess_image(
         image = ImageOps.exif_transpose(image)
         steps.append("方向修正")
 
+        image, scan_correction = correct_scan_geometry(image)
+        if scan_correction.get("applied"):
+            steps.append("扫描透视矫正")
+
         image = image.convert("L")
         steps.append("灰度化")
 
@@ -328,6 +332,7 @@ def preprocess_image(
         "imageName": target.name,
         "steps": steps,
         "deskewAngle": angle,
+        "scanCorrection": scan_correction,
     }
 
 
@@ -337,6 +342,160 @@ def preprocessed_image_path(path: Path, page_number: int | None, task_id: str | 
         return TASKS_DIR / task_id / "preprocessed" / name
 
     return PREPROCESS_DIR / f"{path.stem}-{uuid.uuid4().hex[:8]}-preprocessed.png"
+
+
+def correct_scan_geometry(image: Image.Image) -> tuple[Image.Image, dict[str, Any]]:
+    cv2, np = get_cv2_modules()
+    if cv2 is None or np is None:
+        return image, {
+            "enabled": False,
+            "applied": False,
+            "reason": "未安装 OpenCV，跳过扫描透视矫正",
+        }
+
+    original_mode = image.mode
+    rgb = image.convert("RGB")
+    array = np.array(rgb)
+    height, width = array.shape[:2]
+    if width < 120 or height < 120:
+        return image, {
+            "enabled": True,
+            "applied": False,
+            "reason": "图像尺寸过小，跳过扫描透视矫正",
+        }
+
+    scale = min(1.0, 1400 / max(width, height))
+    sample = cv2.resize(array, (int(width * scale), int(height * scale))) if scale < 1 else array
+    gray = cv2.cvtColor(sample, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.dilate(edges, np.ones((3, 3), dtype=np.uint8), iterations=1)
+
+    contours, _ = find_external_contours(edges, cv2)
+    if not contours:
+        return image, {
+            "enabled": True,
+            "applied": False,
+            "reason": "未检测到可用于透视矫正的页面边界",
+        }
+
+    sample_area = sample.shape[0] * sample.shape[1]
+    quad = None
+    contour_area = 0.0
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
+        area = float(cv2.contourArea(contour))
+        if area < sample_area * 0.18:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.025 * perimeter, True)
+        if len(approx) == 4:
+            quad = approx.reshape(4, 2).astype("float32")
+            contour_area = area
+            break
+
+    if quad is None:
+        return image, {
+            "enabled": True,
+            "applied": False,
+            "reason": "未找到稳定的四边形页面边界",
+        }
+
+    if scale < 1:
+        quad = quad / scale
+
+    ordered = order_quad_points(quad, np)
+    if quad_is_near_full_frame(ordered, width, height):
+        return image, {
+            "enabled": True,
+            "applied": False,
+            "reason": "页面边界已接近图像边框，无需透视矫正",
+        }
+
+    warped = four_point_transform(array, ordered, cv2, np)
+    if warped is None:
+        return image, {
+            "enabled": True,
+            "applied": False,
+            "reason": "页面边界几何异常，跳过透视矫正",
+        }
+
+    corrected = Image.fromarray(warped)
+    if original_mode in {"L", "RGB", "RGBA"}:
+        corrected = corrected.convert(original_mode)
+
+    return corrected, {
+        "enabled": True,
+        "applied": True,
+        "method": "opencv-four-point-transform",
+        "confidence": round(min(0.95, max(0.55, contour_area / max(1, sample_area))), 2),
+        "sourceSize": {"width": width, "height": height},
+        "outputSize": {"width": corrected.width, "height": corrected.height},
+        "quad": [[round(float(x), 2), round(float(y), 2)] for x, y in ordered.tolist()],
+    }
+
+
+def get_cv2_modules():
+    try:
+        import cv2
+        import numpy as np
+
+        return cv2, np
+    except Exception:
+        return None, None
+
+
+def find_external_contours(mask: Any, cv2: Any) -> tuple[Any, Any]:
+    result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return result[-2], result[-1]
+
+
+def order_quad_points(points: Any, np: Any):
+    rect = np.zeros((4, 2), dtype="float32")
+    sums = points.sum(axis=1)
+    diffs = np.diff(points, axis=1)
+    rect[0] = points[np.argmin(sums)]
+    rect[2] = points[np.argmax(sums)]
+    rect[1] = points[np.argmin(diffs)]
+    rect[3] = points[np.argmax(diffs)]
+    return rect
+
+
+def quad_is_near_full_frame(points: Any, width: int, height: int) -> bool:
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    margin_x = max(8, width * 0.015)
+    margin_y = max(8, height * 0.015)
+    return (
+        min(xs) <= margin_x
+        and min(ys) <= margin_y
+        and max(xs) >= width - margin_x
+        and max(ys) >= height - margin_y
+    )
+
+
+def four_point_transform(array: Any, points: Any, cv2: Any, np: Any) -> Any:
+    top_left, top_right, bottom_right, bottom_left = points
+    width_a = np.linalg.norm(bottom_right - bottom_left)
+    width_b = np.linalg.norm(top_right - top_left)
+    height_a = np.linalg.norm(top_right - bottom_right)
+    height_b = np.linalg.norm(top_left - bottom_left)
+    max_width = int(max(width_a, width_b))
+    max_height = int(max(height_a, height_b))
+
+    if max_width < 80 or max_height < 80:
+        return None
+
+    destination = np.array(
+        [
+            [0, 0],
+            [max_width - 1, 0],
+            [max_width - 1, max_height - 1],
+            [0, max_height - 1],
+        ],
+        dtype="float32",
+    )
+    matrix = cv2.getPerspectiveTransform(points, destination)
+    return cv2.warpPerspective(array, matrix, (max_width, max_height), borderValue=(255, 255, 255))
 
 
 def estimate_skew_angle(image: Image.Image) -> float:
@@ -603,23 +762,39 @@ def analyze_page_layout(path: Path, lines: list[dict[str, Any]]) -> dict[str, An
         line for line in enriched
         if 0.08 <= line["bboxNorm"]["y"] <= 0.92
     ] or enriched
-    columns = detect_columns(body_candidates, width)
-    regions = classify_regions(enriched, columns, width, height)
-    ordered_lines = order_lines_for_reading(enriched, columns)
+    writing_mode, writing_confidence, writing_reasons = detect_writing_mode(body_candidates, width, height)
+    columns = (
+        detect_vertical_columns(body_candidates, width)
+        if writing_mode == "vertical-rl"
+        else detect_columns(body_candidates, width)
+    )
+    regions = classify_regions(enriched, columns, width, height, writing_mode)
+    ordered_lines = order_lines_for_reading(enriched, columns, writing_mode, width, height)
+    non_text_regions = detect_non_text_regions(path, enriched, width, height)
 
     return {
         "imageWidth": width,
         "imageHeight": height,
+        "writingMode": writing_mode,
+        "writingModeConfidence": writing_confidence,
+        "writingModeReasons": writing_reasons,
+        "readingDirection": "right-to-left-top-to-bottom" if writing_mode == "vertical-rl" else "left-to-right-top-to-bottom",
+        "outputFormat": "modern-horizontal",
         "lineCount": len(enriched),
         "columnCount": len(columns),
         "columns": columns,
         "regions": regions,
+        "nonTextRegions": non_text_regions,
         "lines": enriched,
         "readingOrder": ordered_lines,
         "capabilities": [
             "line-boxes",
             "reading-order",
             "column-detection",
+            "writing-mode-detection",
+            "vertical-rl-modernization",
+            "non-text-region-detection",
+            "non-text-region-cropping",
             "header-footer-candidates",
             "footnote-caption-candidates",
         ],
@@ -651,6 +826,100 @@ def normalize_bbox(bbox: dict[str, float], image_width: int, image_height: int) 
         "width": round(float(bbox.get("width", 0.0)) / width, 4),
         "height": round(float(bbox.get("height", 0.0)) / height, 4),
     }
+
+
+def detect_writing_mode(
+    lines: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+) -> tuple[str, float, list[str]]:
+    if len(lines) < 3:
+        return "horizontal-lr", 0.55, ["文字行较少，默认按现代横排处理"]
+
+    measurable = [
+        line for line in lines
+        if line["bbox"].get("width", 0.0) > 0 and line["bbox"].get("height", 0.0) > 0
+    ]
+    if len(measurable) < 3:
+        return "horizontal-lr", 0.55, ["缺少足够坐标信息，默认按现代横排处理"]
+
+    total_chars = sum(max(1, len(line["text"].strip())) for line in measurable)
+    vertical_chars = sum(
+        max(1, len(line["text"].strip()))
+        for line in measurable
+        if line["bbox"].get("height", 0.0) >= line["bbox"].get("width", 0.0) * 1.35
+    )
+    horizontal_chars = sum(
+        max(1, len(line["text"].strip()))
+        for line in measurable
+        if line["bbox"].get("width", 0.0) >= line["bbox"].get("height", 0.0) * 1.6
+    )
+
+    median_width = median([line["bbox"].get("width", 0.0) for line in measurable]) or 1
+    median_height = median([line["bbox"].get("height", 0.0) for line in measurable]) or 1
+    x_clusters = cluster_axis(measurable, "centerX", max(median_width * 0.9, image_width * 0.01, 6))
+    y_clusters = cluster_axis(measurable, "centerY", max(median_height * 0.9, image_height * 0.006, 6))
+    median_x_density = median([len(cluster) for cluster in x_clusters]) or 0
+    median_y_density = median([len(cluster) for cluster in y_clusters]) or 0
+    short_line_ratio = sum(1 for line in measurable if len(line["text"].strip()) <= 2) / len(measurable)
+
+    reasons: list[str] = []
+    vertical_score = 0.0
+    horizontal_score = 0.0
+
+    if vertical_chars / max(1, total_chars) >= 0.35 and vertical_chars >= horizontal_chars:
+        vertical_score += 0.45
+        reasons.append("多数文字框呈竖向延展")
+
+    if short_line_ratio >= 0.55 and median_x_density > median_y_density * 1.25 and len(x_clusters) >= 2:
+        vertical_score += 0.35
+        reasons.append("短文本框更集中成纵向列")
+
+    if image_height > image_width * 1.12 and (vertical_chars > horizontal_chars or median_x_density > median_y_density):
+        vertical_score += 0.15
+        reasons.append("页面比例和文本分布接近古籍竖排")
+
+    if len(x_clusters) >= 3 and median_x_density >= 3 and median_x_density > median_y_density:
+        vertical_score += 0.15
+        reasons.append("检测到多个竖向文字列")
+
+    if horizontal_chars > vertical_chars:
+        horizontal_score += 0.45
+    if median_y_density >= median_x_density:
+        horizontal_score += 0.25
+    if short_line_ratio < 0.55:
+        horizontal_score += 0.15
+
+    if vertical_score >= 0.55 and vertical_score > horizontal_score:
+        return "vertical-rl", round(min(0.95, vertical_score), 2), reasons or ["检测到竖排版式"]
+
+    confidence = round(min(0.95, max(0.55, horizontal_score)), 2)
+    if not reasons:
+        reasons.append("文本框分布接近现代横排")
+    return "horizontal-lr", confidence, reasons
+
+
+def cluster_axis(
+    lines: list[dict[str, Any]],
+    key: str,
+    tolerance: float,
+) -> list[list[dict[str, Any]]]:
+    if not lines:
+        return []
+
+    clusters: list[list[dict[str, Any]]] = []
+    centers: list[float] = []
+    for line in sorted(lines, key=lambda item: item.get(key, 0.0)):
+        value = float(line.get(key, 0.0))
+        if not clusters or abs(value - centers[-1]) > tolerance:
+            clusters.append([line])
+            centers.append(value)
+            continue
+
+        clusters[-1].append(line)
+        centers[-1] = sum(float(item.get(key, 0.0)) for item in clusters[-1]) / len(clusters[-1])
+
+    return clusters
 
 
 def detect_columns(lines: list[dict[str, Any]], image_width: int) -> list[dict[str, Any]]:
@@ -685,6 +954,24 @@ def detect_columns(lines: list[dict[str, Any]], image_width: int) -> list[dict[s
     ]
 
 
+def detect_vertical_columns(lines: list[dict[str, Any]], image_width: int) -> list[dict[str, Any]]:
+    if not lines:
+        return [{"index": 0, "xMin": 0.0, "xMax": float(image_width), "lineCount": 0}]
+
+    median_width = median([line["bbox"].get("width", 0.0) for line in lines]) or 1
+    clusters = cluster_axis(lines, "centerX", max(median_width * 0.9, image_width * 0.01, 6))
+    ordered_clusters = sorted(
+        clusters,
+        key=lambda group: sum(line["centerX"] for line in group) / len(group),
+        reverse=True,
+    )
+
+    return [
+        build_column(index, group, image_width)
+        for index, group in enumerate(ordered_clusters)
+    ]
+
+
 def build_column(index: int, lines: list[dict[str, Any]], image_width: int) -> dict[str, Any]:
     if not lines:
         return {"index": index, "xMin": 0.0, "xMax": float(image_width), "lineCount": 0}
@@ -698,6 +985,7 @@ def build_column(index: int, lines: list[dict[str, Any]], image_width: int) -> d
         "xMinNorm": round(x_min / max(1, image_width), 4),
         "xMaxNorm": round(x_max / max(1, image_width), 4),
         "lineCount": len(lines),
+        "centerX": round((x_min + x_max) / 2, 2),
     }
 
 
@@ -706,6 +994,7 @@ def classify_regions(
     columns: list[dict[str, Any]],
     image_width: int,
     image_height: int,
+    writing_mode: str = "horizontal-lr",
 ) -> list[dict[str, Any]]:
     roles: dict[str, list[dict[str, Any]]] = {
         "header": [],
@@ -722,7 +1011,12 @@ def classify_regions(
         y = line["bboxNorm"]["y"]
         line_height = line["bbox"].get("height", 0.0)
 
-        if y < 0.07:
+        if writing_mode == "vertical-rl":
+            if looks_like_vertical_header_or_page_number(line, text):
+                role = "header" if y < 0.5 else "footer"
+            else:
+                role = "caption" if looks_like_caption(text) else "body"
+        elif y < 0.07:
             role = "header"
         elif y > 0.94:
             role = "footer"
@@ -761,6 +1055,32 @@ def looks_like_note(text: str) -> bool:
     return stripped.startswith(("注", "附注", "备注", "*", "①", "②", "③", "④", "⑤")) or stripped[:2].isdigit()
 
 
+def looks_like_vertical_header_or_page_number(line: dict[str, Any], text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+
+    bbox = line.get("bbox", {})
+    norm = line.get("bboxNorm", {})
+    width = float(bbox.get("width", 0.0))
+    height = float(bbox.get("height", 0.0))
+    x = float(norm.get("x", 0.0))
+    y = float(norm.get("y", 0.0))
+    text_len = len(stripped)
+
+    in_top_bottom_margin = y < 0.06 or y > 0.94
+    in_outer_margin = x < 0.04 or x > 0.96
+    is_horizontal_banner = width >= height * 1.6 and text_len >= 2
+    is_page_number = text_len <= 4 and stripped.strip("-—–·. 　").isdigit()
+    is_chinese_page_number = text_len <= 6 and all(char in "第页頁一二三四五六七八九十百〇零0123456789-—–·. " for char in stripped)
+
+    return (
+        in_top_bottom_margin and (is_page_number or is_chinese_page_number or is_horizontal_banner)
+    ) or (
+        in_outer_margin and (is_page_number or is_chinese_page_number)
+    )
+
+
 def looks_like_caption(text: str) -> bool:
     stripped = text.strip()
     return stripped.startswith(("图", "表", "照片", "地图", "附图")) and len(stripped) <= 40
@@ -780,7 +1100,240 @@ def build_region(role: str, lines: list[dict[str, Any]], image_width: int, image
     }
 
 
-def order_lines_for_reading(lines: list[dict[str, Any]], columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def detect_non_text_regions(
+    path: Path,
+    text_lines: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]]:
+    cv2, np = get_cv2_modules()
+    if cv2 is None or np is None:
+        return []
+
+    gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        return []
+
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        35,
+        15,
+    )
+    edges = cv2.Canny(gray, 45, 140)
+    content = cv2.bitwise_or(binary, edges)
+
+    text_mask = build_text_mask(text_lines, image_width, image_height, cv2, np)
+    content[text_mask > 0] = 0
+
+    merge_size = max(9, int(min(image_width, image_height) * 0.014))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (merge_size, merge_size))
+    content = cv2.morphologyEx(content, cv2.MORPH_CLOSE, kernel, iterations=2)
+    content = cv2.dilate(content, kernel, iterations=1)
+
+    contours, _ = find_external_contours(content, cv2)
+    page_area = image_width * image_height
+    regions: list[dict[str, Any]] = []
+
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+        x, y, width, height = cv2.boundingRect(contour)
+        bbox = {"x": float(x), "y": float(y), "width": float(width), "height": float(height)}
+        area = width * height
+        if not is_non_text_region_candidate(bbox, page_area, image_width, image_height):
+            continue
+
+        text_overlap = estimate_text_overlap_ratio(text_lines, bbox)
+        if text_overlap > 0.28:
+            continue
+
+        region_type, confidence = classify_non_text_region(gray, bbox, cv2, np)
+        crop_path, crop_correction = save_non_text_region_crop(path, bbox, len(regions) + 1)
+        region = {
+            "index": len(regions),
+            "type": region_type,
+            "confidence": confidence,
+            "bbox": {key: round(value, 2) for key, value in bbox.items()},
+            "bboxNorm": normalize_bbox(bbox, image_width, image_height),
+            "textOverlap": round(text_overlap, 3),
+            "cropCorrection": crop_correction,
+        }
+        if crop_path:
+            region["croppedImageUrl"] = build_file_url(crop_path)
+            region["croppedImageName"] = crop_path.name
+        regions.append(region)
+
+        if len(regions) >= 12:
+            break
+
+    return dedupe_non_text_regions(regions)
+
+
+def build_text_mask(
+    lines: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+    cv2: Any,
+    np: Any,
+) -> Any:
+    mask = np.zeros((image_height, image_width), dtype=np.uint8)
+    median_height = median([line["bbox"].get("height", 0.0) for line in lines]) or 8
+    padding = max(4, int(median_height * 0.35))
+
+    for line in lines:
+        bbox = line.get("bbox") or {}
+        x = max(0, int(bbox.get("x", 0.0) - padding))
+        y = max(0, int(bbox.get("y", 0.0) - padding))
+        right = min(image_width, int(bbox.get("x", 0.0) + bbox.get("width", 0.0) + padding))
+        bottom = min(image_height, int(bbox.get("y", 0.0) + bbox.get("height", 0.0) + padding))
+        if right > x and bottom > y:
+            cv2.rectangle(mask, (x, y), (right, bottom), 255, thickness=-1)
+
+    return mask
+
+
+def is_non_text_region_candidate(
+    bbox: dict[str, float],
+    page_area: int,
+    image_width: int,
+    image_height: int,
+) -> bool:
+    width = bbox["width"]
+    height = bbox["height"]
+    area = width * height
+    if area < page_area * 0.012:
+        return False
+    if width < image_width * 0.08 or height < image_height * 0.04:
+        return False
+    if area > page_area * 0.82 and bbox["x"] < image_width * 0.06 and bbox["y"] < image_height * 0.06:
+        return False
+    if width / max(1, height) > 18 or height / max(1, width) > 18:
+        return False
+    return True
+
+
+def estimate_text_overlap_ratio(lines: list[dict[str, Any]], bbox: dict[str, float]) -> float:
+    area = max(1.0, bbox["width"] * bbox["height"])
+    overlap = 0.0
+    for line in lines:
+        line_bbox = line.get("bbox") or {}
+        overlap += intersection_area(bbox, line_bbox)
+    return overlap / area
+
+
+def intersection_area(first: dict[str, float], second: dict[str, float]) -> float:
+    left = max(float(first.get("x", 0.0)), float(second.get("x", 0.0)))
+    top = max(float(first.get("y", 0.0)), float(second.get("y", 0.0)))
+    right = min(
+        float(first.get("x", 0.0)) + float(first.get("width", 0.0)),
+        float(second.get("x", 0.0)) + float(second.get("width", 0.0)),
+    )
+    bottom = min(
+        float(first.get("y", 0.0)) + float(first.get("height", 0.0)),
+        float(second.get("y", 0.0)) + float(second.get("height", 0.0)),
+    )
+    return max(0.0, right - left) * max(0.0, bottom - top)
+
+
+def classify_non_text_region(gray: Any, bbox: dict[str, float], cv2: Any, np: Any) -> tuple[str, float]:
+    x = int(bbox["x"])
+    y = int(bbox["y"])
+    width = int(bbox["width"])
+    height = int(bbox["height"])
+    crop = gray[y : y + height, x : x + width]
+    if crop.size == 0:
+        return "unknown", 0.5
+
+    edges = cv2.Canny(crop, 45, 140)
+    edge_density = float(np.count_nonzero(edges)) / max(1, crop.size)
+    tonal_std = float(np.std(crop))
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=max(24, min(width, height) // 5),
+        minLineLength=max(20, min(width, height) // 4),
+        maxLineGap=8,
+    )
+    horizontal = 0
+    vertical = 0
+    if lines is not None:
+        for entry in lines[:80]:
+            x1, y1, x2, y2 = entry[0]
+            if abs(y1 - y2) <= 3:
+                horizontal += 1
+            elif abs(x1 - x2) <= 3:
+                vertical += 1
+
+    if horizontal >= 4 and vertical >= 4:
+        return "table", 0.74
+    if edge_density > 0.035 and tonal_std > 28:
+        return "image", 0.68
+    if edge_density > 0.025:
+        return "figure", 0.6
+    return "unknown", 0.52
+
+
+def save_non_text_region_crop(
+    source_path: Path,
+    bbox: dict[str, float],
+    index: int,
+) -> tuple[Path | None, dict[str, Any]]:
+    try:
+        crop_dir = source_path.parent / "non-text-regions"
+        crop_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(source_path) as image:
+            margin = max(6, int(min(image.width, image.height) * 0.006))
+            left = max(0, int(bbox["x"]) - margin)
+            top = max(0, int(bbox["y"]) - margin)
+            right = min(image.width, int(bbox["x"] + bbox["width"]) + margin)
+            bottom = min(image.height, int(bbox["y"] + bbox["height"]) + margin)
+            crop = image.crop((left, top, right, bottom))
+            corrected, correction = correct_scan_geometry(crop)
+            crop_path = crop_dir / f"{source_path.stem}-region-{index}.png"
+            corrected.save(crop_path, format="PNG", optimize=True)
+            return crop_path, correction
+    except Exception as exc:  # noqa: BLE001
+        return None, {
+            "enabled": False,
+            "applied": False,
+            "reason": f"区域裁剪失败：{exc}",
+        }
+
+
+def dedupe_non_text_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    for region in regions:
+        bbox = region.get("bbox") or {}
+        duplicate = False
+        for existing in deduped:
+            existing_bbox = existing.get("bbox") or {}
+            overlap = intersection_area(bbox, existing_bbox)
+            smaller = min(
+                float(bbox.get("width", 0.0)) * float(bbox.get("height", 0.0)),
+                float(existing_bbox.get("width", 0.0)) * float(existing_bbox.get("height", 0.0)),
+            )
+            if smaller > 0 and overlap / smaller > 0.72:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        region["index"] = len(deduped)
+        deduped.append(region)
+    return deduped
+
+
+def order_lines_for_reading(
+    lines: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+    writing_mode: str = "horizontal-lr",
+    image_width: int = 1,
+    image_height: int = 1,
+) -> list[dict[str, Any]]:
+    if writing_mode == "vertical-rl":
+        return order_vertical_lines_for_modern_reading(lines, columns, image_width, image_height)
+
     body_roles = {"body", "caption", "footnote"}
     ordered = sorted(
         lines,
@@ -795,6 +1348,84 @@ def order_lines_for_reading(lines: list[dict[str, Any]], columns: list[dict[str,
         line for line in ordered
         if line["role"] in body_roles or len(lines) < 3
     ]
+
+
+def order_vertical_lines_for_modern_reading(
+    lines: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]]:
+    body_roles = {"body", "caption", "footnote"}
+    candidates = [
+        line for line in lines
+        if line["role"] in body_roles or len(lines) < 3
+    ]
+    if not candidates:
+        return []
+
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for line in candidates:
+        grouped.setdefault(int(line.get("columnIndex", 0)), []).append(line)
+
+    column_order = [column["index"] for column in sorted(columns, key=lambda column: column.get("index", 0))]
+    for column_index in grouped:
+        if column_index not in column_order:
+            column_order.append(column_index)
+
+    ordered: list[dict[str, Any]] = []
+    for column_index in column_order:
+        column_lines = grouped.get(column_index, [])
+        if not column_lines:
+            continue
+        column_lines = sorted(
+            column_lines,
+            key=lambda line: (
+                0 if line["role"] != "footnote" else 1,
+                line["bbox"].get("y", 0.0),
+                -line["bbox"].get("x", 0.0),
+            ),
+        )
+        ordered.append(build_modern_vertical_line(column_lines, column_index, image_width, image_height))
+
+    return ordered
+
+
+def build_modern_vertical_line(
+    lines: list[dict[str, Any]],
+    column_index: int,
+    image_width: int,
+    image_height: int,
+) -> dict[str, Any]:
+    if len(lines) == 1:
+        line = dict(lines[0])
+        line["columnIndex"] = column_index
+        line["sourceLineCount"] = 1
+        return line
+
+    x_min = min(line["bbox"].get("x", 0.0) for line in lines)
+    y_min = min(line["bbox"].get("y", 0.0) for line in lines)
+    x_max = max(line["bbox"].get("x", 0.0) + line["bbox"].get("width", 0.0) for line in lines)
+    y_max = max(line["bbox"].get("y", 0.0) + line["bbox"].get("height", 0.0) for line in lines)
+    bbox = {"x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min}
+    confidences = [
+        line["confidence"] for line in lines
+        if isinstance(line.get("confidence"), (int, float))
+    ]
+    role = "footnote" if all(line.get("role") == "footnote" for line in lines) else "body"
+
+    return {
+        "text": "".join(line["text"].strip() for line in lines if line.get("text")),
+        "confidence": sum(confidences) / len(confidences) if confidences else None,
+        "points": [],
+        "bbox": bbox,
+        "bboxNorm": normalize_bbox(bbox, image_width, image_height),
+        "centerX": x_min + (x_max - x_min) / 2,
+        "centerY": y_min + (y_max - y_min) / 2,
+        "role": role,
+        "columnIndex": column_index,
+        "sourceLineCount": len(lines),
+    }
 
 
 def median(values: list[float]) -> float:
@@ -816,8 +1447,14 @@ def build_warnings(scores: list[float], layout: dict[str, Any] | None = None) ->
         warnings.append("存在低置信度文字，建议对照原图检查。")
 
     if layout:
-        if layout.get("columnCount", 1) > 1:
+        if layout.get("writingMode") == "vertical-rl":
+            warnings.append("检测到古籍竖排版式，已按右起逐列、列内自上而下重排为现代横排文本。")
+        elif layout.get("columnCount", 1) > 1:
             warnings.append("检测到多栏版面，已按栏位重排阅读顺序，建议检查版面顺序。")
+        if layout.get("nonTextRegions"):
+            warnings.append("检测到图片、地图、照片或表格等非文字区域，已保存区域坐标和裁剪图，不进入正文。")
+        if layout.get("writingModeConfidence", 1) < 0.6:
+            warnings.append("版式方向判断置信度较低，建议对照原图检查阅读顺序。")
         roles = {region["role"] for region in layout.get("regions", [])}
         if {"header", "footer"} & roles:
             warnings.append("检测到页眉或页脚候选区域，正文抽取时已降低其优先级。")

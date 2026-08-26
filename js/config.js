@@ -14,6 +14,7 @@ const OCR_HEALTH_URL = endpoint("/ocr/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
+const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
 const LLM_SERVICE_URL = endpoint("/llm/llm");
 const LLM_HEALTH_URL = endpoint("/llm/health");
 const VERSION_STATUS_URL = endpoint("/version/version");

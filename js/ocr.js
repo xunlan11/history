@@ -1,5 +1,5 @@
 async function requestPageOcr(page) {
-  const imageBlob = dataUrlToBlob(page.imageDataUrl);
+  const imageBlob = await getPageImageBlob(page);
   const body = new FormData();
   body.append("image", imageBlob, page.imageName || `page-${page.pageNumber}.png`);
   body.append("pageNumber", String(page.pageNumber));
@@ -16,6 +16,23 @@ async function requestPageOcr(page) {
   return response.json();
 }
 
+async function getPageImageBlob(page) {
+  if (page.imageDataUrl) {
+    return dataUrlToBlob(page.imageDataUrl);
+  }
+
+  if (!page.imageUrl) {
+    throw new Error("Page image is missing");
+  }
+
+  const response = await fetch(page.imageUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Page image fetch failed: ${response.status}`);
+  }
+
+  return response.blob();
+}
+
 async function recognizeCurrentPage() {
   const item = getSelectedDocument();
   const page = getSelectedPage();
@@ -25,7 +42,7 @@ async function recognizeCurrentPage() {
     return;
   }
 
-  if (!page.imageDataUrl) {
+  if (!page.imageDataUrl && !page.imageUrl) {
     alert("请先为本页选择原始资料图片。");
     return;
   }

@@ -275,7 +275,11 @@ async function pushServerSnapshot() {
         syncDirty = false;
         deletedDocumentIds.clear();
         deletedConversationIds.clear();
-        cacheCurrentState();
+        if (Array.isArray(result.documents) || Array.isArray(result.conversations)) {
+          applyServerState(result);
+        } else {
+          cacheCurrentState();
+        }
       } else {
         scheduleServerPush();
       }
@@ -288,6 +292,47 @@ async function pushServerSnapshot() {
     });
 
   return syncPushInFlight;
+}
+
+async function archiveDocumentSource(item, file) {
+  if (!item?.id || !file?.name) {
+    return false;
+  }
+
+  try {
+    const body = new FormData();
+    body.append("document", file, file.name);
+    body.append("documentId", item.id);
+    body.append("role", "source");
+
+    const response = await fetch(DATA_FILE_UPLOAD_URL, {
+      method: "POST",
+      body,
+    });
+
+    if (!response.ok) {
+      throw new Error(`File upload failed: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.file) {
+      return false;
+    }
+
+    item.sourceFile = result.file;
+    item.filePath = result.file.path;
+    item.fileUrl = result.file.url;
+    item.fileHash = result.file.sha256;
+    item.fileMimeType = result.file.mimeType;
+    item.fileSize = result.file.size;
+    item.updatedAt = new Date().toISOString();
+    syncCursor = String(result.syncCursor || syncCursor);
+    localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+    persist();
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 async function syncFromServer(options = {}) {

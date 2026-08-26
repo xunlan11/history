@@ -112,6 +112,7 @@ form.addEventListener("submit", (event) => {
   documents.unshift(item);
   selectedDocumentId = item.id;
   selectedPageId = firstPage.id;
+  archiveDocumentSource(item, file);
   detectDocumentCover(item, file);
 
   if (item.processMode === "offline") {

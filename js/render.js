@@ -213,9 +213,10 @@ function createBookCard(item, index) {
   node.querySelector(".book-pages").textContent = `${item.pages.length} 页`;
   node.querySelector(".book-author").textContent = item.author || "著者未录";
   cover.setAttribute("aria-hidden", "true");
-  if (item.coverImageDataUrl) {
+  const coverImageSource = item.coverImageUrl || item.coverImageDataUrl || "";
+  if (coverImageSource) {
     cover.classList.add("image-cover");
-    cover.style.setProperty("--cover-image", `url("${item.coverImageDataUrl}")`);
+    cover.style.setProperty("--cover-image", `url("${coverImageSource}")`);
   }
 
   const openDocumentFromCard = () => {
@@ -700,7 +701,7 @@ function renderDetail() {
 }
 
 function getRecognizeStatusText(page) {
-  if (!page || !page.imageDataUrl) {
+  if (!page || (!page.imageDataUrl && !page.imageUrl)) {
     return "等待原图";
   }
 
