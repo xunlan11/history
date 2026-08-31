@@ -51,7 +51,7 @@ function buildPrintHtml(item) {
         : "";
       const layers = [
         ["OCR 原始录文", page.ocrText],
-        ["忠实整理文本", page.cleanText || page.text],
+        ["忠实整理文本", page.cleanText],
         ["简体标点文本", page.punctuatedText],
       ];
       const layerHtml = layers

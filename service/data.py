@@ -25,7 +25,7 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
 FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -141,14 +141,19 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
-    connection.execute(
-        "INSERT OR IGNORE INTO app_meta(key, value) VALUES('schema_version', ?)",
-        (str(SCHEMA_VERSION),),
-    )
-    connection.execute(
-        "UPDATE app_meta SET value = ? WHERE key = 'schema_version'",
-        (str(SCHEMA_VERSION),),
-    )
+    schema_row = connection.execute(
+        "SELECT value FROM app_meta WHERE key = 'schema_version'"
+    ).fetchone()
+    if schema_row is None:
+        connection.execute(
+            "INSERT INTO app_meta(key, value) VALUES('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
+    elif int(schema_row["value"]) != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"数据库结构版本为 {schema_row['value']}，当前代码要求 {SCHEMA_VERSION}。"
+            "本项目不执行旧版本迁移，请重新初始化数据库。"
+        )
     connection.commit()
 
 
@@ -619,6 +624,7 @@ def soft_delete_entities(
 
 def build_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
     return {
+        "schemaVersion": SCHEMA_VERSION,
         "documents": active_payloads(connection, "documents"),
         "conversations": active_payloads(connection, "conversations"),
         "syncCursor": str(get_sync_version(connection)),

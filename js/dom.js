@@ -1,17 +1,3 @@
-const views = {
-  library: document.querySelector("#library-view"),
-  documents: document.querySelector("#documents-view"),
-  reader: document.querySelector("#reader-view"),
-  workspace: document.querySelector("#workspace-view"),
-};
-
-const viewTitles = {
-  library: "书库",
-  documents: "文献库",
-  reader: "文献浏览",
-  workspace: "整理工作台",
-};
-
 const form = document.querySelector("#document-form");
 const formSheet = document.querySelector("#document-form-sheet");
 const documentList = document.querySelector("#document-list");
@@ -43,22 +29,15 @@ const generateDocumentTextButton = document.querySelector("#generate-document-te
 const pageImageInput = document.querySelector("#page-image-input");
 const originalPreview = document.querySelector("#original-preview");
 const recognizeStatus = document.querySelector("#recognize-status");
-const offlineActions = document.querySelector("#offline-actions");
-const offlineStatus = document.querySelector("#offline-status");
-const offlineProgress = document.querySelector("#offline-progress");
-const offlineMainLabel = document.querySelector("#offline-main-label");
-const offlineMainFill = document.querySelector("#offline-main-fill");
-const offlineMainValue = document.querySelector("#offline-main-value");
-const offlineSubLabel = document.querySelector("#offline-sub-label");
-const offlineSubFill = document.querySelector("#offline-sub-fill");
-const offlineSubValue = document.querySelector("#offline-sub-value");
-const onlineProgress = document.querySelector("#online-progress");
-const onlineMainLabel = document.querySelector("#online-main-label");
-const onlineMainFill = document.querySelector("#online-main-fill");
-const onlineMainValue = document.querySelector("#online-main-value");
-const onlineSubLabel = document.querySelector("#online-sub-label");
-const onlineSubFill = document.querySelector("#online-sub-fill");
-const onlineSubValue = document.querySelector("#online-sub-value");
+const streamActions = document.querySelector("#stream-actions");
+const streamStatus = document.querySelector("#stream-status");
+const streamProgress = document.querySelector("#stream-progress");
+const streamMainLabel = document.querySelector("#stream-main-label");
+const streamMainFill = document.querySelector("#stream-main-fill");
+const streamMainValue = document.querySelector("#stream-main-value");
+const streamSubLabel = document.querySelector("#stream-sub-label");
+const streamSubFill = document.querySelector("#stream-sub-fill");
+const streamSubValue = document.querySelector("#stream-sub-value");
 const ocrRawText = document.querySelector("#ocr-raw-text");
 const cleanText = document.querySelector("#clean-text");
 const punctuatedText = document.querySelector("#punctuated-text");

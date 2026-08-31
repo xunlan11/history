@@ -76,8 +76,8 @@ async def extract_cover_candidate(document: UploadFile = File(...)):
     return JSONResponse(candidate)
 
 
-@app.post("/ocr/batch")
-async def submit_batch(
+@app.post("/ocr/stream")
+async def submit_stream(
     background_tasks: BackgroundTasks,
     document: UploadFile = File(...),
     documentId: str = Form(""),
@@ -92,20 +92,20 @@ async def submit_batch(
         "documentId": documentId,
         "title": title or document.filename,
         "status": "排队中",
-        "message": "任务已接收，等待整本识别。",
+        "message": "任务已接收，等待逐页识别。",
         "totalPages": 0,
         "pages": [],
         "sourceFileName": document.filename,
         "sourcePath": str(source_path),
     }
     save_task(task)
-    background_tasks.add_task(process_batch_task, task_id)
+    background_tasks.add_task(process_stream_task, task_id)
 
     return JSONResponse(public_task(task))
 
 
-@app.get("/ocr/batch/{task_id}")
-def get_batch(task_id: str):
+@app.get("/ocr/stream/{task_id}")
+def get_stream(task_id: str):
     task = load_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -128,7 +128,7 @@ async def save_task_source(upload: UploadFile, task_dir: Path) -> Path:
     return path
 
 
-def process_batch_task(task_id: str) -> None:
+def process_stream_task(task_id: str) -> None:
     task = load_task(task_id)
     if not task:
         return
@@ -151,7 +151,7 @@ def process_batch_task(task_id: str) -> None:
         task["currentPageStage"] = "已完成"
         task["currentPageProgress"] = 100
         task["status"] = "已完成"
-        task["message"] = "整本处理完成，请回到平台刷新结果。"
+        task["message"] = "逐页处理完成，请回到平台查看结果。"
     except Exception as exc:  # noqa: BLE001
         task["status"] = "处理失败"
         task["message"] = f"处理失败：{exc}"
@@ -164,7 +164,7 @@ def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], in
         return process_pdf(path, task_id)
 
     page_path = copy_image_to_page(path, task_id, 1)
-    set_batch_progress(
+    set_stream_progress(
         task_id,
         completed_pages=0,
         total_pages=1,
@@ -178,8 +178,8 @@ def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], in
         task_id=task_id,
         on_progress=make_page_progress_callback(task_id, 1, 1),
     )
-    set_batch_pages(task_id, [result])
-    set_batch_progress(
+    set_stream_pages(task_id, [result])
+    set_stream_progress(
         task_id,
         completed_pages=1,
         total_pages=1,
@@ -204,7 +204,7 @@ def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
 
     try:
         for index, page in enumerate(doc, start=1):
-            set_batch_progress(
+            set_stream_progress(
                 task_id,
                 completed_pages=index - 1,
                 total_pages=total_pages,
@@ -224,8 +224,8 @@ def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
                 )
             )
             # 每页识别完成后增量写回，前端可边轮询边把已识别页交给大模型整理。
-            set_batch_pages(task_id, pages)
-            set_batch_progress(
+            set_stream_pages(task_id, pages)
+            set_stream_progress(
                 task_id,
                 completed_pages=index,
                 total_pages=total_pages,
@@ -607,21 +607,7 @@ def parse_paddle_result(raw: Any) -> list[dict[str, Any]]:
 
 
 def _parse_paddle_page(page_result: Any) -> list[dict[str, Any]]:
-    """解析一页的识别结果，兼容 paddleocr 2.x 与 3.x 两种返回格式。"""
-    # paddleocr 2.x 旧格式：[[points, (text, score)], ...]
-    if (
-        isinstance(page_result, (list, tuple))
-        and page_result
-        and _is_legacy_line(page_result[0])
-    ):
-        lines: list[dict[str, Any]] = []
-        for line in page_result or []:
-            parsed = parse_paddle_line(line)
-            if parsed:
-                lines.append(parsed)
-        return lines
-
-    # paddleocr 3.x：OCRResult.json = {"res": {"rec_texts": [...], ...}}
+    """解析 PaddleOCR 3.x 的单页 OCRResult。"""
     data = _extract_ocr3_data(page_result)
     if not data:
         return []
@@ -647,29 +633,16 @@ def _parse_paddle_page(page_result: Any) -> list[dict[str, Any]]:
     return lines
 
 
-def _is_legacy_line(value: Any) -> bool:
-    """判断是否为 paddleocr 2.x 的行格式：[points, (text, score)]。"""
-    return (
-        isinstance(value, (list, tuple))
-        and len(value) >= 2
-        and isinstance(value[0], (list, tuple))
-    )
-
-
 def _extract_ocr3_data(result: Any) -> dict[str, Any] | None:
     """从 paddleocr 3.x 的 OCRResult 中提取 res 数据字典。"""
     js = getattr(result, "json", None)
     if callable(js):
         js = js()
-    elif isinstance(result, dict):
-        js = result
     if not isinstance(js, dict):
         return None
     res = js.get("res")
     if isinstance(res, dict) and _has_ocr3_fields(res):
         return res
-    if _has_ocr3_fields(js):
-        return js
     return None
 
 
@@ -684,36 +657,9 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def parse_paddle_line(line: Any) -> dict[str, Any] | None:
-    if not line or not isinstance(line, (list, tuple)) or len(line) < 2:
-        return None
-
-    points = normalize_points(line[0])
-    text_score = line[1]
-    if not isinstance(text_score, (list, tuple)) or len(text_score) < 2:
-        return None
-
-    text = str(text_score[0]).strip()
-    if not text:
-        return None
-
-    try:
-        confidence = float(text_score[1])
-    except (TypeError, ValueError):
-        confidence = None
-
-    bbox = bbox_from_points(points)
-    return {
-        "text": text,
-        "confidence": confidence,
-        "points": points,
-        "bbox": bbox,
-    }
-
-
 def normalize_points(value: Any) -> list[list[float]]:
     points: list[list[float]] = []
-    # 兼容 numpy 数组（paddleocr 3.x 内部可能返回 ndarray）
+    # PaddleOCR 3.x 的多边形坐标可能是 ndarray。
     try:
         import numpy as np
 
@@ -1531,7 +1477,7 @@ def report_progress(callback: Any, stage: str, progress: int) -> None:
 
 def make_page_progress_callback(task_id: str, page_number: int, total_pages: int):
     def on_progress(stage: str, progress: int) -> None:
-        set_batch_progress(
+        set_stream_progress(
             task_id,
             completed_pages=page_number - 1,
             total_pages=total_pages,
@@ -1543,7 +1489,7 @@ def make_page_progress_callback(task_id: str, page_number: int, total_pages: int
     return on_progress
 
 
-def set_batch_progress(
+def set_stream_progress(
     task_id: str,
     completed_pages: int,
     total_pages: int,
@@ -1565,7 +1511,7 @@ def set_batch_progress(
     save_task(task)
 
 
-def set_batch_pages(task_id: str, pages: list[dict[str, Any]]) -> None:
+def set_stream_pages(task_id: str, pages: list[dict[str, Any]]) -> None:
     task = load_task(task_id)
     if not task:
         return

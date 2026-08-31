@@ -823,8 +823,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
-    { name = "paddleocr" },
-    { name = "paddlepaddle" },
+    { name = "paddleocr", specifier = "==3.7.0" },
+    { name = "paddlepaddle", specifier = "==3.3.1" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pymupdf" },

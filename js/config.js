@@ -1,6 +1,6 @@
-const STORAGE_KEY = "modernMilitaryHistory.documents.v2";
-const LEGACY_STORAGE_KEY = "modernMilitaryHistory.documents.v1";
-const FONT_STORAGE_KEY = "modernMilitaryHistory.font.v1";
+const STORAGE_KEY = "modernMilitaryHistory.documents.schema3";
+const FONT_STORAGE_KEY = "modernMilitaryHistory.font.schema3";
+const DATA_SCHEMA_VERSION = 3;
 const HISTORY_BASE = "/history";
 
 function endpoint(proxiedPath) {
@@ -9,7 +9,7 @@ function endpoint(proxiedPath) {
 
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
 const OCR_COVER_SERVICE_URL = endpoint("/ocr/ocr/cover-candidate");
-const OCR_BATCH_SERVICE_URL = endpoint("/ocr/ocr/batch");
+const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");

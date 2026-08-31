@@ -22,7 +22,7 @@ BRANCH_NAME = os.getenv("VERSION_BRANCH", "")
 RELEASES_DIR = Path(os.getenv("VERSION_RELEASES_DIR", REPO_DIR / ".deploy" / "releases")).resolve()
 CURRENT_LINK = Path(os.getenv("VERSION_CURRENT_LINK", REPO_DIR / ".deploy" / "current")).resolve()
 BUILD_COMMAND = os.getenv("VERSION_BUILD_COMMAND", "").strip()
-HEALTH_PATH = os.getenv("VERSION_HEALTH_PATH", "index.html").strip()
+HEALTH_PATH = os.getenv("VERSION_HEALTH_PATH", "html/index.html").strip()
 
 app = FastAPI(title="近代军史数智平台版本更新服务")
 

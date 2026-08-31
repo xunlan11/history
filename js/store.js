@@ -1,9 +1,9 @@
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.v1";
-const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.v1";
-const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.v1";
-const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.v1";
-const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.v1";
+const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.schema3";
+const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.schema3";
+const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.schema3";
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.schema3";
+const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.schema3";
 const SYNC_INTERVAL_MS = 30000;
 
 let documents = normalizeDocuments(loadCachedDocuments());
@@ -23,56 +23,68 @@ let deletedConversationIds = loadCachedIdSet(DELETED_CONVERSATION_IDS_STORAGE_KE
 
 function loadCachedDocuments() {
   try {
-    const current = localStorage.getItem(STORAGE_KEY);
-    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-    return JSON.parse(current || legacy) || [];
+    const items = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    return Array.isArray(items) ? items : [];
   } catch {
     return [];
   }
 }
 
 function normalizeDocuments(items) {
-  return items.map((item, index) => {
-    const pages = Array.isArray(item.pages) && item.pages.length
-      ? item.pages
-      : [createPage(1, { cleanText: item.ocrText || "" })];
+  return items
+    .filter((item) => item?.id && Array.isArray(item.pages))
+    .map((item, index) => {
+      const normalized = {
+        id: item.id,
+        title: item.title || "",
+        author: item.author || "",
+        year: item.year || "",
+        publisher: item.publisher || "",
+        tags: item.tags || "",
+        fileName: item.fileName || "",
+        fileType: item.fileType || "unknown",
+        fileSize: Number(item.fileSize) || 0,
+        filePath: item.filePath || "",
+        fileUrl: item.fileUrl || "",
+        fileHash: item.fileHash || "",
+        fileMimeType: item.fileMimeType || "",
+        sourceFile: item.sourceFile || null,
+        metadataStatus: item.metadataStatus || "待自动识别",
+        coverImageDataUrl: item.coverImageDataUrl || "",
+        coverImageUrl: item.coverImageUrl || "",
+        coverImageFile: item.coverImageFile || null,
+        coverVariant: normalizeCoverVariant(item.coverVariant, index),
+        coverStatus: item.coverStatus || "待识别封面",
+        processingTask: normalizeProcessingTask(item.processingTask),
+        createdAt: item.createdAt || "",
+        updatedAt: item.updatedAt || "",
+        status: item.status || "待整理",
+        pages: item.pages
+          .filter((page) => page?.id)
+          .map((page) => ({
+            id: page.id,
+            pageNumber: Number(page.pageNumber),
+            ocrText: page.ocrText || "",
+            cleanText: page.cleanText || "",
+            punctuatedText: page.punctuatedText || "",
+            notes: page.notes || "",
+            status: page.status || "待整理",
+            imageDataUrl: page.imageDataUrl || "",
+            imageUrl: page.imageUrl || "",
+            imageName: page.imageName || "",
+            imageFile: page.imageFile || null,
+            imageHash: page.imageHash || "",
+            imageMimeType: page.imageMimeType || "",
+            imageSize: Number(page.imageSize) || 0,
+            ocr: page.ocr || null,
+            updatedAt: page.updatedAt || "",
+          }))
+          .sort((a, b) => a.pageNumber - b.pageNumber),
+      };
 
-    const normalized = {
-      ...item,
-      title: item.title || "",
-      author: item.author || "",
-      year: item.year || "",
-      publisher: item.publisher || "",
-      tags: item.tags || "",
-      metadataStatus: item.metadataStatus || "待自动识别",
-      coverImageDataUrl: item.coverImageDataUrl || "",
-      coverVariant: normalizeCoverVariant(item.coverVariant, index),
-      coverStatus: item.coverStatus || "待识别封面",
-      processMode: item.processMode || "online",
-      offlineTask: normalizeOfflineTask(item.offlineTask),
-      pages: pages
-        .map((page, index) => ({
-          id: page.id || newId(),
-          pageNumber: Number(page.pageNumber) || index + 1,
-          ocrText: page.ocrText || page.rawText || "",
-          cleanText: page.cleanText || page.text || "",
-          punctuatedText: page.punctuatedText || page.readingText || "",
-          text: page.cleanText || page.text || "",
-          notes: page.notes || "",
-          status: normalizePageStatus(page.status || (hasPageText(page) ? "已保存文字" : "待整理")),
-          imageDataUrl: page.imageDataUrl || "",
-          imageUrl: page.imageUrl || "",
-          imageName: page.imageName || "",
-          ocr: page.ocr || null,
-          updatedAt: page.updatedAt || item.updatedAt || item.createdAt || "",
-        }))
-        .sort((a, b) => a.pageNumber - b.pageNumber),
-    };
-
-    delete normalized.ocrText;
-    normalized.status = summarizeDocumentStatus(normalized);
-    return normalized;
-  });
+      normalized.status = summarizeDocumentStatus(normalized);
+      return normalized;
+    });
 }
 function loadCachedIdSet(key) {
   try {
@@ -137,10 +149,6 @@ function getClientId() {
   return clientId;
 }
 
-function hasLocalCacheData() {
-  return documents.length > 0 || conversations.length > 0;
-}
-
 function cacheCurrentState() {
   persistDocumentsCache();
   persistConversationsCache();
@@ -153,6 +161,10 @@ function persistDeletedIdCache() {
 }
 
 function applyServerState(payload) {
+  if (payload.schemaVersion !== DATA_SCHEMA_VERSION) {
+    throw new Error(`Data schema mismatch: expected ${DATA_SCHEMA_VERSION}, received ${payload.schemaVersion}`);
+  }
+
   const nextDocuments = normalizeDocuments(payload.documents || []);
   const nextConversations = normalizeConversations(payload.conversations || []);
 
@@ -178,21 +190,19 @@ function applyServerState(payload) {
 }
 
 function normalizeConversations(items) {
-  return items.map((item) => {
-    const fallbackDate = item.updatedAt || item.createdAt || new Date().toISOString();
-    return {
-      ...item,
+  return items
+    .filter((item) => item?.id)
+    .map((item) => ({
+      id: item.id,
+      title: item.title || "新对话",
       mode: item.mode || "chat",
-      locked: Boolean(item.locked || (item.title && item.title !== "新对话")),
-      createdAt: item.createdAt || fallbackDate,
-      updatedAt: item.updatedAt || fallbackDate,
-    };
-  });
+      locked: Boolean(item.locked),
+      createdAt: item.createdAt || "",
+      updatedAt: item.updatedAt || "",
+    }));
 }
 
 async function initializeServerData() {
-  const localHadData = hasLocalCacheData();
-
   try {
     const response = await fetch(DATA_BOOTSTRAP_URL);
     if (!response.ok) {
@@ -200,21 +210,14 @@ async function initializeServerData() {
     }
 
     const payload = await response.json();
-    const serverHasData = (payload.documents || []).length > 0 || (payload.conversations || []).length > 0;
-
     syncReady = true;
     if (syncDirty) {
       await pushServerSnapshot();
       return true;
     }
 
-    if (serverHasData || !localHadData) {
-      applyServerState(payload);
-      syncDirty = false;
-      return true;
-    }
-
-    await pushServerSnapshot();
+    applyServerState(payload);
+    syncDirty = false;
     return true;
   } catch (error) {
     syncReady = false;
@@ -487,21 +490,15 @@ function getDocumentDisplayTitle(item) {
   return item?.title || item?.fileName || "未命名文献";
 }
 
-function createPage(pageNumber, textLayers = "") {
-  const layers = typeof textLayers === "string"
-    ? { cleanText: textLayers }
-    : textLayers || {};
-  const initialText = layers.cleanText || layers.ocrText || layers.punctuatedText || "";
-
+function createPage(pageNumber) {
   return {
     id: newId(),
     pageNumber,
-    ocrText: layers.ocrText || "",
-    cleanText: layers.cleanText || "",
-    punctuatedText: layers.punctuatedText || "",
-    text: layers.cleanText || "",
+    ocrText: "",
+    cleanText: "",
+    punctuatedText: "",
     notes: "",
-    status: initialText ? "已保存文字" : "待整理",
+    status: "待整理",
     imageDataUrl: "",
     imageUrl: "",
     imageName: "",
@@ -548,7 +545,6 @@ function saveCurrentPage(statusOverride) {
   page.ocrText = ocrRawText.value.trim();
   page.cleanText = cleanText.value.trim();
   page.punctuatedText = punctuatedText.value.trim();
-  page.text = page.cleanText;
   page.notes = pageNotes.value.trim();
   page.status = statusOverride || (hasPageText(page) ? "已保存文字" : "待整理");
   page.updatedAt = new Date().toISOString();
@@ -607,19 +603,15 @@ function summarizeDocumentStatus(item) {
 }
 
 function normalizePageStatus(status) {
-  if (status === "待核对") {
-    return "已保存文字";
-  }
-
   return status || "待整理";
 }
 
 function hasPageText(page) {
-  return Boolean(page.ocrText || page.cleanText || page.punctuatedText || page.text);
+  return Boolean(page.ocrText || page.cleanText || page.punctuatedText);
 }
 
 function getPagePrimaryText(page) {
-  return page?.punctuatedText || page?.cleanText || page?.ocrText || page?.text || "";
+  return page?.punctuatedText || page?.cleanText || page?.ocrText || "";
 }
 
 function getPageSearchText(page) {
@@ -627,12 +619,11 @@ function getPageSearchText(page) {
     page?.ocrText,
     page?.cleanText,
     page?.punctuatedText,
-    page?.text,
     page?.notes,
   ].filter(Boolean).join("\n");
 }
 
-function createOfflineTask(file) {
+function createProcessingTask(file) {
   return {
     id: newId(),
     status: "提交中",
@@ -646,32 +637,36 @@ function createOfflineTask(file) {
     currentPageStage: "",
     currentPageProgress: 0,
     sourceFileName: file.name,
-    serviceUrl: OCR_BATCH_SERVICE_URL,
-    message: "正在提交给本机整本处理服务",
+    serviceUrl: OCR_STREAM_SERVICE_URL,
+    message: "正在提交逐页流式处理任务",
   };
 }
 
-function normalizeOfflineTask(task) {
+function normalizeProcessingTask(task) {
   if (!task) {
     return null;
   }
 
   return {
-    ...task,
+    id: task.id,
+    status: task.status || "提交中",
+    createdAt: task.createdAt || "",
+    submittedAt: task.submittedAt || "",
+    finishedAt: task.finishedAt || "",
+    remoteTaskId: task.remoteTaskId || "",
     totalPages: Number(task.totalPages) || 0,
     completedPages: Number(task.completedPages) || 0,
     currentPage: Number(task.currentPage) || 0,
     currentPageStage: task.currentPageStage || "",
     currentPageProgress: Number(task.currentPageProgress) || 0,
+    sourceFileName: task.sourceFileName || "",
+    serviceUrl: task.serviceUrl || OCR_STREAM_SERVICE_URL,
+    message: task.message || "",
   };
 }
 
-function getOfflineTaskLabel(item) {
-  if (item.processMode !== "offline") {
-    return "不适用";
-  }
-
-  const task = item.offlineTask;
+function getProcessingTaskLabel(item) {
+  const task = item.processingTask;
   if (!task) {
     return "等待处理";
   }
@@ -685,7 +680,10 @@ function getOfflineTaskLabel(item) {
   }
 
   if (total > 0 && (task.status === "已完成" || task.status === "已回填")) {
-    return `整本完成 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
+    if (finalized < total) {
+      return `识别完成 · 整理 ${finalized}/${total}`;
+    }
+    return `处理完成 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
   }
 
   return task.status || "等待处理";
@@ -695,21 +693,11 @@ function countFinalizedPages(item) {
   return item.pages.filter((page) => page.cleanText || page.status === "已生成整理稿").length;
 }
 
-function getOnlinePageProgress(item) {
-  const total = item.pages.length;
-  const processed = item.pages.filter((page) => hasPageText(page)).length;
-  return { processed, total };
+function getProcessingHelp() {
+  return "OCR 连续按页识别，大模型按页码顺序消费已有结果；OCR 无需等待大模型。";
 }
 
-function getProcessModeHelp(item) {
-  if (item.processMode === "offline") {
-    return "导入后由本机整本处理服务统一识别并回填整理文本。";
-  }
-
-  return "在整理工作台中逐页选择原图，并逐页自动识别、生成整理文本。";
-}
-
-function mergeBatchPages(item, incomingPages) {
+function mergeProcessingPages(item, incomingPages) {
   if (!Array.isArray(incomingPages) || !incomingPages.length) {
     return false;
   }
@@ -718,7 +706,7 @@ function mergeBatchPages(item, incomingPages) {
   let added = false;
 
   incomingPages.forEach((raw, index) => {
-    const incoming = normalizeBatchPage(raw, index);
+    const incoming = normalizeProcessingPage(raw, index);
     const existing = byNumber.get(incoming.pageNumber);
 
     if (existing) {
@@ -747,17 +735,16 @@ function mergeBatchPages(item, incomingPages) {
   return added;
 }
 
-function normalizeBatchPage(page, index) {
-  const text = page.ocrText || page.text || "";
+function normalizeProcessingPage(page, index) {
+  const text = page.text || "";
   const warnings = Array.isArray(page.warnings) ? page.warnings : [];
 
   return {
     id: page.id || newId(),
     pageNumber: Number(page.pageNumber) || index + 1,
     ocrText: text,
-    cleanText: page.cleanText || "",
-    punctuatedText: page.punctuatedText || "",
-    text: page.cleanText || "",
+    cleanText: "",
+    punctuatedText: "",
     notes: page.notes || "",
     status: normalizePageStatus(page.status || (text ? "已识别" : "待整理")),
     imageDataUrl: page.imageDataUrl || "",
@@ -765,7 +752,7 @@ function normalizeBatchPage(page, index) {
     imageName: page.imageName || `第 ${Number(page.pageNumber) || index + 1} 页`,
     ocr: {
       confidence: page.confidence ?? null,
-      engine: page.engine || "本机整本处理服务",
+      engine: page.engine || "本机逐页处理服务",
       preprocessing: page.preprocessing || null,
       layout: page.layout || null,
       warnings,

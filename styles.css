@@ -176,41 +176,11 @@ label {
   font-weight: 700;
 }
 
-fieldset {
+.form-help {
   margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-}
-
-legend {
   color: var(--muted);
   font-size: 13px;
-  font-weight: 700;
-  padding: 0 6px;
-}
-
-.mode-field {
-  display: grid;
-  gap: 8px;
-}
-
-.mode-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.radio-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--text);
-  font-weight: 400;
-}
-
-.radio-row input {
-  width: auto;
+  line-height: 1.6;
 }
 
 input,
@@ -512,7 +482,7 @@ button:focus-visible {
   line-height: 38px;
 }
 
-.offline-actions {
+.stream-actions {
   display: flex;
   gap: 12px;
   align-items: center;
@@ -652,7 +622,7 @@ mark {
   .action-row,
   .page-nav-row,
   .reader-nav-row,
-  .offline-actions,
+  .stream-actions,
   .page-add-row {
     align-items: stretch;
     flex-direction: column;
@@ -1314,7 +1284,7 @@ body {
   .action-row,
   .page-nav-row,
   .reader-nav-row,
-  .offline-actions,
+  .stream-actions,
   .page-add-row {
     align-items: stretch;
     flex-direction: column;

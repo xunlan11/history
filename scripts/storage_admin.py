@@ -87,6 +87,17 @@ def command_restore(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         with zipfile.ZipFile(archive_path) as archive:
+            if "manifest.json" not in archive.namelist():
+                print("Archive is missing manifest.json", file=sys.stderr)
+                return 1
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+            if manifest.get("schemaVersion") != data_service.SCHEMA_VERSION:
+                print(
+                    f"Backup schema {manifest.get('schemaVersion')} does not match current schema "
+                    f"{data_service.SCHEMA_VERSION}.",
+                    file=sys.stderr,
+                )
+                return 1
             safe_extract(archive, tmp_path)
 
         restored_db = tmp_path / "database" / "app.db"
@@ -144,6 +155,13 @@ def command_export_json(args: argparse.Namespace) -> int:
 def command_import_json(args: argparse.Namespace) -> int:
     input_path = Path(args.input).resolve()
     payload = json.loads(input_path.read_text(encoding="utf-8"))
+    if payload.get("schemaVersion") != data_service.SCHEMA_VERSION:
+        print(
+            f"JSON schema {payload.get('schemaVersion')} does not match current schema "
+            f"{data_service.SCHEMA_VERSION}.",
+            file=sys.stderr,
+        )
+        return 1
     timestamp = data_service.now_iso()
     with data_service.database() as connection:
         with connection:

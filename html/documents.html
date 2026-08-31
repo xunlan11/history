@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>文献库 · 近代军史数智平台</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="documents">
+    <div class="app-shell">
+      <main class="main">
+        <section class="view active" id="documents-view" aria-label="文献库">
+          <header class="documents-topbar">
+            <div class="documents-nav">
+              <button class="ghost-link" type="button" data-view="library">‹ 返回首页</button>
+            </div>
+            <div class="status-title">
+              <p class="eyebrow">文献库</p>
+            </div>
+            <span class="documents-count" id="all-document-count">0 项在库</span>
+          </header>
+
+          <section class="shelf-stage documents-stage" aria-label="书架">
+            <div class="document-list" id="all-document-list"></div>
+          </section>
+
+          <footer class="documents-bottombar" aria-label="文献库操作栏">
+            <p class="documents-hint">长按文献可换序或删除</p>
+          </footer>
+        </section>
+      </main>
+    </div>
+
+    <div class="confirm-dialog hidden" id="delete-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-conversation-title">
+      <div class="confirm-card">
+        <h2 id="delete-conversation-title">删除文献</h2>
+        <p id="delete-conversation-message">确定删除吗？</p>
+        <div class="confirm-actions">
+          <button class="secondary-button" id="cancel-delete-conversation" type="button">取消</button>
+          <button class="danger-button" id="confirm-delete-conversation" type="button">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-sheet hidden" id="document-form-sheet" role="dialog" aria-modal="true" aria-labelledby="add-document-title">
+      <form class="panel form-panel" id="document-form">
+        <div class="section-heading">
+          <h3 id="add-document-title">新增文献</h3>
+          <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
+        </div>
+        <label class="file-picker-row">
+          <span class="sr-only">选择 PDF 或图片文件</span>
+          <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
+        </label>
+        <section class="info-field" aria-labelledby="document-info-title">
+          <div class="info-field-heading">
+            <span id="document-info-title">信息</span>
+            <span>可留空，会自动识别</span>
+          </div>
+          <label>
+            文献名
+            <input id="title-input" name="title" type="text" />
+          </label>
+          <div class="field-grid metadata-grid">
+            <label>
+              著者
+              <input id="author-input" name="author" type="text" />
+            </label>
+            <label>
+              出版社
+              <input id="publisher-input" name="publisher" type="text" />
+            </label>
+            <label>
+              年份
+              <input id="year-input" name="year" type="text" />
+            </label>
+          </div>
+        </section>
+        <label>
+          标签
+          <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
+        </label>
+        <p class="form-help">登记后 OCR 连续逐页识别，大模型按页码顺序跟进整理，两者流水推进。</p>
+        <button class="primary-button" type="submit">登记</button>
+      </form>
+    </div>
+
+    <template id="document-card-template">
+      <article class="book-card">
+        <button class="book-open select-document" type="button">
+          <span class="book-cover">
+            <span class="book-title"></span>
+            <span class="book-facts">
+              <span class="book-year"></span>
+              <span class="book-pages"></span>
+            </span>
+            <span class="book-author"></span>
+          </span>
+        </button>
+      </article>
+    </template>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/utils.js"></script>
+    <script src="../js/store.js"></script>
+    <script src="../js/dom.js"></script>
+    <script src="../js/render.js"></script>
+    <script src="../js/progress.js"></script>
+    <script src="../js/service.js"></script>
+    <script src="../js/ocr.js"></script>
+    <script src="../js/llm.js"></script>
+    <script src="../js/main.js"></script>
+  </body>
+</html>

@@ -20,23 +20,23 @@ document.querySelectorAll("[data-smart-mode]").forEach((button) => {
   });
 });
 
-document.querySelector("#close-document-form").addEventListener("click", closeDocumentForm);
+document.querySelector("#close-document-form")?.addEventListener("click", closeDocumentForm);
 
-formSheet.addEventListener("click", (event) => {
+formSheet?.addEventListener("click", (event) => {
   if (event.target === formSheet) {
     closeDocumentForm();
   }
 });
 
-deleteConversationDialog.addEventListener("click", (event) => {
+deleteConversationDialog?.addEventListener("click", (event) => {
   if (event.target === deleteConversationDialog) {
     closeDeleteConversationDialog();
   }
 });
 
-cancelDeleteConversation.addEventListener("click", closeDeleteConversationDialog);
+cancelDeleteConversation?.addEventListener("click", closeDeleteConversationDialog);
 
-confirmDeleteConversation.addEventListener("click", () => {
+confirmDeleteConversation?.addEventListener("click", () => {
   if (pendingDeleteDocumentId) {
     deleteDocument(pendingDeleteDocumentId);
     pendingDeleteDocumentId = null;
@@ -60,12 +60,12 @@ confirmDeleteConversation.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !deleteConversationDialog.classList.contains("hidden")) {
+  if (event.key === "Escape" && deleteConversationDialog && !deleteConversationDialog.classList.contains("hidden")) {
     closeDeleteConversationDialog();
   }
 });
 
-newConversationButton.addEventListener("click", () => {
+newConversationButton?.addEventListener("click", () => {
   createConversation("新对话", selectedSmartMode);
   searchInput.value = "";
   chronicleTopic.value = "";
@@ -74,11 +74,11 @@ newConversationButton.addEventListener("click", () => {
   searchInput.focus();
 });
 
-document.querySelector("#jump-documents").addEventListener("click", () => {
+document.querySelector("#jump-documents")?.addEventListener("click", () => {
   setView("documents");
 });
 
-form.addEventListener("submit", (event) => {
+form?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(form);
   const file = formData.get("file");
@@ -102,8 +102,7 @@ form.addEventListener("submit", (event) => {
     fileName: file.name,
     fileType: file.type || "unknown",
     fileSize: file.size,
-    processMode: formData.get("processMode") || "offline",
-    offlineTask: null,
+    processingTask: createProcessingTask(file),
     createdAt: new Date().toISOString(),
     status: "待整理",
     pages: [firstPage],
@@ -112,43 +111,20 @@ form.addEventListener("submit", (event) => {
   documents.unshift(item);
   selectedDocumentId = item.id;
   selectedPageId = firstPage.id;
-  archiveDocumentSource(item, file);
-  detectDocumentCover(item, file);
-
-  if (item.processMode === "offline") {
-    item.offlineTask = createOfflineTask(file);
-    item.status = "提交整本处理中";
-    persist();
-    form.reset();
-    closeDocumentForm();
-    renderAll();
-    setView("workspace");
-    submitOfflineTask(item, file);
-    return;
-  }
-
-  if (file.type.startsWith("image/")) {
-    readImageFile(file, (image) => {
-      firstPage.imageDataUrl = image.dataUrl;
-      firstPage.imageName = file.name;
-      firstPage.updatedAt = new Date().toISOString();
-      persist();
-      form.reset();
-      closeDocumentForm();
-      renderAll();
-      setView("workspace");
-    });
-    return;
-  }
-
+  item.status = "提交逐页处理中";
   persist();
   form.reset();
   closeDocumentForm();
   renderAll();
+  await Promise.allSettled([
+    archiveDocumentSource(item, file),
+    detectDocumentCover(item, file),
+    submitProcessingTask(item, file),
+  ]);
   setView("workspace");
 });
 
-document.querySelector("#add-page").addEventListener("click", () => {
+document.querySelector("#add-page")?.addEventListener("click", () => {
   const item = getSelectedDocument();
   if (!item) {
     return;
@@ -170,33 +146,33 @@ document.querySelector("#add-page").addEventListener("click", () => {
   renderAll();
 });
 
-document.querySelector("#save-ocr").addEventListener("click", () => {
+document.querySelector("#save-ocr")?.addEventListener("click", () => {
   if (saveCurrentPage()) {
     renderAll();
   }
 });
 
-document.querySelector("#copy-ocr-to-clean").addEventListener("click", () => {
+document.querySelector("#copy-ocr-to-clean")?.addEventListener("click", () => {
   cleanText.value = ocrRawText.value.trim();
   cleanText.focus();
 });
 
-document.querySelector("#copy-clean-to-punctuated").addEventListener("click", () => {
+document.querySelector("#copy-clean-to-punctuated")?.addEventListener("click", () => {
   punctuatedText.value = cleanText.value.trim();
   punctuatedText.focus();
 });
 
-document.querySelector("#prev-page").addEventListener("click", () => {
+document.querySelector("#prev-page")?.addEventListener("click", () => {
   saveCurrentPage();
   moveToAdjacentPage(-1);
 });
 
-document.querySelector("#next-page").addEventListener("click", () => {
+document.querySelector("#next-page")?.addEventListener("click", () => {
   saveCurrentPage();
   moveToAdjacentPage(1);
 });
 
-document.querySelector("#save-next").addEventListener("click", () => {
+document.querySelector("#save-next")?.addEventListener("click", () => {
   const item = getSelectedDocument();
 
   if (!item || !saveCurrentPage()) {
@@ -237,11 +213,10 @@ editDocumentButton?.addEventListener("click", () => {
     return;
   }
 
-  renderAll();
   setView("workspace");
 });
 
-pageImageInput.addEventListener("change", () => {
+pageImageInput?.addEventListener("change", () => {
   const item = getSelectedDocument();
   const page = getSelectedPage();
   const file = pageImageInput.files[0];
@@ -261,18 +236,18 @@ pageImageInput.addEventListener("change", () => {
   });
 });
 
-document.querySelector("#recognize-page").addEventListener("click", recognizeCurrentPage);
-document.querySelector("#generate-punctuated").addEventListener("click", generatePunctuatedText);
-document.querySelector("#generate-final-text").addEventListener("click", generateFinalText);
+document.querySelector("#recognize-page")?.addEventListener("click", recognizeCurrentPage);
+document.querySelector("#generate-punctuated")?.addEventListener("click", generatePunctuatedText);
+document.querySelector("#generate-final-text")?.addEventListener("click", generateFinalText);
 generateDocumentTextButton?.addEventListener("click", generateDocumentFinalText);
-document.querySelector("#refresh-offline").addEventListener("click", refreshOfflineTask);
-document.querySelector("#smart-send").addEventListener("click", runSelectedSmartMode);
+document.querySelector("#refresh-stream")?.addEventListener("click", refreshProcessingTask);
+document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
 const exportPdfButton = document.querySelector("#export-pdf");
 if (exportPdfButton) {
   exportPdfButton.addEventListener("click", exportPdf);
 }
 
-searchInput.addEventListener("keydown", (event) => {
+searchInput?.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     runSelectedSmartMode();
@@ -294,6 +269,9 @@ function runSelectedSmartMode() {
 }
 
 function renderSmartModeButtons() {
+  if (!searchInput) {
+    return;
+  }
   const conversation = getSelectedConversation();
   const lockedMode = conversation?.locked ? conversation.mode : "";
 
@@ -544,29 +522,32 @@ function moveToReaderPageIndex(value) {
 
 async function initializeApplication() {
   await initializeServerData();
+  applyRouteSelection();
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
   renderAll();
   renderSmartModeButtons();
-  resumePendingOfflineTasks();
+  if (document.body.dataset.page === "documents" && new URL(window.location.href).searchParams.get("new") === "1") {
+    openDocumentForm();
+    const url = new URL(window.location.href);
+    url.searchParams.delete("new");
+    window.history.replaceState(null, "", url.href);
+  }
+  resumePendingProcessingTasks();
   startPeriodicSync();
 }
 
-function resumePendingOfflineTasks() {
+function resumePendingProcessingTasks() {
   documents.forEach((item) => {
-    if (item.processMode !== "offline") {
+    if (isProcessingTaskPending(item)) {
+      startProcessingPolling(item);
       return;
     }
 
-    if (isOfflineTaskPending(item)) {
-      startOfflinePolling(item);
-      return;
-    }
-
-    const task = item.offlineTask;
+    const task = item.processingTask;
     if (task && ["已完成", "已回填"].includes(task.status)) {
-      // OCR 已完成但大模型整理未完成时，恢复前端流水线。
-      enqueueNewOfflinePages(item);
-      maybeFinishOfflinePipeline(item);
+      // OCR 已完成但大模型整理未完成时，恢复逐页流水线。
+      enqueueNewProcessingPages(item);
+      maybeFinishProcessingPipeline(item);
     }
   });
 }

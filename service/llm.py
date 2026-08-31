@@ -51,10 +51,16 @@ class PunctuateRequest(LlmTaskRequest):
     sourceLayer: Literal["ocr", "clean", "punctuated"] = "clean"
 
 
+class PreviousPageContext(BaseModel):
+    pageNumber: int | None = None
+    text: str = ""
+
+
 class FinalizePageRequest(LlmTaskRequest):
     ocrText: str = ""
     cleanText: str = ""
     punctuatedText: str = ""
+    previousPages: list[PreviousPageContext] = Field(default_factory=list)
 
 
 class ExtractEventsRequest(LlmTaskRequest):
@@ -209,6 +215,11 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 @app.post("/llm/finalize-page")
 def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
     source_text = payload.punctuatedText or payload.cleanText or payload.ocrText
+    previous_pages = "\n\n".join(
+        f"第 {page.pageNumber or '?'} 页：\n{page.text}"
+        for page in payload.previousPages
+        if page.text.strip()
+    ) or "无"
     prompt = f"""
 /no_think
 请将一页近代军史文献 OCR 文本整理成一版可继续人工编辑的正文。
@@ -220,7 +231,8 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 4. 保留原文意思和专名信息，不增补史实，不改写为摘要。
 5. 如果 OCR 原始录文来自竖排古籍，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
 6. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
-7. 输出必须是 JSON，不要输出解释文字。
+7. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
+8. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
@@ -232,6 +244,9 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 页码：{payload.pageNumber or ""}
 文献信息：
 {format_metadata(payload.metadata)}
+
+前页整理文本（仅作上下文）：
+{previous_pages}
 
 OCR 原始录文：
 {payload.ocrText}

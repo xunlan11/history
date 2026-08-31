@@ -86,8 +86,8 @@ async function generateFinalText(options = {}) {
   }
 
   setLlmTaskStatus("正在生成整理稿...");
-  startOnlinePageStage(page, "生成整理文本中", 65);
-  renderOnlineProgress(item);
+  startPageStage(page, "生成整理文本中", 65);
+  renderStreamProgress(item);
 
   try {
     const result = await requestFinalTextForPage(item, page);
@@ -109,8 +109,8 @@ async function generateFinalText(options = {}) {
       alert("暂时无法调用大模型服务。请确认 Qwen3-8B 和大模型统一接口已启动。");
     }
   } finally {
-    finishOnlinePageStage(page);
-    renderOnlineProgress(item);
+    finishPageStage(page);
+    renderStreamProgress(item);
   }
 }
 
@@ -148,8 +148,8 @@ async function generateDocumentFinalText() {
       item.status = summarizeDocumentStatus(item);
       renderAll();
       setLlmTaskStatus(`正在生成 ${completed + 1}/${pages.length}`);
-      startOnlinePageStage(page, "生成整理文本中", 65);
-      renderOnlineProgress(item);
+      startPageStage(page, "生成整理文本中", 65);
+      renderStreamProgress(item);
 
       try {
         const result = await requestFinalTextForPage(item, page);
@@ -165,8 +165,8 @@ async function generateDocumentFinalText() {
         failed += 1;
       }
 
-      finishOnlinePageStage(page);
-      renderOnlineProgress(item);
+      finishPageStage(page);
+      renderStreamProgress(item);
       item.status = summarizeDocumentStatus(item);
       item.updatedAt = new Date().toISOString();
       persist();
@@ -180,21 +180,31 @@ async function generateDocumentFinalText() {
 }
 
 async function requestFinalTextForPage(item, page) {
+  const previousPages = item.pages
+    .filter((candidate) => candidate.pageNumber < page.pageNumber)
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .filter((candidate) => candidate.cleanText || candidate.punctuatedText)
+    .slice(-2)
+    .map((candidate) => ({
+      pageNumber: candidate.pageNumber,
+      text: candidate.punctuatedText || candidate.cleanText,
+    }));
+
   return requestLlmTask("/finalize-page", {
     documentId: item.id,
     pageId: page.id,
     pageNumber: page.pageNumber,
     metadata: buildLlmMetadata(item),
     ocrText: page.ocrText || "",
-    cleanText: page.cleanText || page.text || "",
+    cleanText: page.cleanText || "",
     punctuatedText: page.punctuatedText || "",
+    previousPages,
   });
 }
 
 function applyFinalTextResult(item, page, result) {
   if (result.cleanText) {
     page.cleanText = result.cleanText.trim();
-    page.text = page.cleanText;
   }
 
   if (result.punctuatedText) {

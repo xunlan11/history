@@ -4,6 +4,13 @@ let documentDragState = null;
 let suppressDocumentClickUntil = 0;
 let readerReturnView = "library";
 
+const PAGE_ROUTES = {
+  library: "index.html",
+  documents: "documents.html",
+  reader: "reader.html",
+  workspace: "workspace.html",
+};
+
 function setReaderReturnView(name) {
   readerReturnView = name === "documents" ? "documents" : "library";
 }
@@ -13,22 +20,59 @@ function returnFromReader() {
 }
 
 function setView(name) {
-  Object.entries(views).forEach(([key, node]) => {
-    if (!node) {
-      return;
-    }
-
-    node.classList.toggle("active", key === name);
-  });
-
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === name);
-  });
-
-  const title = document.querySelector("#view-title");
-  if (title && viewTitles[name]) {
-    title.textContent = viewTitles[name];
+  const route = PAGE_ROUTES[name];
+  if (!route) {
+    return;
   }
+
+  const url = new URL(route, window.location.href);
+  if ((name === "reader" || name === "workspace") && selectedDocumentId) {
+    url.searchParams.set("document", selectedDocumentId);
+  }
+  if ((name === "reader" || name === "workspace") && selectedPageId) {
+    url.searchParams.set("page", selectedPageId);
+  }
+
+  const currentFrom = new URL(window.location.href).searchParams.get("from");
+  const returnView = name === "reader" ? readerReturnView : currentFrom;
+  if ((name === "reader" || name === "workspace") && returnView === "documents") {
+    url.searchParams.set("from", "documents");
+  }
+
+  window.location.assign(url.href);
+}
+
+function applyRouteSelection() {
+  const params = new URL(window.location.href).searchParams;
+  const documentId = params.get("document");
+  const pageId = params.get("page");
+
+  if (documentId && documents.some((item) => item.id === documentId)) {
+    selectedDocumentId = documentId;
+  }
+
+  const item = getSelectedDocument();
+  if (pageId && item?.pages.some((page) => page.id === pageId)) {
+    selectedPageId = pageId;
+  } else if (item) {
+    ensureSelectedPage(item);
+  }
+
+  setReaderReturnView(params.get("from") === "documents" ? "documents" : "library");
+}
+
+function syncSelectionToUrl() {
+  const pageName = document.body.dataset.page;
+  if (!['reader', 'workspace'].includes(pageName) || !selectedDocumentId) {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("document", selectedDocumentId);
+  if (selectedPageId) {
+    url.searchParams.set("page", selectedPageId);
+  }
+  window.history.replaceState(null, "", url.href);
 }
 
 function renderAll() {
@@ -41,9 +85,13 @@ function renderAll() {
   if (typeof renderSmartModeButtons === "function") {
     renderSmartModeButtons();
   }
+  syncSelectionToUrl();
 }
 
 function renderConversationList() {
+  if (!conversationList) {
+    return;
+  }
   conversationList.innerHTML = "";
 
   if (!conversations.length) {
@@ -156,6 +204,9 @@ function createConversationDateHeading(label) {
 }
 
 function renderActiveConversation() {
+  if (!chatTitle || !chatHint) {
+    return;
+  }
   const conversation = getSelectedConversation();
 
   chatTitle.textContent = conversation?.title || "新对话";
@@ -198,6 +249,9 @@ function renderBookShelf(listNode, countNode) {
 }
 
 function createBookCard(item, index) {
+  if (!cardTemplate) {
+    return document.createDocumentFragment();
+  }
   const node = cardTemplate.content.cloneNode(true);
   const card = node.querySelector("article");
   const openButton = node.querySelector(".select-document");
@@ -226,8 +280,7 @@ function createBookCard(item, index) {
 
     selectedDocumentId = item.id;
     ensureSelectedPage(item);
-    setReaderReturnView(card.closest("#documents-view") ? "documents" : "library");
-    renderAll();
+    setReaderReturnView(document.body.dataset.page === "documents" ? "documents" : "library");
     setView("reader");
   };
 
@@ -522,12 +575,16 @@ function createAddBookCard() {
 }
 
 function openDocumentForm() {
+  if (!formSheet) {
+    window.location.assign(new URL("documents.html?new=1", window.location.href).href);
+    return;
+  }
   formSheet.classList.remove("hidden");
   document.querySelector("#file-input").focus();
 }
 
 function closeDocumentForm() {
-  formSheet.classList.add("hidden");
+  formSheet?.classList.add("hidden");
 }
 
 function renderReader() {
@@ -586,7 +643,7 @@ function renderReader() {
 }
 
 function getReaderTextLayer(page) {
-  return page?.punctuatedText || page?.cleanText || page?.text || page?.ocrText || "";
+  return page?.punctuatedText || page?.cleanText || page?.ocrText || "";
 }
 
 function renderReaderOriginal(page) {
@@ -628,6 +685,9 @@ function readerEmptyState(message) {
 }
 
 function renderDetail() {
+  if (!detailNode || !pageList) {
+    return;
+  }
   const item = getSelectedDocument();
   detailNode.innerHTML = "";
   pageList.innerHTML = "";
@@ -637,8 +697,8 @@ function renderDetail() {
     selectedPageStatus.textContent = "未选择页";
     originalPageStatus.textContent = "未选择页";
     recognizeStatus.textContent = "等待原图";
-    offlineActions.classList.add("hidden");
-    offlineStatus.textContent = "等待处理";
+    streamActions.classList.add("hidden");
+    streamStatus.textContent = "等待处理";
     pageCount.textContent = "0 页";
     ocrRawText.value = "";
     cleanText.value = "";
@@ -647,8 +707,7 @@ function renderDetail() {
     renderOriginalPreview(null);
     detailNode.append(emptyState("请先在文献库登记或打开一项文献"));
     pageList.append(emptyState("尚无页目"));
-    renderOfflineProgress(null);
-    renderOnlineProgress(null);
+    renderStreamProgress(null);
     return;
   }
 
@@ -656,15 +715,15 @@ function renderDetail() {
   const page = getSelectedPage();
 
   selectedStatus.textContent = item.status;
-  offlineActions.classList.toggle("hidden", item.processMode !== "offline");
-  offlineStatus.textContent = getOfflineTaskLabel(item);
+  streamActions.classList.toggle("hidden", !item.processingTask);
+  streamStatus.textContent = getProcessingTaskLabel(item);
   selectedPageStatus.textContent = page ? `第 ${page.pageNumber} 页 · ${page.status}` : "未选择页";
   originalPageStatus.textContent = page ? `第 ${page.pageNumber} 页` : "未选择页";
   recognizeStatus.textContent = getRecognizeStatusText(page);
   pageCount.textContent = `${item.pages.length} 页`;
   pageNumberInput.value = page?.pageNumber || nextPageNumber(item);
   ocrRawText.value = page?.ocrText || "";
-  cleanText.value = page?.cleanText || page?.text || "";
+  cleanText.value = page?.cleanText || "";
   punctuatedText.value = page?.punctuatedText || "";
   pageNotes.value = page?.notes || "";
   renderOriginalPreview(page);
@@ -678,9 +737,9 @@ function renderDetail() {
     ["封面识别", item.coverStatus || "待识别封面"],
     ["文件", item.fileName],
     ["文件类型", item.fileType],
-    ["处理方式", item.processMode === "offline" ? "离线整本处理" : "在线逐页整理"],
-    ["整本处理", getOfflineTaskLabel(item)],
-    ["处理说明", getProcessModeHelp(item)],
+    ["处理方式", "逐页流式处理"],
+    ["处理进度", getProcessingTaskLabel(item)],
+    ["处理说明", getProcessingHelp()],
     ["信息识别", item.metadataStatus || "待自动识别"],
     ["已建页目", `${item.pages.length} 页`],
   ];
@@ -696,8 +755,7 @@ function renderDetail() {
   });
 
   renderPageList(item);
-  renderOfflineProgress(item);
-  renderOnlineProgress(item);
+  renderStreamProgress(item);
 }
 
 function getRecognizeStatusText(page) {
@@ -761,6 +819,9 @@ function renderPageList(item) {
 }
 
 function renderSmartEmpty() {
+  if (!searchInput || !searchResults || !chronicleResults) {
+    return;
+  }
   if (searchInput.value.trim()) {
     return;
   }
@@ -769,6 +830,9 @@ function renderSmartEmpty() {
 }
 
 function clearSmartResults() {
+  if (!searchResults || !chronicleResults) {
+    return;
+  }
   searchResults.innerHTML = "";
   chronicleResults.innerHTML = "";
   searchResults.classList.remove("empty-result-list");

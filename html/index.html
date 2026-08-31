@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>近代军史数智平台</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="library">
+    <div class="app-shell">
+      <main class="main">
+        <section class="view active" id="library-view" aria-label="首页">
+          <header class="home-statusbar">
+            <div class="service-strip" aria-label="服务链接状态">
+              <span class="service-item service-item-version">
+                版本：<b id="version-service-status" class="service-warn">检查中</b>
+                <button class="status-action hidden" id="version-update-button" type="button">更新</button>
+              </span>
+              <span class="service-item">OCR：<b id="ocr-service-status" class="service-warn">未连接</b></span>
+              <span class="service-item service-item-llm">大模型：<b id="llm-service-status" class="service-warn">未连接</b></span>
+            </div>
+            <div class="status-title">
+              <p class="eyebrow">近代军史数智平台</p>
+            </div>
+            <div class="font-setting" aria-label="全局字体设置">
+              <span class="font-setting-label">字体</span>
+              <div class="font-options" role="group" aria-label="字体">
+                <button class="font-option" type="button" data-font-option="hei">黑体</button>
+                <button class="font-option" type="button" data-font-option="kai">楷体</button>
+              </div>
+            </div>
+          </header>
+
+          <div class="home-board">
+            <aside class="home-sidebar chat-sidebar" aria-label="对话记录">
+              <div class="sidebar-heading">
+                <h2>对话记录</h2>
+                <button class="ghost-link" id="new-conversation" type="button">新建 ＋</button>
+              </div>
+              <div class="conversation-list" id="conversation-list"></div>
+            </aside>
+
+            <div class="center-stack">
+              <section class="message-panel" aria-label="书库问答消息">
+                <div class="message-head">
+                  <h2 id="chat-title">新对话</h2>
+                  <span id="chat-hint">输入后在这里显示检索或编年结果</span>
+                </div>
+                <div class="message-scroll" id="message-feed">
+                  <div class="smart-results">
+                    <div class="result-list" id="search-results"></div>
+                    <div class="result-list" id="chronicle-results"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="smart-dock" id="smart-dock" aria-label="全文检索与史事编年">
+                <div class="smart-input-box">
+                  <label class="sr-only" for="search-input">输入检索词或编年主题</label>
+                  <textarea id="search-input" rows="3" placeholder="问书库：输入问题，系统会结合已整理文献回答"></textarea>
+                  <input id="chronicle-topic" type="hidden" />
+                  <div class="smart-actions">
+                    <button class="chip-button active" id="chat-button" type="button" data-smart-mode="chat">对话</button>
+                    <button class="chip-button" id="search-button" type="button" data-smart-mode="search">检索</button>
+                    <button class="chip-button" id="build-chronicle" type="button" data-smart-mode="chronicle">编年</button>
+                    <button class="round-send" id="smart-send" type="button" title="发送">↑</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="home-sidebar library-sidebar" aria-label="书库">
+              <div class="sidebar-heading">
+                <h2>文献库 <span class="sidebar-count" id="document-count">0 项在库</span></h2>
+                <button class="ghost-link" id="jump-documents" type="button">全部 ›</button>
+              </div>
+              <section class="shelf-stage" aria-label="书架">
+                <div class="document-list" id="document-list"></div>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="confirm-dialog hidden" id="delete-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-conversation-title">
+      <div class="confirm-card">
+        <h2 id="delete-conversation-title">删除内容</h2>
+        <p id="delete-conversation-message">确定删除吗？</p>
+        <div class="confirm-actions">
+          <button class="secondary-button" id="cancel-delete-conversation" type="button">取消</button>
+          <button class="danger-button" id="confirm-delete-conversation" type="button">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <template id="document-card-template">
+      <article class="book-card">
+        <button class="book-open select-document" type="button">
+          <span class="book-cover">
+            <span class="book-title"></span>
+            <span class="book-facts">
+              <span class="book-year"></span>
+              <span class="book-pages"></span>
+            </span>
+            <span class="book-author"></span>
+          </span>
+        </button>
+      </article>
+    </template>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/utils.js"></script>
+    <script src="../js/store.js"></script>
+    <script src="../js/dom.js"></script>
+    <script src="../js/render.js"></script>
+    <script src="../js/progress.js"></script>
+    <script src="../js/service.js"></script>
+    <script src="../js/ocr.js"></script>
+    <script src="../js/llm.js"></script>
+    <script src="../js/search.js"></script>
+    <script src="../js/chronicle.js"></script>
+    <script src="../js/main.js"></script>
+  </body>
+</html>
