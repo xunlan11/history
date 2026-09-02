@@ -78,6 +78,12 @@ function syncSelectionToUrl() {
 function renderAll() {
   renderConversationList();
   renderActiveConversation();
+  if (typeof renderReferenceDocuments === "function") {
+    renderReferenceDocuments();
+  }
+  if (typeof renderConversationAttachments === "function") {
+    renderConversationAttachments();
+  }
   renderDocumentList();
   renderReader();
   renderDetail();
@@ -123,7 +129,13 @@ function renderConversationList() {
     button.type = "button";
     title.textContent = item.title || "新对话";
     meta.className = "conversation-mode";
-    meta.textContent = getConversationModeLabel(item.mode);
+    const referenceCount = getConversationReferenceDocumentIds(item).length;
+    const attachmentCount = getConversationAttachments(item).length;
+    meta.textContent = [
+      getConversationModeLabel(item.mode),
+      referenceCount ? `${referenceCount} 篇` : "",
+      attachmentCount ? `${attachmentCount} 个文件` : "",
+    ].filter(Boolean).join(" · ");
     button.append(title, meta);
     button.addEventListener("click", () => {
       selectedConversationId = item.id;
@@ -134,6 +146,8 @@ function renderConversationList() {
       clearSmartResults();
       renderConversationList();
       renderActiveConversation();
+      renderReferenceDocuments();
+      renderConversationAttachments();
 
       if (!searchInput.value.trim()) {
         renderSmartEmpty();

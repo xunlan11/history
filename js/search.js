@@ -10,9 +10,10 @@ function runLiteralSearch(notice = "") {
     return;
   }
 
-  const results = documents.flatMap((item) => buildSearchEntries(item, query));
+  const results = getSmartScopeDocuments().flatMap((item) => buildSearchEntries(item, query));
+  const attachmentResults = buildConversationAttachmentLiteralEntries(query);
 
-  if (!results.length) {
+  if (!results.length && !attachmentResults.length) {
     renderSearchNotice("未找到匹配内容");
     return;
   }
@@ -52,6 +53,28 @@ function runLiteralSearch(notice = "") {
     result.append(content, action);
     searchResults.append(result);
   });
+
+  attachmentResults.forEach(({ attachment, chunkIndex, snippet }) => {
+    const result = document.createElement("article");
+    const content = document.createElement("div");
+    const title = document.createElement("h4");
+    const meta = document.createElement("p");
+    const excerpt = document.createElement("p");
+    const action = document.createElement("button");
+
+    result.className = "result-item";
+    title.textContent = attachment.fileName;
+    meta.textContent = `当前对话上传文件（快速读取） · 内容片段 ${chunkIndex + 1}`;
+    excerpt.innerHTML = highlight(snippet, query);
+    action.className = "secondary-button";
+    action.type = "button";
+    action.textContent = "打开文件";
+    action.disabled = !attachment.fileUrl;
+    action.addEventListener("click", () => openConversationAttachment(attachment));
+    content.append(title, meta, excerpt);
+    result.append(content, action);
+    searchResults.append(result);
+  });
 }
 
 async function runSearch() {
@@ -66,8 +89,18 @@ async function runSearch() {
     return;
   }
 
+  const contextReport = getConversationContextReport();
+  if (contextReport.error) {
+    renderSearchNotice(contextReport.error);
+    return;
+  }
+
   if (!isLlmServiceConnected()) {
-    runLiteralSearch("未连接大模型，已使用字面检索；异称、字号、别名可能无法召回。");
+    const notices = [
+      "未连接大模型，已使用字面检索；异称、字号、别名可能无法召回。",
+      ...contextReport.warnings,
+    ];
+    runLiteralSearch(notices.join(" "));
     return;
   }
 
@@ -84,7 +117,7 @@ async function runSearch() {
       query,
       documents: searchDocuments,
       options: {
-        source: "document-pages",
+        source: "conversation-context",
         maxMatches: 50,
         totalPageCount: countSearchPages(),
       },
@@ -99,7 +132,11 @@ async function runSearch() {
       return;
     }
 
-    renderLlmSearchResults(result.matches || [], result.warnings || [], query);
+    renderLlmSearchResults(
+      result.matches || [],
+      [...contextReport.warnings, ...(result.warnings || [])],
+      query,
+    );
   } catch (error) {
     if (runToken !== searchRunToken) {
       return;
@@ -126,7 +163,7 @@ function buildSearchEntries(item, query) {
   }
 
   item.pages.forEach((page) => {
-    const pageSnippet = buildSnippet(getPageSearchText(page), query);
+    const pageSnippet = buildSnippet(getSmartPageSearchText(page), query);
     if (pageSnippet) {
       entries.push({ item, page, snippet: pageSnippet });
     }
@@ -137,12 +174,14 @@ function buildSearchEntries(item, query) {
 
 function collectSearchDocumentsForLlm(query) {
   const records = [];
+  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(query, 12, 1600);
+  const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
 
-  documents.forEach((item, documentIndex) => {
+  getSmartScopeDocuments().forEach((item, documentIndex) => {
     const metadata = buildSearchMetadata(item);
 
     item.pages.forEach((page, pageIndex) => {
-      const text = getPageSearchText(page).trim();
+      const text = getSmartPageSearchText(page).trim();
       if (!text) {
         return;
       }
@@ -160,6 +199,7 @@ function collectSearchDocumentsForLlm(query) {
   const grouped = new Map();
   records
     .sort((a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex)
+    .slice(0, Math.max(20, 40 - attachmentPageCount))
     .forEach(({ item, page }) => {
       if (!grouped.has(item.id)) {
         grouped.set(item.id, {
@@ -177,12 +217,15 @@ function collectSearchDocumentsForLlm(query) {
       grouped.get(item.id).pages.push({
         pageId: page.id,
         pageNumber: page.pageNumber,
-        text: getPageSearchText(page).slice(0, 1600),
+        text: getSmartPageSearchText(page).slice(0, 1600),
         notes: (page.notes || "").slice(0, 400),
       });
     });
 
-  return Array.from(grouped.values()).filter((item) => item.pages.length);
+  return [
+    ...Array.from(grouped.values()).filter((item) => item.pages.length),
+    ...attachmentDocuments,
+  ];
 }
 
 function buildSearchMetadata(item) {
@@ -214,9 +257,10 @@ function scoreSearchTextForLlm(text, query) {
 }
 
 function countSearchPages() {
-  return documents.reduce((total, item) => {
-    return total + item.pages.filter((page) => getPageSearchText(page).trim()).length;
+  const documentPages = getSmartScopeDocuments().reduce((total, item) => {
+    return total + item.pages.filter((page) => getSmartPageSearchText(page).trim()).length;
   }, 0);
+  return documentPages + countConversationAttachmentChunks(searchInput.value.trim(), 12, 1600);
 }
 
 function renderSearchLoading() {
@@ -238,6 +282,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
 
   matches.forEach((match, index) => {
     const target = resolveSearchMatch(match);
+    const attachment = target?.attachment || null;
     const item = target?.item || {};
     const page = target?.page || null;
     const result = document.createElement("article");
@@ -249,11 +294,13 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
     const action = document.createElement("button");
 
     result.className = "result-item";
-    title.textContent = page
+    title.textContent = attachment
+      ? attachment.fileName
+      : page
       ? `${getDocumentDisplayTitle(item)} · 第 ${page.pageNumber} 页`
       : match.title || "匹配结果";
     meta.textContent = [
-      match.author || item.author || "著者未录",
+      attachment ? "当前对话上传文件（快速读取）" : match.author || item.author || "著者未录",
       match.year || item.year || "年份未录",
       match.matchedAs ? `按“${match.matchedAs}”匹配` : "",
       match.matchType || "",
@@ -263,10 +310,15 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
     reason.className = "meta-line";
     action.className = "secondary-button";
     action.type = "button";
-    action.textContent = "打开";
-    action.disabled = !target;
+    action.textContent = attachment ? "打开文件" : "打开";
+    action.disabled = !target || Boolean(attachment && !attachment.fileUrl);
     action.addEventListener("click", () => {
       if (!target) {
+        return;
+      }
+
+      if (attachment) {
+        openConversationAttachment(attachment);
         return;
       }
 
@@ -305,7 +357,8 @@ function resolveSearchMatch(match) {
       });
 
   if (!item) {
-    return null;
+    const attachment = findConversationAttachment(match.attachmentId || match.documentId, match.title);
+    return attachment ? { attachment, item: null, page: null } : null;
   }
 
   const page = match.pageId

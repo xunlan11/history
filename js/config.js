@@ -1,6 +1,6 @@
-const STORAGE_KEY = "modernMilitaryHistory.documents.schema3";
-const FONT_STORAGE_KEY = "modernMilitaryHistory.font.schema3";
-const DATA_SCHEMA_VERSION = 3;
+const STORAGE_KEY = "modernMilitaryHistory.documents.schema4";
+const FONT_STORAGE_KEY = "modernMilitaryHistory.font.schema4";
+const DATA_SCHEMA_VERSION = 4;
 const HISTORY_BASE = "/history";
 
 function endpoint(proxiedPath) {
@@ -15,6 +15,8 @@ const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
 const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
+const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
+const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
 const LLM_SERVICE_URL = endpoint("/llm/llm");
 const LLM_HEALTH_URL = endpoint("/llm/health");
 const VERSION_STATUS_URL = endpoint("/version/version");

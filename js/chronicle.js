@@ -1,5 +1,10 @@
 async function buildChronicle() {
   const topic = chronicleTopic.value.trim();
+  const contextReport = getConversationContextReport();
+  if (contextReport.error) {
+    renderChronicleNotice(contextReport.error);
+    return;
+  }
   const chronicleDocuments = collectChronicleDocumentsForLlm(topic);
   chronicleResults.innerHTML = "";
   chronicleResults.classList.remove("empty-result-list");
@@ -19,10 +24,9 @@ async function buildChronicle() {
   try {
     const result = await requestLlmTask("/chronicle", {
       topic,
-      events: [],
       documents: chronicleDocuments,
       options: {
-        source: "document-pages",
+        source: "conversation-context",
         maxEntries: 40,
         totalPageCount: countChroniclePagesForLlm(),
       },
@@ -33,7 +37,10 @@ async function buildChronicle() {
       return;
     }
 
-    renderChronicleLlmEntries(result.entries || [], result.warnings || []);
+    renderChronicleLlmEntries(
+      result.entries || [],
+      [...contextReport.warnings, ...(result.warnings || [])],
+    );
   } catch (error) {
     renderChronicleNotice("暂时无法调用大模型生成编年。");
   }
@@ -41,10 +48,12 @@ async function buildChronicle() {
 
 function collectChronicleDocumentsForLlm(topic) {
   const records = [];
+  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(topic, 10, 1800);
+  const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
 
-  documents.forEach((item, documentIndex) => {
+  getSmartScopeDocuments().forEach((item, documentIndex) => {
     item.pages.forEach((page, pageIndex) => {
-      const text = getPagePrimaryText(page).trim();
+      const text = getSmartPagePrimaryText(page).trim();
       if (!text) {
         return;
       }
@@ -62,7 +71,7 @@ function collectChronicleDocumentsForLlm(topic) {
   const grouped = new Map();
   records
     .sort((a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex)
-    .slice(0, 36)
+    .slice(0, Math.max(18, 36 - attachmentPageCount))
     .forEach(({ item, page }) => {
       if (!grouped.has(item.id)) {
         grouped.set(item.id, {
@@ -79,12 +88,15 @@ function collectChronicleDocumentsForLlm(topic) {
       grouped.get(item.id).pages.push({
         pageId: page.id,
         pageNumber: page.pageNumber,
-        text: getPagePrimaryText(page).slice(0, 1800),
+        text: getSmartPagePrimaryText(page).slice(0, 1800),
         notes: (page.notes || "").slice(0, 500),
       });
     });
 
-  return Array.from(grouped.values());
+  return [
+    ...Array.from(grouped.values()),
+    ...attachmentDocuments,
+  ];
 }
 
 function scoreChroniclePageForLlm(item, page, text, topic) {
@@ -106,9 +118,10 @@ function scoreChroniclePageForLlm(item, page, text, topic) {
 }
 
 function countChroniclePagesForLlm() {
-  return documents.reduce((total, item) => {
-    return total + item.pages.filter((page) => getPagePrimaryText(page).trim()).length;
+  const documentPages = getSmartScopeDocuments().reduce((total, item) => {
+    return total + item.pages.filter((page) => getSmartPagePrimaryText(page).trim()).length;
   }, 0);
+  return documentPages + countConversationAttachmentChunks(chronicleTopic.value.trim(), 10, 1800);
 }
 
 function renderChronicleLoading() {
@@ -138,6 +151,7 @@ function renderChronicleLlmEntries(entries, warnings = []) {
     const dateLabel = getChronicleDateLabel(entry);
     const sameDay = Boolean(entry.sameDay) || (index > 0 && dateLabel === getChronicleDateLabel(list[index - 1]));
     const sourceTarget = resolveChronicleSource(entry);
+    const attachment = sourceTarget?.attachment || null;
 
     result.className = "result-item";
     title.textContent = sameDay ? `同日：${dateLabel}` : dateLabel;
@@ -145,10 +159,15 @@ function renderChronicleLlmEntries(entries, warnings = []) {
     source.textContent = formatChronicleLlmSources(entry.sources);
     action.className = "secondary-button";
     action.type = "button";
-    action.textContent = "查看原页";
-    action.disabled = !sourceTarget;
+    action.textContent = attachment ? "打开文件" : "查看原页";
+    action.disabled = !sourceTarget || Boolean(attachment && !attachment.fileUrl);
     action.addEventListener("click", () => {
       if (!sourceTarget) {
+        return;
+      }
+
+      if (attachment) {
+        openConversationAttachment(attachment);
         return;
       }
 
@@ -183,8 +202,15 @@ function formatChronicleLlmSources(sources = []) {
       const title = source.title || "文献名未录";
       const publisher = source.publisher || "出版信息未录";
       const year = source.year || "年份未录";
-      const pageNumber = source.pageNumber ? `，第 ${source.pageNumber} 页` : "";
+      const pageNumber = source.pageNumber
+        ? source.sourceType === "conversation-file"
+          ? `，内容片段 ${source.pageNumber}`
+          : `，第 ${source.pageNumber} 页`
+        : "";
       const quote = source.quote ? `；原文：${source.quote}` : "";
+      if (source.sourceType === "conversation-file") {
+        return `来源：当前对话上传文件（快速读取）：《${title}》${pageNumber}${quote}`;
+      }
       return `来源：${author}：《${title}》，${publisher}，${year}${pageNumber}${quote}`;
     })
     .join("\n");
@@ -201,6 +227,10 @@ function resolveChronicleSource(entry) {
         });
 
     if (!item) {
+      const attachment = findConversationAttachment(source.attachmentId || source.documentId, source.title);
+      if (attachment) {
+        return { attachment };
+      }
       continue;
     }
 

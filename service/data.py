@@ -19,13 +19,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from service.extract import FileExtractionError, extract_file_content
+
 
 APP_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolve()
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
 FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,6 +50,12 @@ class SyncPayload(BaseModel):
     conversations: list[dict[str, Any]] = Field(default_factory=list)
     deletedDocumentIds: list[str] = Field(default_factory=list)
     deletedConversationIds: list[str] = Field(default_factory=list)
+
+
+class ConversationFileTextPayload(BaseModel):
+    extractedText: str = ""
+    status: str = "ready"
+    warnings: list[str] = Field(default_factory=list)
 
 
 def now_iso() -> str:
@@ -125,6 +133,24 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             deleted_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS conversation_files (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            original_name TEXT NOT NULL DEFAULT '',
+            storage_path TEXT NOT NULL,
+            public_url TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+            kind TEXT NOT NULL DEFAULT 'document',
+            extracted_text TEXT NOT NULL DEFAULT '',
+            extraction_status TEXT NOT NULL DEFAULT 'ready',
+            warnings TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_documents_active_order
             ON documents(deleted_at, sort_order, updated_at);
         CREATE INDEX IF NOT EXISTS idx_document_pages_document_order
@@ -135,6 +161,10 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON document_files(document_id, role, page_id, deleted_at);
         CREATE INDEX IF NOT EXISTS idx_document_files_hash
             ON document_files(sha256);
+        CREATE INDEX IF NOT EXISTS idx_conversation_files_conversation
+            ON conversation_files(conversation_id, deleted_at, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_conversation_files_hash
+            ON conversation_files(sha256);
 
         """
     )
@@ -375,6 +405,119 @@ def public_asset(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def upsert_conversation_file_record(
+    connection: sqlite3.Connection,
+    *,
+    attachment_id: str,
+    conversation_id: str,
+    asset: dict[str, Any],
+    extraction: dict[str, Any],
+    timestamp: str,
+) -> dict[str, Any]:
+    existing = connection.execute(
+        "SELECT created_at FROM conversation_files WHERE id = ?",
+        (attachment_id,),
+    ).fetchone()
+    created_at = existing["created_at"] if existing else timestamp
+    extraction_status = "processing" if extraction.get("needsOcr") else (
+        "ready" if str(extraction.get("text") or "").strip() else "failed"
+    )
+    warnings = [str(value) for value in extraction.get("warnings") or [] if str(value)]
+    public_url = public_file_url(asset["storagePath"])
+
+    connection.execute(
+        """
+        INSERT INTO conversation_files(
+            id, conversation_id, original_name, storage_path, public_url, sha256,
+            size_bytes, mime_type, kind, extracted_text, extraction_status, warnings,
+            created_at, updated_at, deleted_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            original_name = excluded.original_name,
+            storage_path = excluded.storage_path,
+            public_url = excluded.public_url,
+            sha256 = excluded.sha256,
+            size_bytes = excluded.size_bytes,
+            mime_type = excluded.mime_type,
+            kind = excluded.kind,
+            extracted_text = excluded.extracted_text,
+            extraction_status = excluded.extraction_status,
+            warnings = excluded.warnings,
+            updated_at = excluded.updated_at,
+            deleted_at = NULL
+        """,
+        (
+            attachment_id,
+            conversation_id,
+            asset.get("fileName") or "",
+            asset["storagePath"],
+            public_url,
+            asset["sha256"],
+            int(asset["size"]),
+            asset["mimeType"],
+            extraction.get("kind") or "document",
+            str(extraction.get("text") or "")[:60_000],
+            extraction_status,
+            json_dump(warnings),
+            created_at,
+            timestamp,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM conversation_files WHERE id = ?",
+        (attachment_id,),
+    ).fetchone()
+    return public_conversation_file(row)
+
+
+def public_conversation_file(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        warnings = json_load(row["warnings"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        warnings = []
+    return {
+        "id": row["id"],
+        "conversationId": row["conversation_id"],
+        "fileName": row["original_name"] or "",
+        "fileUrl": public_file_url(row["storage_path"]),
+        "filePath": row["storage_path"],
+        "fileHash": row["sha256"],
+        "fileSize": row["size_bytes"],
+        "fileType": row["mime_type"],
+        "kind": row["kind"],
+        "extractedText": row["extracted_text"],
+        "status": row["extraction_status"],
+        "warnings": warnings if isinstance(warnings, list) else [],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def rehydrate_conversation_files(connection: sqlite3.Connection, conversation: dict[str, Any]) -> dict[str, Any]:
+    conversation_id = str(conversation.get("id") or "").strip()
+    attachments = conversation.get("attachments") if isinstance(conversation.get("attachments"), list) else []
+    if not conversation_id or not attachments:
+        return conversation
+
+    rows = connection.execute(
+        """
+        SELECT * FROM conversation_files
+        WHERE conversation_id = ? AND deleted_at IS NULL
+        ORDER BY created_at ASC
+        """,
+        (conversation_id,),
+    ).fetchall()
+    records = {row["id"]: public_conversation_file(row) for row in rows}
+    conversation["attachments"] = [
+        {**attachment, **records.get(str(attachment.get("id") or ""), {})}
+        for attachment in attachments
+        if isinstance(attachment, dict)
+    ]
+    return conversation
+
+
 def apply_asset_to_document(document: dict[str, Any], asset: dict[str, Any]) -> None:
     role = asset["role"]
     if role == "source":
@@ -479,7 +622,7 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     payloads = [json_load(row["payload"]) for row in rows]
     if table == "documents":
         return [rehydrate_document_assets(connection, payload) for payload in payloads]
-    return payloads
+    return [rehydrate_conversation_files(connection, payload) for payload in payloads]
 
 
 
@@ -599,6 +742,42 @@ def upsert_conversations(connection: sqlite3.Connection, conversations: list[dic
                 (conversation_id, payload, sort_order, timestamp),
             )
 
+        attachments = conversation.get("attachments") if isinstance(conversation.get("attachments"), list) else []
+        active_attachment_ids: set[str] = set()
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            attachment_id = str(attachment.get("id") or "").strip()
+            if not attachment_id:
+                continue
+            active_attachment_ids.add(attachment_id)
+            connection.execute(
+                """
+                UPDATE conversation_files
+                SET extracted_text = ?, extraction_status = ?, warnings = ?, updated_at = ?, deleted_at = NULL
+                WHERE id = ? AND conversation_id = ?
+                """,
+                (
+                    str(attachment.get("extractedText") or "")[:60_000],
+                    str(attachment.get("status") or "ready"),
+                    json_dump([str(value) for value in attachment.get("warnings") or [] if str(value)]),
+                    timestamp,
+                    attachment_id,
+                    conversation_id,
+                ),
+            )
+
+        file_rows = connection.execute(
+            "SELECT id FROM conversation_files WHERE conversation_id = ? AND deleted_at IS NULL",
+            (conversation_id,),
+        ).fetchall()
+        for row in file_rows:
+            if row["id"] not in active_attachment_ids:
+                connection.execute(
+                    "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    (timestamp, timestamp, row["id"]),
+                )
+
 def soft_delete_entities(
     connection: sqlite3.Connection,
     table: Literal["documents", "conversations"],
@@ -618,6 +797,11 @@ def soft_delete_entities(
             )
             connection.execute(
                 "UPDATE document_files SET deleted_at = ?, updated_at = ? WHERE document_id = ? AND deleted_at IS NULL",
+                (timestamp, timestamp, entity_id),
+            )
+        else:
+            connection.execute(
+                "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE conversation_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
             )
 
@@ -647,9 +831,13 @@ def count_storage_files() -> int:
 def storage_integrity_report(connection: sqlite3.Connection) -> dict[str, Any]:
     quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
     foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
-    rows = connection.execute(
+    document_rows = connection.execute(
         "SELECT id, storage_path, sha256, size_bytes FROM document_files WHERE deleted_at IS NULL"
     ).fetchall()
+    conversation_rows = connection.execute(
+        "SELECT id, storage_path, sha256, size_bytes FROM conversation_files WHERE deleted_at IS NULL"
+    ).fetchall()
+    rows = list(document_rows) + list(conversation_rows)
     missing: list[str] = []
     mismatched: list[str] = []
 
@@ -689,6 +877,9 @@ def health() -> dict[str, Any]:
         file_count = connection.execute(
             "SELECT COUNT(*) AS count FROM document_files WHERE deleted_at IS NULL"
         ).fetchone()["count"]
+        conversation_file_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM conversation_files WHERE deleted_at IS NULL"
+        ).fetchone()["count"]
         schema_version = get_schema_version(connection)
     return {
         "status": "ok",
@@ -698,7 +889,9 @@ def health() -> dict[str, Any]:
         "schemaVersion": schema_version,
         "documents": document_count,
         "pages": page_count,
-        "fileRecords": file_count,
+        "documentFiles": file_count,
+        "conversationFiles": conversation_file_count,
+        "fileRecords": file_count + conversation_file_count,
     }
 
 
@@ -764,6 +957,105 @@ async def upload_file(
         return {"status": "ok", "file": file_record, "syncCursor": str(cursor)}
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"文件记录保存失败：{exc}") from exc
+
+
+@app.post("/api/conversation-files/upload")
+async def upload_conversation_file(
+    attachment: UploadFile = File(...),
+    conversationId: str = Form(...),
+    attachmentId: str = Form(...),
+) -> dict[str, Any]:
+    conversation_id = conversationId.strip()
+    attachment_id = attachmentId.strip()
+    if not conversation_id or not attachment_id:
+        raise HTTPException(status_code=400, detail="conversationId 和 attachmentId 不能为空")
+
+    content = await attachment.read()
+    mime_type = attachment.content_type or mimetypes.guess_type(attachment.filename or "")[0] or "application/octet-stream"
+    try:
+        extraction = extract_file_content(content, attachment.filename or "", mime_type)
+    except FileExtractionError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+    timestamp = now_iso()
+    asset = write_asset_file(
+        content,
+        document_id=f"conversation-{conversation_id}",
+        page_id=attachment_id,
+        role="attachment",
+        mime_type=mime_type,
+        original_name=attachment.filename or "",
+    )
+
+    try:
+        with database() as connection:
+            with connection:
+                file_record = upsert_conversation_file_record(
+                    connection,
+                    attachment_id=attachment_id,
+                    conversation_id=conversation_id,
+                    asset=asset,
+                    extraction=extraction,
+                    timestamp=timestamp,
+                )
+                cursor = bump_sync_version(connection)
+        return {
+            "status": "ok",
+            "attachment": file_record,
+            "needsOcr": bool(extraction.get("needsOcr")),
+            "syncCursor": str(cursor),
+        }
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"对话附件保存失败：{exc}") from exc
+
+
+@app.put("/api/conversation-files/{attachment_id}/text")
+def update_conversation_file_text(
+    attachment_id: str,
+    payload: ConversationFileTextPayload,
+) -> dict[str, Any]:
+    timestamp = now_iso()
+    with database() as connection:
+        with connection:
+            existing = connection.execute(
+                "SELECT id FROM conversation_files WHERE id = ? AND deleted_at IS NULL",
+                (attachment_id,),
+            ).fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="对话附件不存在")
+            connection.execute(
+                """
+                UPDATE conversation_files
+                SET extracted_text = ?, extraction_status = ?, warnings = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.extractedText[:60_000],
+                    payload.status,
+                    json_dump([str(value) for value in payload.warnings if str(value)]),
+                    timestamp,
+                    attachment_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM conversation_files WHERE id = ?",
+                (attachment_id,),
+            ).fetchone()
+            cursor = bump_sync_version(connection)
+    return {"status": "ok", "attachment": public_conversation_file(row), "syncCursor": str(cursor)}
+
+
+@app.delete("/api/conversation-files/{attachment_id}")
+def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
+    timestamp = now_iso()
+    with database() as connection:
+        with connection:
+            connection.execute(
+                "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+                (timestamp, timestamp, attachment_id),
+            )
+            cursor = bump_sync_version(connection)
+    return {"status": "ok", "attachmentId": attachment_id, "syncCursor": str(cursor)}
 
 
 @app.get("/api/bootstrap")

@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from service.chronology import normalize_chronicle_entries
+
 
 # 修改默认大模型配置时，请同步更新 readme.md。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
@@ -63,11 +65,6 @@ class FinalizePageRequest(LlmTaskRequest):
     previousPages: list[PreviousPageContext] = Field(default_factory=list)
 
 
-class ExtractEventsRequest(LlmTaskRequest):
-    text: str
-    sourceLayer: Literal["ocr", "clean", "punctuated"] = "punctuated"
-
-
 class ExtractMetadataRequest(LlmTaskRequest):
     text: str
     source: Literal["filename", "ocr", "clean", "punctuated"] = "ocr"
@@ -82,7 +79,6 @@ class DetectCoverRequest(BaseModel):
 
 class ChronicleRequest(BaseModel):
     topic: str = ""
-    events: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
@@ -286,69 +282,6 @@ OCR 原始录文：
     return response
 
 
-@app.post("/llm/extract-events")
-def extract_events(payload: ExtractEventsRequest) -> dict[str, Any]:
-    prompt = f"""
-/no_think
-请从一页近代军史文献文本中抽取史事事件。
-
-原则：
-1. 严格依托输入文本，不补充库外信息。
-2. 不加入立场褒贬。
-3. 时间、地点、人物、机构、事件行为、结果不确定时留空或标注 uncertain。
-4. 每个事件必须保留原文依据 quote。
-5. 输出必须是 JSON，不要输出解释文字。
-
-返回格式：
-{{
-  "events": [
-    {{
-      "dateOriginal": "原文时间",
-      "dateGregorian": "YYYY-MM-DD 或空",
-      "dateLunar": "农历时间或待核",
-      "place": ["地点"],
-      "persons": ["人物"],
-      "organizations": ["机构或部队番号"],
-      "event": "客观精要表述",
-      "result": "结果或空",
-      "quote": "原文依据",
-      "uncertain": false
-    }}
-  ],
-  "warnings": ["处理提示"]
-}}
-
-页码：{payload.pageNumber or ""}
-文献信息：
-{format_metadata(payload.metadata)}
-
-文本：
-{payload.text}
-""".strip()
-
-    try:
-        result = call_json_task(prompt)
-        events = normalize_entries(result.get("events"))
-        warnings = list_value(result.get("warnings"))
-        response = base_response("extract-events", ready=True)
-    except LlmServiceError as exc:
-        events = []
-        warnings = [str(exc)]
-        response = base_response("extract-events", ready=False, message=str(exc))
-
-    response.update(
-        {
-            "documentId": payload.documentId,
-            "pageId": payload.pageId,
-            "pageNumber": payload.pageNumber,
-            "sourceLayer": payload.sourceLayer,
-            "events": events,
-            "warnings": warnings,
-        }
-    )
-    return response
-
-
 @app.post("/llm/extract-metadata")
 def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
     prompt = f"""
@@ -461,32 +394,40 @@ def detect_cover(payload: DetectCoverRequest) -> dict[str, Any]:
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     prompt = f"""
 /no_think
-请基于库内材料生成史事编年草稿。输入可能包含两类材料：
-1. events：已经抽取过的事件。
-2. documents：文献及其 pages，每页包含 pageId、pageNumber、text、notes。
+请基于输入材料生成史事编年草稿。documents 同时可能包含库内文献和当前对话上传文件；每项包含 sourceType、documentId、attachmentId（仅上传文件）、title 及 pages，每页包含 pageId、pageNumber、text、notes。
+
+其中 sourceType 为 conversation-file 的材料来自当前对话的临时快速读取，可能存在基础 OCR 或顺序误差；可以依据其原文生成结果，但不得把它表述成已经正式整理、登记入库的文献。
 
 任务：
-1. 先从 events 和 documents.pages.text 中识别与主题相关的史事；主题为空时，抽取全部有明确时间依据的史事。
-2. 识别并换算复杂纪年，包括民国纪年、清代/民国前后常见年号纪年、干支纪年、公历日期、农历日期、上下文省略的年份或月份。
-3. 无法可靠换算时不要硬编，dateLabel 写明原文纪年并标注“公历待核”或“月日待核”。
-4. 严格只使用输入材料，不引入外部史实；可以做历法/纪年换算，但不补充材料外事件。
-5. 严格按照可判断的时间先后排序；同日多条 sameDay=true。
-6. 史事表述必须客观、精要，不加入立场褒贬。
-7. 每条必须保留文献定位依据、documentId、pageId、pageNumber 和原文依据 quote。
-8. 输出必须是 JSON，不要输出解释文字或 Markdown。
+1. 现场从 documents.pages.text 中识别与主题相关的史事；主题为空时，抽取全部有明确时间依据的史事。
+2. 识别复杂纪年的组成信息，包括民国纪年、清代年号、干支纪年、公历日期、农历日期、闰月以及上下文省略的年份或月份。
+3. 不要自行做历法换算；只按原文和上下文填写 calendarType、year、month、day、eraName、eraYear、lunarMonth、lunarDay、lunarLeap、ganzhiYear。无法确定的字段留空。
+4. 严格只使用输入材料，不引入外部史实，不补充材料外事件；日期换算、排序和同日判定由程序完成。
+5. 史事表述必须客观、精要，不加入立场褒贬。
+6. 每条必须保留材料定位依据、sourceType、documentId、attachmentId、pageId、pageNumber 和原文依据 quote；字段值必须照抄输入，不得虚构。
+7. 输出必须是 JSON，不要输出解释文字或 Markdown。
 
 返回格式：
 {{
   "entries": [
     {{
-      "dateLabel": "公历年月日（原文纪年；农历/公历待核信息）",
-      "dateGregorian": "YYYY-MM-DD 或 YYYY-MM 或 YYYY 或空",
       "dateOriginal": "原文时间表述",
-      "sameDay": false,
+      "calendarType": "gregorian、lunar 或 unknown",
+      "year": 1898,
+      "month": 0,
+      "day": 0,
+      "eraName": "光绪、民国等年号或空",
+      "eraYear": 24,
+      "lunarMonth": 6,
+      "lunarDay": 3,
+      "lunarLeap": false,
+      "ganzhiYear": "戊戌或空",
       "summary": "客观史事",
       "sources": [
         {{
           "documentId": "输入中的 documentId",
+          "attachmentId": "上传文件的 attachmentId 或空",
+          "sourceType": "document-page 或 conversation-file",
           "pageId": "输入中的 pageId",
           "author": "著者",
           "title": "文献名",
@@ -504,17 +445,16 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
 主题：
 {payload.topic}
 
-事件数据：
-{json.dumps(payload.events, ensure_ascii=False)}
-
 文献数据：
 {json.dumps(payload.documents, ensure_ascii=False)}
 """.strip()
 
     try:
         result = call_json_task(prompt)
-        entries = normalize_entries(result.get("entries"))
-        warnings = list_value(result.get("warnings"))
+        entries, chronology_warnings = normalize_chronicle_entries(
+            normalize_entries(result.get("entries"))
+        )
+        warnings = list_value(result.get("warnings")) + chronology_warnings
         response = base_response("chronicle", ready=True)
     except LlmServiceError as exc:
         entries = []
@@ -535,7 +475,9 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
 def search(payload: SearchRequest) -> dict[str, Any]:
     prompt = f"""
 /no_think
-请在用户书库材料中做智能检索。
+请在用户书库文献和当前对话上传文件中做智能检索。
+
+其中 sourceType 为 conversation-file 的材料来自当前对话的临时快速读取，可能存在基础 OCR 或顺序误差；仍须忠实引用输入文字，不得补写或修正成材料中没有的内容。
 
 任务：
 1. 根据 query 在 documents.pages.text 和 notes 中找相关内容。
@@ -546,7 +488,7 @@ def search(payload: SearchRequest) -> dict[str, Any]:
    - 地名：旧地名、异体写法、简称。
 3. 可以使用通用历史常识判断别称关系，但匹配结果必须能在输入材料中找到原文依据 quote。
 4. 不要把只是同一时代、同一地区但无直接关联的内容列为结果。
-5. 每条结果必须保留 documentId、pageId、pageNumber，方便前端跳转。
+5. 每条结果必须保留 sourceType、documentId、attachmentId、pageId、pageNumber，方便前端打开原文献或上传文件。
 6. 按相关性排序：直接命中、明确别称、强上下文关联优先。
 7. 最多返回 options.maxMatches 条；如果命中更多，在 warnings 中说明还有更多结果。
 8. 输出必须是 JSON，不要输出解释文字或 Markdown。
@@ -556,6 +498,8 @@ def search(payload: SearchRequest) -> dict[str, Any]:
   "matches": [
     {{
       "documentId": "输入中的 documentId",
+      "attachmentId": "上传文件的 attachmentId 或空",
+      "sourceType": "document-page 或 conversation-file",
       "pageId": "输入中的 pageId",
       "pageNumber": 1,
       "title": "文献名",
@@ -612,15 +556,15 @@ def chat(payload: ChatRequest) -> dict[str, Any]:
 请作为近代军史文献书库助手回答用户问题。
 
 原则：
-1. 优先依据输入的书库上下文回答。
-2. 如果上下文不足，明确说明“当前书库材料不足以确认”。
+1. 优先依据输入上下文回答；其中 sourceType 为 conversation-file 的内容是当前对话上传文件的临时快速读取结果，并非正式入库文献。
+2. 如果上下文不足，明确说明“当前材料不足以确认”。
 3. 不要编造来源、页码或史实。
 4. 回答要简洁，必要时列出所依据的文献页码。
 
 用户问题：
 {payload.prompt}
 
-书库上下文：
+输入上下文：
 {json.dumps(payload.context, ensure_ascii=False)}
 """.strip()
 
@@ -629,7 +573,7 @@ def chat(payload: ChatRequest) -> dict[str, Any]:
             [
                 {
                     "role": "system",
-                    "content": "你是近代军史文献书库助手。回答必须忠于用户书库上下文，不足则说明不足。",
+                    "content": "你是近代军史文献书库助手。回答必须忠于输入上下文；临时上传文件可能存在快速读取误差，不足则说明不足。",
                 },
                 {"role": "user", "content": prompt},
             ],

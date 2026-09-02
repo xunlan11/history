@@ -1,9 +1,9 @@
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.schema3";
-const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.schema3";
-const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.schema3";
-const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.schema3";
-const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.schema3";
+const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.schema4";
+const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.schema4";
+const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.schema4";
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.schema4";
+const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.schema4";
 const SYNC_INTERVAL_MS = 30000;
 
 let documents = normalizeDocuments(loadCachedDocuments());
@@ -197,6 +197,41 @@ function normalizeConversations(items) {
       title: item.title || "新对话",
       mode: item.mode || "chat",
       locked: Boolean(item.locked),
+      referenceDocumentIds: normalizeReferenceDocumentIds(item.referenceDocumentIds),
+      attachments: normalizeConversationAttachments(item.attachments),
+      createdAt: item.createdAt || "",
+      updatedAt: item.updatedAt || "",
+    }));
+}
+
+function normalizeReferenceDocumentIds(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean)));
+}
+
+function normalizeConversationAttachments(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const seen = new Set();
+  return values
+    .filter((item) => item?.id && !seen.has(item.id) && seen.add(item.id))
+    .map((item) => ({
+      id: String(item.id),
+      fileName: item.fileName || "未命名文件",
+      fileType: item.fileType || "application/octet-stream",
+      fileSize: Number(item.fileSize) || 0,
+      fileUrl: item.fileUrl || "",
+      filePath: item.filePath || "",
+      fileHash: item.fileHash || "",
+      kind: item.kind || "document",
+      extractedText: String(item.extractedText || "").slice(0, 60000),
+      status: item.status || "uploading",
+      warnings: Array.isArray(item.warnings) ? item.warnings.map(String).filter(Boolean) : [],
       createdAt: item.createdAt || "",
       updatedAt: item.updatedAt || "",
     }));
@@ -405,6 +440,8 @@ function createConversation(title = "新对话", mode = "chat") {
     title,
     mode,
     locked: false,
+    referenceDocumentIds: [],
+    attachments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -445,6 +482,67 @@ function setDraftConversationMode(mode) {
   }
 
   conversation.mode = mode;
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  return true;
+}
+
+function setConversationReferenceDocumentIds(values, conversation = getSelectedConversation()) {
+  if (!conversation) {
+    return false;
+  }
+
+  conversation.referenceDocumentIds = normalizeReferenceDocumentIds(values);
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  return true;
+}
+
+function getConversationReferenceDocumentIds(conversation = getSelectedConversation()) {
+  return normalizeReferenceDocumentIds(conversation?.referenceDocumentIds);
+}
+
+function getConversationAttachments(conversation = getSelectedConversation()) {
+  return normalizeConversationAttachments(conversation?.attachments);
+}
+
+function addConversationAttachment(attachment, conversation = getSelectedConversation()) {
+  if (!conversation?.id || !attachment?.id) {
+    return false;
+  }
+  conversation.attachments = normalizeConversationAttachments([
+    ...(conversation.attachments || []),
+    attachment,
+  ]);
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  return true;
+}
+
+function updateConversationAttachment(attachmentId, changes, conversation = getSelectedConversation()) {
+  if (!conversation?.id) {
+    return null;
+  }
+  const attachment = (conversation.attachments || []).find((item) => item.id === attachmentId);
+  if (!attachment) {
+    return null;
+  }
+  Object.assign(attachment, changes, { updatedAt: new Date().toISOString() });
+  conversation.attachments = normalizeConversationAttachments(conversation.attachments);
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  return conversation.attachments.find((item) => item.id === attachmentId) || null;
+}
+
+function removeConversationAttachment(attachmentId, conversation = getSelectedConversation()) {
+  if (!conversation?.id) {
+    return false;
+  }
+  const nextAttachments = (conversation.attachments || []).filter((item) => item.id !== attachmentId);
+  if (nextAttachments.length === (conversation.attachments || []).length) {
+    return false;
+  }
+  conversation.attachments = normalizeConversationAttachments(nextAttachments);
   conversation.updatedAt = new Date().toISOString();
   persistConversations();
   return true;
@@ -612,6 +710,18 @@ function hasPageText(page) {
 
 function getPagePrimaryText(page) {
   return page?.punctuatedText || page?.cleanText || page?.ocrText || "";
+}
+
+function getPageProcessedText(page) {
+  return page?.cleanText || page?.punctuatedText || "";
+}
+
+function getPageProcessedSearchText(page) {
+  return [
+    page?.cleanText,
+    page?.punctuatedText,
+    page?.notes,
+  ].filter(Boolean).join("\n");
 }
 
 function getPageSearchText(page) {

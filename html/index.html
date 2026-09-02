@@ -56,6 +56,29 @@
 
               <section class="smart-dock" id="smart-dock" aria-label="全文检索与史事编年">
                 <div class="smart-input-box">
+                  <div class="reference-context" aria-label="当前对话参考文献">
+                    <button class="reference-trigger" id="open-reference-documents" type="button">
+                      ＋ 导入文献
+                      <span class="reference-trigger-count hidden" id="reference-document-count"></span>
+                    </button>
+                    <button
+                      class="reference-trigger"
+                      id="upload-conversation-files"
+                      type="button"
+                      title="临时快速读取，仅供当前对话使用，不进入文献库"
+                    >↑ 上传文件</button>
+                    <input
+                      class="hidden"
+                      id="conversation-file-input"
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx,.xlsx,.pptx,.odt,.ods,.rtf,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.html,.htm,.yaml,.yml,.log,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff"
+                    />
+                    <div class="reference-chips" id="reference-document-chips"></div>
+                    <div class="reference-chips" id="conversation-attachment-chips"></div>
+                  </div>
+                  <p class="reference-scope-status hidden" id="reference-scope-status" role="status"></p>
+                  <p class="reference-scope-status hidden" id="conversation-attachment-status" role="status"></p>
                   <label class="sr-only" for="search-input">输入检索词或编年主题</label>
                   <textarea id="search-input" rows="3" placeholder="问书库：输入问题，系统会结合已整理文献回答"></textarea>
                   <input id="chronicle-topic" type="hidden" />
@@ -94,6 +117,28 @@
       </div>
     </div>
 
+    <div class="reference-dialog hidden" id="reference-document-dialog" role="dialog" aria-modal="true" aria-labelledby="reference-document-title">
+      <section class="reference-dialog-card">
+        <header class="reference-dialog-header">
+          <div>
+            <h2 id="reference-document-title">从文献库导入</h2>
+            <p>选择一个或多个已处理文献，作为当前对话的背景信息。</p>
+          </div>
+          <button class="reference-dialog-close" id="close-reference-documents" type="button" aria-label="关闭">×</button>
+        </header>
+        <label class="sr-only" for="reference-document-search">搜索文献</label>
+        <input class="reference-document-search" id="reference-document-search" type="search" placeholder="搜索题名、著者、年份或标签" />
+        <div class="reference-document-list" id="reference-document-list"></div>
+        <footer class="reference-dialog-footer">
+          <span id="reference-selection-summary">未选择文献</span>
+          <div class="confirm-actions">
+            <button class="secondary-button" id="cancel-reference-documents" type="button">取消</button>
+            <button class="primary-button" id="confirm-reference-documents" type="button">导入所选文献</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
     <template id="document-card-template">
       <article class="book-card">
         <button class="book-open select-document" type="button">
@@ -113,6 +158,8 @@
     <script src="../js/utils.js"></script>
     <script src="../js/store.js"></script>
     <script src="../js/dom.js"></script>
+    <script src="../js/references.js"></script>
+    <script src="../js/attachments.js"></script>
     <script src="../js/render.js"></script>
     <script src="../js/progress.js"></script>
     <script src="../js/service.js"></script>

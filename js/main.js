@@ -60,6 +60,11 @@ confirmDeleteConversation?.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && referenceDocumentDialog && !referenceDocumentDialog.classList.contains("hidden")) {
+    closeReferenceDocumentDialog();
+    return;
+  }
+
   if (event.key === "Escape" && deleteConversationDialog && !deleteConversationDialog.classList.contains("hidden")) {
     closeDeleteConversationDialog();
   }
@@ -346,6 +351,12 @@ async function runSmartChat() {
     return;
   }
 
+  const contextReport = getConversationContextReport();
+  if (contextReport.error) {
+    renderChatNotice(contextReport.error);
+    return;
+  }
+
   upsertConversationFromPrompt(prompt, "chat");
   clearSmartResults();
   renderSmartModeButtons();
@@ -371,7 +382,7 @@ async function runSmartChat() {
       return;
     }
 
-    renderChatMessage(prompt, result.answer || "未生成回答。");
+    renderChatMessage(prompt, result.answer || "未生成回答。", contextReport.warnings);
   } catch (error) {
     renderChatNotice("暂时无法调用大模型服务。");
   }
@@ -379,6 +390,12 @@ async function runSmartChat() {
 
 function runSmartSearch() {
   const prompt = searchInput.value.trim();
+  const contextReport = getConversationContextReport();
+
+  if (contextReport.error) {
+    renderSearchNotice(contextReport.error);
+    return;
+  }
 
   if (prompt) {
     upsertConversationFromPrompt(prompt, "search");
@@ -395,6 +412,12 @@ function runSmartSearch() {
 
 function runSmartChronicle() {
   const prompt = searchInput.value.trim();
+  const contextReport = getConversationContextReport();
+
+  if (contextReport.error) {
+    renderChronicleNotice(contextReport.error);
+    return;
+  }
 
   if (prompt) {
     upsertConversationFromPrompt(prompt, "chronicle");
@@ -411,29 +434,53 @@ function runSmartChronicle() {
 
 function buildLibraryChatContext(prompt) {
   const entries = [];
+  const attachmentEntries = collectConversationAttachmentChatEntries(prompt);
 
-  documents.forEach((item) => {
-    item.pages.forEach((page) => {
-      const text = getPagePrimaryText(page);
+  getSmartScopeDocuments().forEach((item, documentIndex) => {
+    item.pages.forEach((page, pageIndex) => {
+      const text = getSmartPagePrimaryText(page);
       if (!text) {
         return;
       }
 
       const snippet = buildSnippet(text, prompt) || text.slice(0, 260);
       entries.push({
+        documentId: item.id,
         documentTitle: getDocumentDisplayTitle(item),
         author: item.author || "",
         year: item.year || "",
+        pageId: page.id,
         pageNumber: page.pageNumber,
         text: snippet,
+        score: scoreSmartContextText(`${item.title}\n${item.author}\n${text}`, prompt),
+        documentIndex,
+        pageIndex,
       });
     });
   });
 
-  return entries.slice(0, 8);
+  const rankEntries = (items) => items.sort((a, b) => {
+    return b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex;
+  });
+  const selectedEntries = entries.length && attachmentEntries.length
+    ? [...rankEntries(attachmentEntries).slice(0, 4), ...rankEntries(entries).slice(0, 4)]
+    : rankEntries([...entries, ...attachmentEntries]).slice(0, 8);
+
+  return selectedEntries
+    .map(({ score, documentIndex, pageIndex, ...entry }) => entry);
 }
 
-function renderChatMessage(prompt, answer) {
+function scoreSmartContextText(text, prompt) {
+  const terms = prompt
+    .toLowerCase()
+    .split(/[\s,，、；;]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+  const normalizedText = text.toLowerCase();
+  return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 3 : 0), 1);
+}
+
+function renderChatMessage(prompt, answer, warnings = []) {
   clearSmartResults();
 
   const result = document.createElement("article");
@@ -447,6 +494,9 @@ function renderChatMessage(prompt, answer) {
   question.textContent = `问：${prompt}`;
   response.textContent = answer;
   content.append(title, question, response);
+  if (warnings.length) {
+    content.append(formatWarnings(warnings));
+  }
   result.append(content);
   searchResults.append(result);
 }

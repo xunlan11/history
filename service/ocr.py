@@ -61,9 +61,13 @@ def health():
 
 
 @app.post("/ocr")
-async def recognize_page(image: UploadFile = File(...), pageNumber: str = Form("1")):
+async def recognize_page(
+    image: UploadFile = File(...),
+    pageNumber: str = Form("1"),
+    quick_read: str = Form("false", alias="quickRead"),
+):
     page_path = await save_upload(image)
-    result = recognize_image(page_path)
+    result = recognize_image(page_path, quick_read=quick_read.lower() == "true")
     result["pageNumber"] = int(pageNumber or 1)
     return JSONResponse(result)
 
@@ -82,6 +86,7 @@ async def submit_stream(
     document: UploadFile = File(...),
     documentId: str = Form(""),
     title: str = Form(""),
+    quick_read: str = Form("false", alias="quickRead"),
 ):
     task_id = f"task-{uuid.uuid4().hex[:12]}"
     task_dir = TASKS_DIR / task_id
@@ -92,11 +97,16 @@ async def submit_stream(
         "documentId": documentId,
         "title": title or document.filename,
         "status": "排队中",
-        "message": "任务已接收，等待逐页识别。",
+        "message": (
+            "临时文件已接收，等待快速读取。"
+            if quick_read.lower() == "true"
+            else "任务已接收，等待逐页识别。"
+        ),
         "totalPages": 0,
         "pages": [],
         "sourceFileName": document.filename,
         "sourcePath": str(source_path),
+        "quickRead": quick_read.lower() == "true",
     }
     save_task(task)
     background_tasks.add_task(process_stream_task, task_id)
@@ -133,8 +143,9 @@ def process_stream_task(task_id: str) -> None:
     if not task:
         return
 
+    quick_read = bool(task.get("quickRead"))
     task["status"] = "处理中"
-    task["message"] = "正在拆页和识别，请稍后刷新。"
+    task["message"] = "正在快速拆页和识别。" if quick_read else "正在拆页和识别，请稍后刷新。"
     task["totalPages"] = 0
     task["completedPages"] = 0
     task["currentPage"] = 0
@@ -143,7 +154,11 @@ def process_stream_task(task_id: str) -> None:
     save_task(task)
 
     try:
-        pages, total_pages = process_document(Path(task["sourcePath"]), task_id)
+        pages, total_pages = process_document(
+            Path(task["sourcePath"]),
+            task_id,
+            quick_read=quick_read,
+        )
         task["pages"] = pages
         task["totalPages"] = total_pages
         task["completedPages"] = total_pages
@@ -151,7 +166,11 @@ def process_stream_task(task_id: str) -> None:
         task["currentPageStage"] = "已完成"
         task["currentPageProgress"] = 100
         task["status"] = "已完成"
-        task["message"] = "逐页处理完成，请回到平台查看结果。"
+        task["message"] = (
+            "临时文件已快速读取。"
+            if quick_read
+            else "逐页处理完成，请回到平台查看结果。"
+        )
     except Exception as exc:  # noqa: BLE001
         task["status"] = "处理失败"
         task["message"] = f"处理失败：{exc}"
@@ -159,9 +178,13 @@ def process_stream_task(task_id: str) -> None:
     save_task(task)
 
 
-def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
+def process_document(
+    path: Path,
+    task_id: str,
+    quick_read: bool = False,
+) -> tuple[list[dict[str, Any]], int]:
     if path.suffix.lower() == ".pdf":
-        return process_pdf(path, task_id)
+        return process_pdf(path, task_id, quick_read=quick_read)
 
     page_path = copy_image_to_page(path, task_id, 1)
     set_stream_progress(
@@ -177,6 +200,7 @@ def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], in
         page_number=1,
         task_id=task_id,
         on_progress=make_page_progress_callback(task_id, 1, 1),
+        quick_read=quick_read,
     )
     set_stream_pages(task_id, [result])
     set_stream_progress(
@@ -190,7 +214,11 @@ def process_document(path: Path, task_id: str) -> tuple[list[dict[str, Any]], in
     return [result], 1
 
 
-def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
+def process_pdf(
+    path: Path,
+    task_id: str,
+    quick_read: bool = False,
+) -> tuple[list[dict[str, Any]], int]:
     try:
         import fitz
     except ImportError as exc:
@@ -212,7 +240,8 @@ def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
                 stage="拆页中",
                 progress=5,
             )
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            scale = 1.5 if quick_read else 2
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image_path = output_dir / f"page-{index}.png"
             pix.save(image_path)
             pages.append(
@@ -221,6 +250,7 @@ def process_pdf(path: Path, task_id: str) -> tuple[list[dict[str, Any]], int]:
                     page_number=index,
                     task_id=task_id,
                     on_progress=make_page_progress_callback(task_id, index, total_pages),
+                    quick_read=quick_read,
                 )
             )
             # 每页识别完成后增量写回，前端可边轮询边把已识别页交给大模型整理。
@@ -551,18 +581,34 @@ def recognize_image(
     page_number: int | None = None,
     task_id: str | None = None,
     on_progress: Any = None,
+    quick_read: bool = False,
 ) -> dict[str, Any]:
-    report_progress(on_progress, "预处理中", 20)
     ensure_image_readable(path)
-    processed_path, preprocessing = preprocess_image(path, page_number, task_id)
+    if quick_read:
+        processed_path = path
+        preprocessing = {
+            "enabled": False,
+            "mode": "quick-read",
+            "steps": [],
+            "reason": "临时对话文件跳过正式文献的图像预处理和版面分析",
+        }
+        report_progress(on_progress, "快速识别", 35)
+    else:
+        report_progress(on_progress, "预处理中", 20)
+        processed_path, preprocessing = preprocess_image(path, page_number, task_id)
     report_progress(on_progress, "识别中", 55)
     engine = get_ocr_engine()
     # paddleocr 3.x：predict() 取代 ocr()，不再接受 cls 参数
     raw = engine.predict(str(processed_path))
-    report_progress(on_progress, "版面分析", 85)
     ocr_lines = parse_paddle_result(raw)
-    layout = analyze_page_layout(processed_path, ocr_lines)
-    ordered_lines = layout["readingOrder"]
+    if quick_read:
+        layout = None
+        ordered_lines = ocr_lines
+        report_progress(on_progress, "整理快速读取结果", 85)
+    else:
+        report_progress(on_progress, "版面分析", 85)
+        layout = analyze_page_layout(processed_path, ocr_lines)
+        ordered_lines = layout["readingOrder"]
     text_lines = [line["text"] for line in ordered_lines]
     scores = [line["confidence"] for line in ocr_lines if isinstance(line.get("confidence"), (int, float))]
 
@@ -574,14 +620,17 @@ def recognize_image(
         "imageName": path.name,
         "preprocessing": preprocessing,
         "layout": layout,
+        "readMode": "quick" if quick_read else "formal",
     }
 
     if task_id:
         payload["imageUrl"] = build_file_url(path)
-        payload["preprocessedImageUrl"] = build_file_url(processed_path)
+        if not quick_read:
+            payload["preprocessedImageUrl"] = build_file_url(processed_path)
     else:
         payload["imageDataUrl"] = image_to_data_url(path)
-        payload["preprocessedImageDataUrl"] = image_to_data_url(processed_path)
+        if not quick_read:
+            payload["preprocessedImageDataUrl"] = image_to_data_url(processed_path)
 
     if page_number is not None:
         payload["pageNumber"] = page_number
