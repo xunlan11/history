@@ -17,10 +17,11 @@ from fastapi.responses import JSONResponse
 
 APP_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = Path(os.getenv("VERSION_REPO_DIR", APP_DIR)).resolve()
-REMOTE_NAME = os.getenv("VERSION_REMOTE", "origin")
 BRANCH_NAME = os.getenv("VERSION_BRANCH", "")
 RELEASES_DIR = Path(os.getenv("VERSION_RELEASES_DIR", REPO_DIR / ".deploy" / "releases")).resolve()
-CURRENT_LINK = Path(os.getenv("VERSION_CURRENT_LINK", REPO_DIR / ".deploy" / "current")).resolve()
+# 注意：CURRENT_LINK 是软链接，不能 .resolve()（会把链接解析到目标发布目录，
+# 导致 switch_current_link 误判「已存在且不是软链接」而发布失败）。
+CURRENT_LINK = Path(os.getenv("VERSION_CURRENT_LINK", REPO_DIR / ".deploy" / "current"))
 BUILD_COMMAND = os.getenv("VERSION_BUILD_COMMAND", "").strip()
 HEALTH_PATH = os.getenv("VERSION_HEALTH_PATH", "html/index.html").strip()
 
@@ -72,12 +73,11 @@ def current_branch() -> str:
     return branch or "main"
 
 
-def remote_ref() -> str:
-    return f"{REMOTE_NAME}/{current_branch()}"
-
-
-def fetch_remote() -> None:
-    run_git("fetch", REMOTE_NAME, current_branch())
+def source_ref() -> str:
+    # 唯一代码源 = 服务器本地 git 仓库 HEAD。
+    # 不再 fetch GitHub remote：新代码由管理员在服务器上手动 `git pull`
+    # 拉入本地仓库后，网页「更新」才把本地最新提交发布为当前版本（点按钮才生效）。
+    return "HEAD"
 
 
 def commit_for(ref: str) -> str:
@@ -188,7 +188,7 @@ def switch_current_link(release_dir: Path) -> None:
     os.replace(temp_link, CURRENT_LINK)
 
 
-def build_status(fetch: bool) -> dict[str, Any]:
+def build_status() -> dict[str, Any]:
     if not is_git_repo():
         return {
             "configured": False,
@@ -198,17 +198,16 @@ def build_status(fetch: bool) -> dict[str, Any]:
         }
 
     try:
-        if fetch:
-            fetch_remote()
-        remote_commit = commit_for(remote_ref())
+        # 不联网：以服务器本地 git 仓库 HEAD 为最新代码（管理员已手动 git pull 同步）。
+        source_commit = commit_for(source_ref())
         current_commit = deployed_commit()
-        update_available = remote_commit != current_commit or not current_link_ready()
+        update_available = source_commit != current_commit or not current_link_ready()
         return {
             "configured": True,
             "updating": STATE["updating"],
             "updateAvailable": update_available,
             "currentCommit": current_commit,
-            "remoteCommit": remote_commit,
+            "sourceCommit": source_commit,
             "branch": current_branch(),
             "message": STATE["message"],
             "lastUpdatedAt": STATE["lastUpdatedAt"],
@@ -228,18 +227,18 @@ def update_project() -> None:
     with STATE_LOCK:
         if STATE["updating"]:
             return
-        STATE.update({"updating": True, "message": "正在抓取最新代码", "lastError": ""})
+        STATE.update({"updating": True, "message": "正在读取服务器本地代码", "lastError": ""})
 
     try:
-        fetch_remote()
-        remote_commit = commit_for(remote_ref())
+        # 只发布服务器本地已同步到的最新提交，绝不联网拉取 GitHub。
+        source_commit = commit_for(source_ref())
         current_commit = deployed_commit()
 
-        if remote_commit == current_commit and current_link_ready():
+        if source_commit == current_commit and current_link_ready():
             STATE.update({"message": "当前已是最新版本", "lastUpdatedAt": now_iso()})
             return
 
-        release_dir = export_release(remote_commit)
+        release_dir = export_release(source_commit)
         STATE["message"] = "正在检查发布目录"
         run_build(release_dir)
         check_release(release_dir)
@@ -258,16 +257,16 @@ def health():
 
 @app.get("/version")
 def version():
-    return JSONResponse(build_status(fetch=True))
+    return JSONResponse(build_status())
 
 
 @app.post("/update")
 def update(background_tasks: BackgroundTasks):
     if STATE["updating"]:
-        return JSONResponse(build_status(fetch=False))
+        return JSONResponse(build_status())
 
     background_tasks.add_task(update_project)
-    response = build_status(fetch=False)
+    response = build_status()
     response["updating"] = True
-    response["message"] = "已开始后台更新"
+    response["message"] = "已开始后台更新（以服务器本地代码为准）"
     return JSONResponse(response)
