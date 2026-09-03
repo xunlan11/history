@@ -57,16 +57,6 @@
               <section class="smart-dock" id="smart-dock" aria-label="全文检索与史事编年">
                 <div class="smart-input-box">
                   <div class="reference-context" aria-label="当前对话参考文献">
-                    <button class="reference-trigger" id="open-reference-documents" type="button">
-                      ＋ 导入文献
-                      <span class="reference-trigger-count hidden" id="reference-document-count"></span>
-                    </button>
-                    <button
-                      class="reference-trigger"
-                      id="upload-conversation-files"
-                      type="button"
-                      title="临时快速读取，仅供当前对话使用，不进入文献库"
-                    >↑ 上传文件</button>
                     <input
                       class="hidden"
                       id="conversation-file-input"
@@ -86,6 +76,16 @@
                     <button class="chip-button active" id="chat-button" type="button" data-smart-mode="chat">对话</button>
                     <button class="chip-button" id="search-button" type="button" data-smart-mode="search">检索</button>
                     <button class="chip-button" id="build-chronicle" type="button" data-smart-mode="chronicle">编年</button>
+                    <button class="reference-trigger" id="open-reference-documents" type="button">
+                      ＋ 导入文献
+                      <span class="reference-trigger-count hidden" id="reference-document-count"></span>
+                    </button>
+                    <button
+                      class="reference-trigger"
+                      id="upload-conversation-files"
+                      type="button"
+                      title="临时快速读取，仅供当前对话使用，不进入文献库"
+                    >↑ 上传文件</button>
                     <button class="round-send" id="smart-send" type="button" title="发送">↑</button>
                   </div>
                 </div>

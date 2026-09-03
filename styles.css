@@ -1237,6 +1237,11 @@ body {
   gap: 10px;
 }
 
+/* Keep the conversation sources with the send control in the lower-right corner. */
+#open-reference-documents {
+  margin-left: auto;
+}
+
 .chip-button {
   min-height: 42px;
   padding: 0 16px;
@@ -1270,7 +1275,6 @@ body {
   display: grid;
   width: 52px;
   height: 52px;
-  margin-left: auto;
   place-items: center;
   border-radius: 50%;
   background: #aebdf7;

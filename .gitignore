@@ -5,3 +5,4 @@ storage/
 __pycache__/
 *.pyc
 .agents
+测试文件
