@@ -126,7 +126,7 @@ form?.addEventListener("submit", async (event) => {
     detectDocumentCover(item, file),
     submitProcessingTask(item, file),
   ]);
-  setView("workspace");
+  setView("reader");
 });
 
 document.querySelector("#add-page")?.addEventListener("click", () => {
@@ -214,11 +214,25 @@ readerBackButton?.addEventListener("click", returnFromReader);
 exportDocumentPdfButton?.addEventListener("click", exportPdf);
 
 editDocumentButton?.addEventListener("click", () => {
-  if (!getSelectedDocument()) {
+  const item = getSelectedDocument();
+  const page = getSelectedPage();
+  if (!item || !page || !readerText) {
     return;
   }
 
-  setView("workspace");
+  if (readerEditing) {
+    page.punctuatedText = readerText.innerText.trim();
+    page.status = page.punctuatedText ? "已保存文字" : "待整理";
+    page.updatedAt = new Date().toISOString();
+    item.status = summarizeDocumentStatus(item);
+    item.updatedAt = new Date().toISOString();
+    persist();
+    setReaderEditing(false);
+    renderAll();
+    return;
+  }
+
+  setReaderEditing(true);
 });
 
 pageImageInput?.addEventListener("change", () => {

@@ -3,12 +3,12 @@ const DOCUMENT_DRAG_CANCEL_DISTANCE = 8;
 let documentDragState = null;
 let suppressDocumentClickUntil = 0;
 let readerReturnView = "library";
+let readerEditing = false;
 
 const PAGE_ROUTES = {
   library: "index.html",
   documents: "documents.html",
   reader: "reader.html",
-  workspace: "workspace.html",
 };
 
 function setReaderReturnView(name) {
@@ -86,6 +86,7 @@ function renderAll() {
   }
   renderDocumentList();
   renderReader();
+  renderReaderSidebar();
   renderDetail();
   renderSmartEmpty();
   if (typeof renderSmartModeButtons === "function") {
@@ -615,6 +616,7 @@ function renderReader() {
   readerNotes.classList.add("hidden");
 
   if (!item) {
+    setReaderEditing(false);
     readerTitle.textContent = "未选择文献";
     readerAuthor.textContent = "著者未录";
     readerYear.textContent = "年份未录";
@@ -654,6 +656,73 @@ function renderReader() {
 
   renderReaderOriginal(page);
   renderReaderText(page);
+  applyReaderEditingState();
+}
+
+function setReaderEditing(editing) {
+  readerEditing = Boolean(editing && getSelectedDocument() && getSelectedPage());
+  if (readerEditing && readerText?.classList.contains("is-empty")) {
+    readerText.innerHTML = "";
+    readerText.classList.remove("is-empty");
+  }
+  applyReaderEditingState();
+  if (readerEditing) {
+    readerText?.focus();
+  }
+}
+
+function applyReaderEditingState() {
+  if (!readerText || !editDocumentButton) {
+    return;
+  }
+
+  readerText.contentEditable = String(readerEditing);
+  readerText.classList.toggle("is-editing", readerEditing);
+  editDocumentLabel.textContent = readerEditing ? "保存" : "修改";
+  editDocumentButton.setAttribute("aria-label", readerEditing ? "保存整理文本" : "修改整理文本");
+}
+
+function renderReaderSidebar() {
+  if (!readerDetailNode || !readerPageList) {
+    return;
+  }
+
+  const item = getSelectedDocument();
+  readerDetailNode.innerHTML = "";
+  readerPageList.innerHTML = "";
+
+  if (!item) {
+    readerSelectedStatus.textContent = "未选择";
+    readerPageCount.textContent = "0 页";
+    readerRefreshButton.classList.add("hidden");
+    readerDetailNode.append(emptyState("请先在文献库打开一本文献"));
+    readerPageList.append(emptyState("暂无页目录"));
+    renderStreamProgress(null);
+    return;
+  }
+
+  readerSelectedStatus.textContent = item.status;
+  readerPageCount.textContent = `${item.pages.length} 页`;
+  readerRefreshButton.classList.toggle("hidden", !item.processingTask);
+  const rows = [
+    ["文献名", item.title || "未识别"],
+    ["作者", item.author || "未录"],
+    ["年份", item.year || "未录"],
+    ["出版社", item.publisher || "未录"],
+    ["标签", item.tags || "未录"],
+    ["处理进度", getProcessingTaskLabel(item)],
+  ];
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const desc = document.createElement("dd");
+    term.textContent = label;
+    desc.textContent = value;
+    row.append(term, desc);
+    readerDetailNode.append(row);
+  });
+  renderPageList(item, readerPageList);
+  renderStreamProgress(item);
 }
 
 function getReaderTextLayer(page) {
@@ -805,7 +874,14 @@ function renderOriginalPreview(page) {
   originalPreview.append(image);
 }
 
-function renderPageList(item) {
+function renderPageList(item, target = pageList) {
+  if (!target) {
+    return;
+  }
+  if (!item.pages.length) {
+    target.append(emptyState("暂无页目录"));
+    return;
+  }
   if (!item.pages.length) {
     pageList.append(emptyState("尚无页目"));
     return;
@@ -828,7 +904,7 @@ function renderPageList(item) {
     });
 
     node.append(label, button);
-    pageList.append(node);
+    target.append(node);
   });
 }
 

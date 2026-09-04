@@ -80,6 +80,7 @@ button {
 
 .reader-layout {
   display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   width: 100%;
@@ -181,6 +182,96 @@ label {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.workspace-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-grid > .document-detail {
+  display: none;
+}
+
+.reader-sidebar {
+  min-width: 0;
+  max-height: calc(100vh - 126px);
+  overflow: auto;
+}
+
+.reader-sidebar-heading {
+  align-items: center;
+}
+
+.reader-sidebar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.reader-sidebar-status > span {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refresh-stream-button.icon-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  padding: 5px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--primary);
+  font-size: 0;
+}
+
+.refresh-stream-button:hover {
+  background: #e3ebe7;
+  color: var(--primary-dark);
+}
+
+.refresh-stream-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#reader-document-detail {
+  margin: 0;
+}
+
+#reader-document-detail div {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+#reader-document-detail dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+#reader-document-detail dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reader-stream-status {
+  margin-top: 12px;
 }
 
 input,
@@ -576,6 +667,14 @@ button:focus-visible {
 
 .reader-text.is-empty {
   white-space: normal;
+}
+
+.reader-text.is-editing {
+  min-height: 220px;
+  padding: 14px;
+  border-color: var(--focus);
+  background: #fffdf7;
+  outline: none;
 }
 
 .reader-empty-state {
