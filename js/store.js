@@ -1,9 +1,9 @@
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY = "modernMilitaryHistory.conversations.schema4";
-const CLIENT_ID_STORAGE_KEY = "modernMilitaryHistory.clientId.schema4";
-const SYNC_CURSOR_STORAGE_KEY = "modernMilitaryHistory.syncCursor.schema4";
-const DELETED_DOCUMENT_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedDocuments.schema4";
-const DELETED_CONVERSATION_IDS_STORAGE_KEY = "modernMilitaryHistory.deletedConversations.schema4";
+const CONVERSATION_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.conversations.schema4`;
+const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
+const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
+const DELETED_CONVERSATION_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedConversations.schema4`;
 const SYNC_INTERVAL_MS = 30000;
 
 let documents = normalizeDocuments(loadCachedDocuments());

@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 APP_DIR = Path(__file__).resolve().parent.parent
-STORAGE_DIR = APP_DIR / "ocr-storage"
+# OCR 存储目录可用 OCR_STORAGE_DIR 环境变量覆盖（/literature 实例指向独立目录）
+STORAGE_DIR = Path(os.getenv("OCR_STORAGE_DIR", APP_DIR / "ocr-storage")).resolve()
 TASKS_DIR = STORAGE_DIR / "tasks"
 PREPROCESS_DIR = STORAGE_DIR / "preprocessed"
 PUBLIC_BASE_URL = os.getenv("OCR_PUBLIC_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
