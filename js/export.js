@@ -121,7 +121,7 @@ function buildPrintHtml(item) {
     </div>
     <main>
       <h1>${escapeHtml(item.title || "未命名文献")} 整理稿</h1>
-      <p class="subtitle">近代军史数智平台</p>
+      <p class="subtitle">${SITE_TITLE}</p>
       <dl class="meta-block">${metadataHtml}</dl>
       ${pagesHtml}
     </main>
