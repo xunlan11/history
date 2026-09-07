@@ -3,21 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>文献�?· 近代军史数智平台</title>
+    <title>文献库 · 近代军史数智平台</title>
     <link rel="stylesheet" href="../styles.css" />
   </head>
   <body data-page="documents">
     <div class="app-shell">
       <main class="main">
-        <section class="view active" id="documents-view" aria-label="文献�?>
+        <section class="view active" id="documents-view" aria-label="文献库">
           <header class="documents-topbar">
             <div class="documents-nav">
-              <button class="ghost-link" type="button" data-view="library">�?返回首页</button>
+              <button class="ghost-link" type="button" data-view="library">‹ 返回首页</button>
             </div>
             <div class="status-title">
-              <p class="eyebrow">文献�?/p>
+              <p class="eyebrow">文献库</p>
             </div>
-            <span class="documents-count" id="all-document-count">0 项在�?/span>
+            <span class="documents-count" id="all-document-count">0 项在库</span>
           </header>
 
           <section class="shelf-stage documents-stage" aria-label="书架">
@@ -49,23 +49,26 @@
           <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
         </div>
         <label class="file-picker-row">
-          <span class="sr-only">选择 PDF 或图片文�?/span>
+          <span class="sr-only">选择 PDF 或图片文件</span>
           <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
         </label>
         <section class="info-field" aria-labelledby="document-info-title">
           <div class="info-field-heading">
             <span id="document-info-title">信息</span>
-            <span>可留空，会自动识�?/span>
+            <span>可留空，会自动识别</span>
           </div>
           <label>
-            文献�?            <input id="title-input" name="title" type="text" />
+            文献名
+            <input id="title-input" name="title" type="text" />
           </label>
           <div class="field-grid metadata-grid">
             <label>
-              著�?              <input id="author-input" name="author" type="text" />
+              著者
+              <input id="author-input" name="author" type="text" />
             </label>
             <label>
-              出版�?              <input id="publisher-input" name="publisher" type="text" />
+              出版社
+              <input id="publisher-input" name="publisher" type="text" />
             </label>
             <label>
               年份
@@ -77,7 +80,7 @@
           标签
           <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
         </label>
-        <p class="form-help">登记�?OCR 连续逐页识别，大模型按页码顺序跟进整理，两者流水推进�?/p>
+        <p class="form-help">登记后 OCR 连续逐页识别，大模型按页码顺序跟进整理，两者流水推进。</p>
         <button class="primary-button" type="submit">登记</button>
       </form>
     </div>
