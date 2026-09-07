@@ -44,7 +44,8 @@ async function submitAuth() {
   const submit = document.querySelector("#auth-submit");
   submit.disabled = true;
   try {
-    const response = await originalFetch(`${HISTORY_BASE}/api/auth/${isRegister ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const authPath = isRegister ? "/data/api/auth/register" : "/data/api/auth/login";
+    const response = await originalFetch(endpoint(authPath), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     let result = {};
     try { result = await response.json(); } catch (_) { /* non-JSON proxy errors */ }
     if (!response.ok) {
@@ -67,19 +68,19 @@ async function submitAuth() {
     submit.disabled = false;
   }
 }
-async function logout() { await originalFetch(`${HISTORY_BASE}/api/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem(AUTH_TOKEN_KEY)}` } }); localStorage.removeItem(AUTH_TOKEN_KEY); currentUser = null; window.location.href = new URL("index.html", location.href).href; }
+async function logout() { await originalFetch(endpoint("/data/api/auth/logout"), { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem(AUTH_TOKEN_KEY)}` } }); localStorage.removeItem(AUTH_TOKEN_KEY); currentUser = null; window.location.href = new URL("index.html", location.href).href; }
 function updateAuthUi() { document.querySelector("#auth-user").textContent = currentUser ? currentUser.username : ""; document.querySelector("#auth-action").textContent = currentUser ? "登出" : "登录"; document.querySelector("#auth-admin").classList.toggle("hidden", !currentUser?.isAdmin); }
 async function ensureAuthenticated() {
   authUi(); const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  if (token) { const response = await originalFetch(`${HISTORY_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } }); if (response.ok) { currentUser = (await response.json()).user; authReady = true; updateAuthUi(); return true; } localStorage.removeItem(AUTH_TOKEN_KEY); }
+  if (token) { const response = await originalFetch(endpoint("/data/api/auth/me"), { headers: { Authorization: `Bearer ${token}` } }); if (response.ok) { currentUser = (await response.json()).user; authReady = true; updateAuthUi(); return true; } localStorage.removeItem(AUTH_TOKEN_KEY); }
   document.querySelector(".auth-modal").classList.remove("hidden"); return false;
 }
 async function manageUsers() {
-  const response = await fetch(`${HISTORY_BASE}/api/admin/users`); if (!response.ok) return;
+  const response = await fetch(endpoint("/data/api/admin/users")); if (!response.ok) return;
   const users = await response.json();
   const create = prompt(`账户管理\n${users.map((u) => `${u.username}${u.isAdmin ? " (管理员)" : ""}`).join("\n")}\n\n输入“账号:密码”创建普通账户，取消关闭`);
   if (create?.includes(":")) {
     const [username, password] = create.split(":", 2);
-    await fetch(`${HISTORY_BASE}/api/admin/users`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+    await fetch(endpoint("/data/api/admin/users"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
   }
 }
