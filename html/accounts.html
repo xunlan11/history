@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>账户管理</title>
+    <link rel="stylesheet" href="../styles.css" />
+    <style>
+      /* 账户管理页 —— 仿 poem 平台用户管理页，沿用本站设计变量 */
+      .accounts-page {
+        height: 100vh;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 14px;
+        padding: 14px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+
+      .accounts-topbar {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 18px;
+        min-height: 68px;
+        padding: 10px 18px;
+        border: 1px solid rgba(221, 226, 220, 0.86);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 12px 32px rgba(42, 48, 44, 0.08);
+      }
+
+      .accounts-topbar .status-title .eyebrow {
+        color: var(--text);
+        font-size: 24px;
+      }
+
+      .accounts-actions {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .accounts-actions .auth-bar {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .accounts-main {
+        min-height: 0;
+        overflow: auto;
+        padding: 4px 2px 20px;
+      }
+
+      .accounts-card {
+        width: min(980px, 100%);
+        margin: 0 auto;
+        display: grid;
+        gap: 14px;
+      }
+
+      .accounts-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+
+      .accounts-toolbar-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .accounts-search {
+        width: min(300px, 60vw);
+        min-height: 40px;
+        padding: 8px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfb;
+        color: var(--text);
+      }
+
+      .accounts-search:focus {
+        outline: 3px solid rgba(209, 154, 56, 0.28);
+        border-color: var(--focus);
+      }
+
+      .accounts-count {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .accounts-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        min-height: 26px;
+      }
+
+      .accounts-pagination .pagination-info {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .accounts-pagination input.pagination-input {
+        width: 56px;
+        min-height: 28px;
+        padding: 2px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        text-align: center;
+      }
+
+      .accounts-table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+
+      .accounts-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 680px;
+      }
+
+      .accounts-table th,
+      .accounts-table td {
+        padding: 11px 14px;
+        text-align: left;
+        border-bottom: 1px solid #e6ebe7;
+        white-space: nowrap;
+      }
+
+      .accounts-table thead th {
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .accounts-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .accounts-table tbody tr:hover td {
+        background: #f7faf8;
+      }
+
+      .accounts-table .col-id {
+        width: 56px;
+        color: var(--muted);
+      }
+
+      .accounts-table .col-username {
+        font-weight: 700;
+      }
+
+      .accounts-table .col-created {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .accounts-table .col-actions {
+        text-align: right;
+      }
+
+      .accounts-empty {
+        padding: 44px 12px !important;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .account-tag {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 20px;
+      }
+
+      .account-tag-admin {
+        background: #fdf3e5;
+        color: #a06a18;
+        border: 1px solid #ecd9b6;
+      }
+
+      .account-tag-user {
+        background: #eef3f0;
+        color: #2d6b5c;
+        border: 1px solid #d3e3da;
+      }
+
+      .actions-row {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .actions-row .btn-mini {
+        min-height: 30px;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .actions-row .btn-mini:hover {
+        border-color: #afc3b8;
+        background: #f2f7f4;
+      }
+
+      .actions-row .btn-danger {
+        border-color: #e3b7b2;
+        color: #c0392b;
+      }
+
+      .actions-row .btn-danger:hover {
+        border-color: #c94437;
+        background: #c94437;
+        color: #fff;
+      }
+
+      .actions-row .text-muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .accounts-toast {
+        position: fixed;
+        top: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 60;
+        max-width: min(560px, calc(100vw - 32px));
+        padding: 10px 18px;
+        border-radius: 8px;
+        background: #20241f;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 12px 32px rgba(32, 36, 31, 0.24);
+      }
+
+      .accounts-toast.toast-error {
+        background: #c0392b;
+      }
+    </style>
+  </head>
+  <body class="accounts-page" data-page="accounts">
+    <header class="accounts-topbar">
+      <div class="accounts-nav">
+        <button class="ghost-link" id="accounts-back" type="button">‹ 返回首页</button>
+      </div>
+      <div class="status-title">
+        <p class="eyebrow">账户管理</p>
+      </div>
+      <div class="accounts-actions" id="auth-slot"></div>
+    </header>
+
+    <main class="accounts-main">
+      <section class="panel accounts-card">
+        <div class="accounts-toolbar">
+          <div class="accounts-toolbar-left">
+            <input
+              id="accounts-search"
+              class="accounts-search"
+              type="search"
+              placeholder="搜索用户名"
+              autocomplete="off"
+            />
+            <span id="accounts-count" class="accounts-count">共 0 人</span>
+          </div>
+        </div>
+        <div id="accounts-pagination" class="accounts-pagination"></div>
+        <div class="accounts-table-wrap">
+          <table class="accounts-table">
+            <colgroup>
+              <col class="col-id" />
+              <col />
+              <col style="width: 110px" />
+              <col class="col-created" />
+              <col class="col-actions" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>用户名</th>
+                <th>角色</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="accounts-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="confirm-dialog hidden" id="accounts-confirm" role="dialog" aria-modal="true" aria-labelledby="accounts-confirm-title">
+      <div class="confirm-card">
+        <h2 id="accounts-confirm-title">确认操作</h2>
+        <p id="accounts-confirm-message"></p>
+        <div class="confirm-actions">
+          <button class="secondary-button" id="accounts-confirm-cancel" type="button">取消</button>
+          <button class="danger-button" id="accounts-confirm-ok" type="button">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="accounts-toast hidden" id="accounts-toast" role="status"></div>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/utils.js"></script>
+    <script src="../js/auth.js"></script>
+    <script>
+      (function () {
+        const PAGE_SIZE = 15;
+        let users = [];
+        let query = "";
+        let page = 1;
+
+        const tbody = document.getElementById("accounts-tbody");
+        const paginationEl = document.getElementById("accounts-pagination");
+        const countEl = document.getElementById("accounts-count");
+        const searchInput = document.getElementById("accounts-search");
+        const toastEl = document.getElementById("accounts-toast");
+        const confirmDialog = document.getElementById("accounts-confirm");
+
+        function endpointPath(sub) {
+          return `/data/api/admin/users${sub}`;
+        }
+
+        async function api(path, options = {}) {
+          const response = await fetch(endpoint(path), options);
+          let data = null;
+          try { data = await response.json(); } catch (_) { /* 非 JSON 响应 */ }
+          if (!response.ok) {
+            const error = new Error((data && data.detail) || `请求失败（${response.status}）`);
+            error.status = response.status;
+            throw error;
+          }
+          return data;
+        }
+
+        function myId() {
+          return currentUser ? Number(currentUser.id) : null;
+        }
+
+        function isSelf(id) {
+          return myId() !== null && Number(id) === myId();
+        }
+
+        function toast(message, isError = false) {
+          toastEl.textContent = message;
+          toastEl.classList.toggle("toast-error", isError);
+          toastEl.classList.remove("hidden");
+          clearTimeout(toast._timer);
+          toast._timer = setTimeout(() => toastEl.classList.add("hidden"), 2600);
+        }
+
+        function filterAndSort(list) {
+          const q = query.trim().toLowerCase();
+          let result = list.slice();
+          if (q) result = result.filter((u) => String(u.username).toLowerCase().includes(q));
+          return result.sort((a, b) => Number(a.id) - Number(b.id));
+        }
+
+        function rowHtml(user) {
+          const isAdmin = Boolean(user.isAdmin);
+          const roleHtml = isAdmin
+            ? '<span class="account-tag account-tag-admin">管理员</span>'
+            : '<span class="account-tag account-tag-user">普通用户</span>';
+          const created = user.createdAt ? formatDateTime(new Date(user.createdAt)) : "";
+          let actions = "";
+          if (isSelf(user.id)) {
+            actions = '<span class="text-muted">当前账户</span>';
+          } else {
+            const toggle = isAdmin
+              ? `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="0">设为普通用户</button>`
+              : `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="1">设为管理员</button>`;
+            actions = `<div class="actions-row">${toggle}<button type="button" class="btn-mini btn-danger" data-id="${user.id}" data-act="delete">删除</button></div>`;
+          }
+          return (
+            "<tr>" +
+            `<td class="col-id">${user.id}</td>` +
+            `<td class="col-username">${escapeHtml(user.username)}</td>` +
+            `<td>${roleHtml}</td>` +
+            `<td class="col-created">${escapeHtml(created)}</td>` +
+            `<td class="col-actions">${actions}</td>` +
+            "</tr>"
+          );
+        }
+
+        function renderPagination(totalCount, totalPages) {
+          paginationEl.innerHTML = "";
+          if (!totalCount) {
+            const info = document.createElement("span");
+            info.className = "pagination-info";
+            info.textContent = "暂无账户";
+            paginationEl.appendChild(info);
+            return;
+          }
+          const prevBtn = document.createElement("button");
+          prevBtn.type = "button";
+          prevBtn.className = "btn-mini";
+          prevBtn.textContent = "◀";
+          prevBtn.disabled = page <= 1;
+          prevBtn.addEventListener("click", () => { if (page > 1) { page -= 1; render(); } });
+
+          const nextBtn = document.createElement("button");
+          nextBtn.type = "button";
+          nextBtn.className = "btn-mini";
+          nextBtn.textContent = "▶";
+          nextBtn.disabled = page >= totalPages;
+          nextBtn.addEventListener("click", () => { if (page < totalPages) { page += 1; render(); } });
+
+          const info = document.createElement("span");
+          info.className = "pagination-info";
+          info.textContent = "第 ";
+          const input = document.createElement("input");
+          input.type = "number";
+          input.className = "pagination-input";
+          input.min = "1";
+          input.max = String(totalPages);
+          input.value = String(page);
+          input.title = "输入页码后按回车";
+          input.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              const target = parseInt(input.value, 10);
+              if (!Number.isNaN(target)) goToPage(target);
+            }
+          });
+          input.addEventListener("blur", () => { input.value = String(page); });
+          info.appendChild(input);
+          const suffix = document.createElement("span");
+          suffix.textContent = ` / ${totalPages} 页`;
+          info.appendChild(suffix);
+
+          paginationEl.appendChild(prevBtn);
+          paginationEl.appendChild(info);
+          paginationEl.appendChild(nextBtn);
+        }
+
+        function goToPage(target) {
+          const total = filteredCount();
+          const totalPages = total ? Math.ceil(total / PAGE_SIZE) : 1;
+          const next = Math.max(1, Math.min(target, totalPages));
+          if (next === page) return;
+          page = next;
+          render();
+        }
+
+        function filteredCount() {
+          return filterAndSort(users).length;
+        }
+
+        function render() {
+          const filtered = filterAndSort(users);
+          const total = filtered.length;
+          const totalPages = total ? Math.ceil(total / PAGE_SIZE) : 1;
+          if (page < 1) page = 1;
+          if (page > totalPages) page = totalPages;
+          const start = total ? (page - 1) * PAGE_SIZE : 0;
+          const rows = filtered.slice(start, start + PAGE_SIZE);
+          countEl.textContent = `共 ${total} 人`;
+          if (rows.length) {
+            tbody.innerHTML = rows.map(rowHtml).join("");
+          } else {
+            tbody.innerHTML = '<tr><td class="accounts-empty" colspan="5">没有匹配的账户</td></tr>';
+          }
+          renderPagination(total, totalPages);
+        }
+
+        async function loadUsers() {
+          users = await api(endpointPath(""));
+          render();
+        }
+
+        function askConfirm(title, message, okText) {
+          return new Promise((resolve) => {
+            document.getElementById("accounts-confirm-title").textContent = title;
+            document.getElementById("accounts-confirm-message").textContent = message;
+            const okBtn = document.getElementById("accounts-confirm-ok");
+            okBtn.textContent = okText;
+            const finish = (value) => {
+              confirmDialog.classList.add("hidden");
+              okBtn.onclick = null;
+              document.getElementById("accounts-confirm-cancel").onclick = null;
+              resolve(value);
+            };
+            okBtn.onclick = () => finish(true);
+            document.getElementById("accounts-confirm-cancel").onclick = () => finish(false);
+            confirmDialog.classList.remove("hidden");
+          });
+        }
+
+        async function handleAction(button) {
+          const user = users.find((u) => Number(u.id) === Number(button.dataset.id));
+          if (!user) return;
+          const act = button.dataset.act;
+          if (act === "delete") {
+            const ok = await askConfirm("删除账户", `确定删除账户 “${user.username}” 吗？删除后无法恢复。`, "删除");
+            if (!ok) return;
+            try {
+              await api(endpointPath(`/${user.id}`), { method: "DELETE" });
+              toast(`已删除账户 “${user.username}”`);
+            } catch (error) {
+              toast(error.message, true);
+            }
+            await loadUsers();
+            return;
+          }
+          if (act === "role") {
+            const isAdmin = button.dataset.val === "1";
+            const ok = await askConfirm(
+              "修改角色",
+              `确定将 “${user.username}” 设为${isAdmin ? "管理员" : "普通用户"}吗？`,
+              "确认"
+            );
+            if (!ok) return;
+            try {
+              await api(endpointPath(`/${user.id}`), {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ isAdmin }),
+              });
+              toast(`已将 “${user.username}” 设为${isAdmin ? "管理员" : "普通用户"}`);
+            } catch (error) {
+              toast(error.message, true);
+            }
+            await loadUsers();
+          }
+        }
+
+        function bindEvents() {
+          document.getElementById("accounts-back").addEventListener("click", () => {
+            window.location.href = new URL("index.html", location.href).href;
+          });
+          searchInput.addEventListener("input", () => {
+            clearTimeout(bindEvents._timer);
+            bindEvents._timer = setTimeout(() => {
+              query = searchInput.value;
+              page = 1;
+              render();
+            }, 220);
+          });
+          tbody.addEventListener("click", (event) => {
+            const button = event.target.closest("button[data-act]");
+            if (button) handleAction(button);
+          });
+          confirmDialog.addEventListener("click", (event) => {
+            if (event.target === confirmDialog) {
+              document.getElementById("accounts-confirm-cancel").click();
+            }
+          });
+        }
+
+        async function init() {
+          document.title = `账户管理 · ${SITE_TITLE}`;
+          if (typeof ensureAuthenticated === "function" && !(await ensureAuthenticated())) {
+            return; // 登录弹窗已弹出，登录成功后会整页刷新
+          }
+          const adminButton = document.getElementById("auth-admin");
+          if (adminButton) adminButton.classList.add("hidden"); // 当前页即管理页
+          if (!currentUser || !currentUser.isAdmin) {
+            window.location.replace(new URL("index.html", location.href).href);
+            return;
+          }
+          bindEvents();
+          try {
+            await loadUsers();
+          } catch (error) {
+            toast(error.message, true);
+          }
+        }
+
+        init();
+      })();
+    </script>
+  </body>
+</html>

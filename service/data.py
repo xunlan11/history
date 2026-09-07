@@ -68,6 +68,9 @@ class UserCreate(BaseModel):
     password: str
     isAdmin: bool = False
 
+class UserAdminUpdate(BaseModel):
+    isAdmin: bool = False
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -241,6 +244,12 @@ def current_user(authorization: str | None) -> dict[str, Any]:
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
+
+
+def purge_sessions_for(user_id: int) -> None:
+    """注销某用户当前持有的全部登录会话，权限/删除变更后立即生效。"""
+    for token in [t for t, u in SESSIONS.items() if u.get("id") == user_id]:
+        SESSIONS.pop(token, None)
 
 
 def get_sync_version(connection: sqlite3.Connection) -> int:
@@ -1178,8 +1187,36 @@ def delete_user(user_id: int, authorization: str | None = Header(default=None)) 
     if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
     if user_id == user["id"]: raise HTTPException(status_code=400, detail="不能删除当前管理员")
     with database() as connection:
-        with connection: connection.execute("DELETE FROM users WHERE id=?", (user_id,))
+        row = connection.execute("SELECT id, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if row["is_admin"]:
+            admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
+        with connection:
+            connection.execute("DELETE FROM users WHERE id=?", (user_id,))
+    purge_sessions_for(user_id)
     return {"status": "ok"}
+
+@app.patch("/api/admin/users/{user_id}")
+def set_user_admin(user_id: int, payload: UserAdminUpdate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
+    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    with database() as connection:
+        row = connection.execute("SELECT id, username, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if row["id"] == user["id"]:
+            raise HTTPException(status_code=400, detail="不能修改当前账户的管理员状态")
+        if row["is_admin"] and not payload.isAdmin:
+            admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
+        with connection:
+            connection.execute("UPDATE users SET is_admin=? WHERE id=?", (int(payload.isAdmin), user_id))
+    purge_sessions_for(user_id)
+    return {"id": row["id"], "username": row["username"], "isAdmin": payload.isAdmin}
 
 @app.get("/api/bootstrap")
 def bootstrap(authorization: str | None = Header(default=None)) -> dict[str, Any]:
