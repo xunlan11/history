@@ -100,6 +100,7 @@ form?.addEventListener("submit", async (event) => {
     year: textValue("year"),
     publisher: textValue("publisher"),
     tags: textValue("tags"),
+    visibility: "private",
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
     coverVariant: getNextDocumentCoverVariant(),
@@ -585,6 +586,9 @@ function moveToReaderPageIndex(value) {
 }
 
 async function initializeApplication() {
+  if (typeof ensureAuthenticated === "function" && !(await ensureAuthenticated())) {
+    return;
+  }
   await initializeServerData();
   applyRouteSelection();
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;

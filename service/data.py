@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -27,7 +27,8 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+SESSIONS: dict[str, dict[str, Any]] = {}
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
 FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,15 @@ class ConversationFileTextPayload(BaseModel):
     status: str = "ready"
     warnings: list[str] = Field(default_factory=list)
 
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    isAdmin: bool = False
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -82,6 +92,11 @@ def database():
 
 
 def ensure_schema(connection: sqlite3.Connection) -> None:
+    documents_exists = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'").fetchone()
+    if documents_exists:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)").fetchall()}
+        if "owner_id" not in columns:
+            connection.executescript("DROP TABLE IF EXISTS document_files; DROP TABLE IF EXISTS document_pages; DROP TABLE IF EXISTS documents; DROP TABLE IF EXISTS conversations; DROP TABLE IF EXISTS conversation_files; DROP TABLE IF EXISTS users;")
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS app_meta (
@@ -95,7 +110,17 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             sort_order INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
-            version INTEGER NOT NULL DEFAULT 1
+            version INTEGER NOT NULL DEFAULT 1,
+            owner_id INTEGER,
+            visibility TEXT NOT NULL DEFAULT 'private'
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS document_pages (
@@ -171,6 +196,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
+    admin_hash = hashlib.sha256("1wdvBHU*".encode()).hexdigest()
+    connection.execute("INSERT OR IGNORE INTO users(username,password_hash,is_admin,created_at) VALUES('xunlan',?,?,?)", (admin_hash, 1, now_iso()))
     schema_row = connection.execute(
         "SELECT value FROM app_meta WHERE key = 'schema_version'"
     ).fetchone()
@@ -180,11 +207,19 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             (str(SCHEMA_VERSION),),
         )
     elif int(schema_row["value"]) != SCHEMA_VERSION:
-        raise RuntimeError(
-            f"数据库结构版本为 {schema_row['value']}，当前代码要求 {SCHEMA_VERSION}。"
-            "本项目不执行旧版本迁移，请重新初始化数据库。"
-        )
+        connection.execute("UPDATE app_meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),))
+
     connection.commit()
+
+def current_user(authorization: str | None) -> dict[str, Any]:
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    user = SESSIONS.get(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def get_sync_version(connection: sqlite3.Connection) -> int:
@@ -610,15 +645,19 @@ def rehydrate_document_assets(connection: sqlite3.Connection, document: dict[str
     return document
 
 
-def active_payloads(connection: sqlite3.Connection, table: Literal["documents", "conversations"]) -> list[dict[str, Any]]:
+def active_payloads(connection: sqlite3.Connection, table: Literal["documents", "conversations"], user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    where = "deleted_at IS NULL"
+    params: tuple[Any, ...] = ()
+    if table == "documents" and user:
+        where += " AND (visibility = 'public' OR owner_id = ?)"
+        params = (user["id"],)
     rows = connection.execute(
         f"""
         SELECT payload
         FROM {table}
-        WHERE deleted_at IS NULL
+        WHERE {where}
         ORDER BY sort_order ASC, updated_at DESC
-        """
-    ).fetchall()
+        """, params).fetchall()
     payloads = [json_load(row["payload"]) for row in rows]
     if table == "documents":
         return [rehydrate_document_assets(connection, payload) for payload in payloads]
@@ -626,7 +665,7 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
 
 
 
-def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str) -> None:
+def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
     for sort_order, document in enumerate(documents):
         document_id = str(document.get("id") or "").strip()
         if not document_id:
@@ -639,22 +678,23 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             (document_id,),
         ).fetchone()
 
+        visibility = "public" if document.get("visibility") == "public" else "private"
         if existing:
             connection.execute(
                 """
                 UPDATE documents
-                SET payload = ?, sort_order = ?, updated_at = ?, deleted_at = NULL, version = version + 1
-                WHERE id = ?
+                SET payload = ?, sort_order = ?, updated_at = ?, deleted_at = NULL, version = version + 1, visibility = ?, owner_id = ?
+                WHERE id = ? AND owner_id = ?
                 """,
-                (payload, sort_order, timestamp, document_id),
+                (payload, sort_order, timestamp, visibility, user["id"], document_id, user["id"]),
             )
         else:
             connection.execute(
                 """
-                INSERT INTO documents(id, payload, sort_order, updated_at, deleted_at, version)
-                VALUES(?, ?, ?, ?, NULL, 1)
+                INSERT INTO documents(id, payload, sort_order, updated_at, deleted_at, version, owner_id, visibility)
+                VALUES(?, ?, ?, ?, NULL, 1, ?, ?)
                 """,
-                (document_id, payload, sort_order, timestamp),
+                (document_id, payload, sort_order, timestamp, user["id"], visibility),
             )
 
         upsert_document_pages(connection, document_id, document.get("pages") or [], timestamp)
@@ -783,12 +823,12 @@ def soft_delete_entities(
     table: Literal["documents", "conversations"],
     entity_ids: list[str],
     timestamp: str,
+    user: dict[str, Any] | None = None,
 ) -> None:
     for entity_id in {str(value).strip() for value in entity_ids if str(value).strip()}:
-        connection.execute(
-            f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?",
-            (timestamp, timestamp, entity_id),
-        )
+        owner_clause = " AND owner_id = ?" if table == "documents" and user else ""
+        params: tuple[Any, ...] = (timestamp, timestamp, entity_id) + ((user["id"],) if owner_clause else ())
+        connection.execute(f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?{owner_clause}", params)
 
         if table == "documents":
             connection.execute(
@@ -806,10 +846,10 @@ def soft_delete_entities(
             )
 
 
-def build_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
+def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "documents": active_payloads(connection, "documents"),
+        "documents": active_payloads(connection, "documents", user),
         "conversations": active_payloads(connection, "conversations"),
         "syncCursor": str(get_sync_version(connection)),
     }
@@ -1058,14 +1098,78 @@ def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
     return {"status": "ok", "attachmentId": attachment_id, "syncCursor": str(cursor)}
 
 
-@app.get("/api/bootstrap")
-def bootstrap() -> dict[str, Any]:
+@app.post("/api/auth/register")
+def register(credentials: Credentials) -> dict[str, Any]:
+    username = credentials.username.strip()
+    if len(username) < 2 or len(credentials.password) < 1:
+        raise HTTPException(status_code=400, detail="账号和密码不能为空")
     with database() as connection:
-        return build_snapshot(connection)
+        try:
+            with connection:
+                cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,0,?)", (username, hash_password(credentials.password), now_iso()))
+                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False}
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="账号已存在") from exc
+    token = os.urandom(24).hex(); SESSIONS[token] = user
+    return {"token": token, "user": user}
+
+@app.post("/api/auth/login")
+def login(credentials: Credentials) -> dict[str, Any]:
+    with database() as connection:
+        row = connection.execute("SELECT id,username,is_admin FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])}
+    token = os.urandom(24).hex(); SESSIONS[token] = user
+    return {"token": token, "user": user}
+
+@app.get("/api/auth/me")
+def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return {"user": current_user(authorization)}
+
+@app.post("/api/auth/logout")
+def logout(authorization: str | None = Header(default=None)) -> dict[str, str]:
+    token = (authorization or "").removeprefix("Bearer ").strip(); SESSIONS.pop(token, None)
+    return {"status": "ok"}
+
+@app.get("/api/admin/users")
+def list_users(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+    user = current_user(authorization)
+    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    with database() as connection:
+        return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "createdAt": r["created_at"]} for r in connection.execute("SELECT id,username,is_admin,created_at FROM users ORDER BY id").fetchall()]
+
+@app.post("/api/admin/users")
+def create_user(payload: UserCreate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    admin = current_user(authorization)
+    if not admin["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    try:
+        with database() as connection:
+            with connection:
+                cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,?,?)", (payload.username.strip(), hash_password(payload.password), int(payload.isAdmin), now_iso()))
+                return {"id": cursor.lastrowid, "username": payload.username.strip(), "isAdmin": payload.isAdmin}
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="账号已存在") from exc
+
+@app.delete("/api/admin/users/{user_id}")
+def delete_user(user_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
+    user = current_user(authorization)
+    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    if user_id == user["id"]: raise HTTPException(status_code=400, detail="不能删除当前管理员")
+    with database() as connection:
+        with connection: connection.execute("DELETE FROM users WHERE id=?", (user_id,))
+    return {"status": "ok"}
+
+@app.get("/api/bootstrap")
+def bootstrap(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
+    with database() as connection:
+        return build_snapshot(connection, user)
 
 
 @app.get("/api/sync")
-def sync(cursor: str = Query(default="")) -> dict[str, Any]:
+def sync(cursor: str = Query(default=""), authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
     with database() as connection:
         current_cursor = str(get_sync_version(connection))
         if cursor and cursor == current_cursor:
@@ -1076,24 +1180,26 @@ def sync(cursor: str = Query(default="")) -> dict[str, Any]:
                 "conversations": [],
             }
 
-        snapshot = build_snapshot(connection)
+        snapshot = build_snapshot(connection, user)
         snapshot["changed"] = True
         return snapshot
 
 
 @app.post("/api/sync/push")
-def push(payload: SyncPayload) -> dict[str, Any]:
+def push(payload: SyncPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
     timestamp = now_iso()
     try:
         with database() as connection:
             with connection:
-                upsert_documents(connection, payload.documents, timestamp)
+                upsert_documents(connection, payload.documents, timestamp, user)
                 upsert_conversations(connection, payload.conversations, timestamp)
                 soft_delete_entities(
                     connection,
                     "documents",
                     payload.deletedDocumentIds,
                     timestamp,
+                    user,
                 )
                 soft_delete_entities(
                     connection,
@@ -1102,7 +1208,7 @@ def push(payload: SyncPayload) -> dict[str, Any]:
                     timestamp,
                 )
                 cursor = bump_sync_version(connection)
-                snapshot = build_snapshot(connection)
+                snapshot = build_snapshot(connection, user)
         snapshot.update({"status": "ok", "syncCursor": str(cursor), "updatedAt": timestamp})
         return snapshot
     except sqlite3.Error as exc:

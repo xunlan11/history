@@ -11,13 +11,13 @@
       <main class="main">
         <section class="view active" id="library-view" aria-label="首页">
           <header class="home-statusbar">
-            <div class="service-strip" aria-label="服务链接状态">
+            <div class="service-strip" aria-label="服务链接状�?>
               <span class="service-item service-item-version">
-                版本：<b id="version-service-status" class="service-warn">检查中</b>
+                版本�?b id="version-service-status" class="service-warn">检查中</b>
                 <button class="status-action hidden" id="version-update-button" type="button">更新</button>
               </span>
-              <span class="service-item">OCR：<b id="ocr-service-status" class="service-warn">未连接</b></span>
-              <span class="service-item service-item-llm">大模型：<b id="llm-service-status" class="service-warn">未连接</b></span>
+              <span class="service-item">OCR�?b id="ocr-service-status" class="service-warn">未连�?/b></span>
+              <span class="service-item service-item-llm">大模型：<b id="llm-service-status" class="service-warn">未连�?/b></span>
             </div>
             <div class="status-title">
               <p class="eyebrow" id="home-site-title">近代军史数智平台</p>
@@ -35,7 +35,7 @@
             <aside class="home-sidebar chat-sidebar" aria-label="对话记录">
               <div class="sidebar-heading">
                 <h2>对话记录</h2>
-                <button class="ghost-link" id="new-conversation" type="button">新建 ＋</button>
+                <button class="ghost-link" id="new-conversation" type="button">新建 �?/button>
               </div>
               <div class="conversation-list" id="conversation-list"></div>
             </aside>
@@ -43,7 +43,7 @@
             <div class="center-stack">
               <section class="message-panel" aria-label="书库问答消息">
                 <div class="message-head">
-                  <h2 id="chat-title">新对话</h2>
+                  <h2 id="chat-title">新对�?/h2>
                   <span id="chat-hint">输入后在这里显示检索或编年结果</span>
                 </div>
                 <div class="message-scroll" id="message-feed">
@@ -56,7 +56,7 @@
 
               <section class="smart-dock" id="smart-dock" aria-label="全文检索与史事编年">
                 <div class="smart-input-box">
-                  <div class="reference-context" aria-label="当前对话参考文献">
+                  <div class="reference-context" aria-label="当前对话参考文�?>
                     <input
                       class="hidden"
                       id="conversation-file-input"
@@ -69,24 +69,24 @@
                   </div>
                   <p class="reference-scope-status hidden" id="reference-scope-status" role="status"></p>
                   <p class="reference-scope-status hidden" id="conversation-attachment-status" role="status"></p>
-                  <label class="sr-only" for="search-input">输入检索词或编年主题</label>
-                  <textarea id="search-input" rows="3" placeholder="问书库：输入问题，系统会结合已整理文献回答"></textarea>
+                  <label class="sr-only" for="search-input">输入检索词或编年主�?/label>
+                  <textarea id="search-input" rows="3" placeholder="问书库：输入问题，系统会结合已整理文献回�?></textarea>
                   <input id="chronicle-topic" type="hidden" />
                   <div class="smart-actions">
                     <button class="chip-button active" id="chat-button" type="button" data-smart-mode="chat">对话</button>
-                    <button class="chip-button" id="search-button" type="button" data-smart-mode="search">检索</button>
+                    <button class="chip-button" id="search-button" type="button" data-smart-mode="search">检�?/button>
                     <button class="chip-button" id="build-chronicle" type="button" data-smart-mode="chronicle">编年</button>
                     <button class="reference-trigger" id="open-reference-documents" type="button">
-                      ＋ 导入文献
+                      �?导入文献
                       <span class="reference-trigger-count hidden" id="reference-document-count"></span>
                     </button>
                     <button
                       class="reference-trigger"
                       id="upload-conversation-files"
                       type="button"
-                      title="临时快速读取，仅供当前对话使用，不进入文献库"
-                    >↑ 上传文件</button>
-                    <button class="round-send" id="smart-send" type="button" title="发送">↑</button>
+                      title="临时快速读取，仅供当前对话使用，不进入文献�?
+                    >�?上传文件</button>
+                    <button class="round-send" id="smart-send" type="button" title="发�?>�?/button>
                   </div>
                 </div>
               </section>
@@ -94,8 +94,8 @@
 
             <aside class="home-sidebar library-sidebar" aria-label="书库">
               <div class="sidebar-heading">
-                <h2>文献库 <span class="sidebar-count" id="document-count">0 项在库</span></h2>
-                <button class="ghost-link" id="jump-documents" type="button">全部 ›</button>
+                <h2>文献�?<span class="sidebar-count" id="document-count">0 项在�?/span></h2>
+                <button class="ghost-link" id="jump-documents" type="button">全部 �?/button>
               </div>
               <section class="shelf-stage" aria-label="书架">
                 <div class="document-list" id="document-list"></div>
@@ -122,7 +122,7 @@
         <header class="reference-dialog-header">
           <div>
             <h2 id="reference-document-title">从文献库导入</h2>
-            <p>选择一个或多个已处理文献，作为当前对话的背景信息。</p>
+            <p>选择一个或多个已处理文献，作为当前对话的背景信息�?/p>
           </div>
           <button class="reference-dialog-close" id="close-reference-documents" type="button" aria-label="关闭">×</button>
         </header>
@@ -133,7 +133,7 @@
           <span id="reference-selection-summary">未选择文献</span>
           <div class="confirm-actions">
             <button class="secondary-button" id="cancel-reference-documents" type="button">取消</button>
-            <button class="primary-button" id="confirm-reference-documents" type="button">导入所选文献</button>
+            <button class="primary-button" id="confirm-reference-documents" type="button">导入所选文�?/button>
           </div>
         </footer>
       </section>
@@ -156,6 +156,7 @@
 
     <script src="../js/config.js"></script>
     <script src="../js/utils.js"></script>
+    <script src="../js/auth.js"></script>
     <script src="../js/store.js"></script>
     <script src="../js/dom.js"></script>
     <script src="../js/references.js"></script>

@@ -721,6 +721,14 @@ function renderReaderSidebar() {
     row.append(term, desc);
     readerDetailNode.append(row);
   });
+  const visibilityRow = document.createElement("div");
+  const visibilityLabel = document.createElement("dt"); visibilityLabel.textContent = "可见性";
+  const visibilitySelect = document.createElement("select");
+  visibilitySelect.innerHTML = '<option value="private">私密（仅自己）</option><option value="public">公开（所有用户）</option>';
+  visibilitySelect.value = item.visibility === "public" ? "public" : "private";
+  visibilitySelect.onchange = () => { item.visibility = visibilitySelect.value; item.updatedAt = new Date().toISOString(); persist(); };
+  const visibilityDesc = document.createElement("dd"); visibilityDesc.append(visibilitySelect);
+  visibilityRow.append(visibilityLabel, visibilityDesc); readerDetailNode.append(visibilityRow);
   renderPageList(item, readerPageList);
   renderStreamProgress(item);
 }
