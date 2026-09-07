@@ -85,3 +85,6 @@ const conversationFileInput = document.querySelector("#conversation-file-input")
 const conversationAttachmentChips = document.querySelector("#conversation-attachment-chips");
 const conversationAttachmentStatus = document.querySelector("#conversation-attachment-status");
 const fontOptionButtons = document.querySelectorAll("[data-font-option]");
+const openSettingsButton = document.querySelector("#open-settings");
+const settingsDialog = document.querySelector("#settings-dialog");
+const closeSettingsButton = document.querySelector("#close-settings");

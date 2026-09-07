@@ -10,6 +10,15 @@ fontOptionButtons.forEach((button) => {
   });
 });
 
+openSettingsButton?.addEventListener("click", () => settingsDialog?.classList.remove("hidden"));
+closeSettingsButton?.addEventListener("click", () => settingsDialog?.classList.add("hidden"));
+settingsDialog?.addEventListener("click", (event) => {
+  if (event.target === settingsDialog) settingsDialog.classList.add("hidden");
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") settingsDialog?.classList.add("hidden");
+});
+
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
 });

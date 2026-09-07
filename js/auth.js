@@ -16,7 +16,7 @@ window.fetch = (input, init = {}) => {
 function authUi() {
   const bar = document.createElement("div"); bar.className = "auth-bar";
   bar.innerHTML = '<span id="auth-user"></span><button id="auth-admin" class="ghost-link hidden">管理账户</button><button id="auth-action" class="ghost-link">登录</button>';
-  document.querySelector("header")?.append(bar);
+  (document.querySelector("#auth-slot") || document.querySelector("header"))?.append(bar);
   const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<div class="auth-card"><h2 id="auth-title">登录</h2><input id="auth-username" placeholder="账号"><input id="auth-password" type="password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button">登录</button><button id="auth-switch" class="ghost-link">注册账户</button></div>';
   document.body.append(modal);
   document.querySelector("#auth-action").onclick = () => currentUser ? logout() : modal.classList.remove("hidden");

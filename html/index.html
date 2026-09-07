@@ -22,12 +22,9 @@
             <div class="status-title">
               <p class="eyebrow" id="home-site-title">近代军史数智平台</p>
             </div>
-            <div class="font-setting" aria-label="全局字体设置">
-              <span class="font-setting-label">字体</span>
-              <div class="font-options" role="group" aria-label="字体">
-                <button class="font-option" type="button" data-font-option="hei">黑体</button>
-                <button class="font-option" type="button" data-font-option="kai">楷体</button>
-              </div>
+            <div class="home-topbar-actions">
+              <button class="ghost-link settings-button" id="open-settings" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">设置</button>
+              <div id="auth-slot"></div>
             </div>
           </header>
 
@@ -115,6 +112,22 @@
           <button class="danger-button" id="confirm-delete-conversation" type="button">删除</button>
         </div>
       </div>
+    </div>
+
+    <div class="settings-dialog hidden" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section class="settings-card">
+        <header class="settings-header">
+          <h2 id="settings-title">设置</h2>
+          <button class="icon-button subtle" id="close-settings" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="settings-field">
+          <span class="settings-field-label">字体</span>
+          <div class="font-options" role="group" aria-label="字体">
+            <button class="font-option" type="button" data-font-option="hei">黑体</button>
+            <button class="font-option" type="button" data-font-option="kai">楷体</button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div class="reference-dialog hidden" id="reference-document-dialog" role="dialog" aria-modal="true" aria-labelledby="reference-document-title">
