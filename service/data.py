@@ -7,6 +7,7 @@ import hashlib
 import mimetypes
 import os
 import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -196,8 +197,28 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
-    admin_hash = hashlib.sha256("1wdvBHU*".encode()).hexdigest()
-    connection.execute("INSERT OR IGNORE INTO users(username,password_hash,is_admin,created_at) VALUES('xunlan',?,?,?)", (admin_hash, 1, now_iso()))
+    # Bootstrap exactly one administrator on a fresh database. Credentials
+    # are deployment configuration, never source-controlled defaults.
+    if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None:
+        admin_username = os.getenv("INITIAL_ADMIN_USERNAME", "").strip()
+        admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+        generated = False
+        if not admin_username:
+            admin_username = f"admin-{secrets.token_hex(3)}"
+            generated = True
+        if not admin_password:
+            admin_password = secrets.token_urlsafe(16)
+            generated = True
+        connection.execute(
+            "INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,1,?)",
+            (admin_username, hash_password(admin_password), now_iso()),
+        )
+        if generated:
+            print(
+                f"Initial administrator created: username={admin_username} "
+                f"password={admin_password}",
+                flush=True,
+            )
     schema_row = connection.execute(
         "SELECT value FROM app_meta WHERE key = 'schema_version'"
     ).fetchone()

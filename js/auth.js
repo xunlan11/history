@@ -22,15 +22,50 @@ function authUi() {
   document.querySelector("#auth-action").onclick = () => currentUser ? logout() : modal.classList.remove("hidden");
   document.querySelector("#auth-switch").onclick = () => { const reg = document.querySelector("#auth-title").textContent === "注册"; document.querySelector("#auth-title").textContent = reg ? "登录" : "注册"; document.querySelector("#auth-submit").textContent = reg ? "登录" : "注册"; document.querySelector("#auth-switch").textContent = reg ? "注册账户" : "返回登录"; };
   document.querySelector("#auth-submit").onclick = submitAuth;
+  document.querySelectorAll("#auth-username, #auth-password").forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") submitAuth();
+    });
+  });
   document.querySelector("#auth-admin").onclick = manageUsers;
 }
 
 async function submitAuth() {
   const isRegister = document.querySelector("#auth-title").textContent === "注册";
-  const body = { username: document.querySelector("#auth-username").value, password: document.querySelector("#auth-password").value };
-  const response = await originalFetch(`${HISTORY_BASE}/api/auth/${isRegister ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) { document.querySelector("#auth-error").textContent = (await response.json()).detail || "登录失败"; return; }
-  const result = await response.json(); localStorage.setItem(AUTH_TOKEN_KEY, result.token); currentUser = result.user; authReady = true; document.querySelector(".auth-modal").classList.add("hidden"); updateAuthUi(); window.location.reload();
+  const usernameInput = document.querySelector("#auth-username");
+  const passwordInput = document.querySelector("#auth-password");
+  const errorNode = document.querySelector("#auth-error");
+  const body = { username: usernameInput.value.trim(), password: passwordInput.value };
+  errorNode.textContent = "";
+  if (!body.username || !body.password) {
+    errorNode.textContent = "请输入账号和密码";
+    return;
+  }
+  const submit = document.querySelector("#auth-submit");
+  submit.disabled = true;
+  try {
+    const response = await originalFetch(`${HISTORY_BASE}/api/auth/${isRegister ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let result = {};
+    try { result = await response.json(); } catch (_) { /* non-JSON proxy errors */ }
+    if (!response.ok) {
+      errorNode.textContent = result.detail || `请求失败（${response.status}）`;
+      return;
+    }
+    if (!result.token || !result.user) {
+      errorNode.textContent = "服务器返回无效登录信息";
+      return;
+    }
+    localStorage.setItem(AUTH_TOKEN_KEY, result.token);
+    currentUser = result.user;
+    authReady = true;
+    document.querySelector(".auth-modal").classList.add("hidden");
+    updateAuthUi();
+    window.location.reload();
+  } catch (error) {
+    errorNode.textContent = "无法连接账户服务，请确认数据服务已启动";
+  } finally {
+    submit.disabled = false;
+  }
 }
 async function logout() { await originalFetch(`${HISTORY_BASE}/api/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem(AUTH_TOKEN_KEY)}` } }); localStorage.removeItem(AUTH_TOKEN_KEY); currentUser = null; window.location.href = new URL("index.html", location.href).href; }
 function updateAuthUi() { document.querySelector("#auth-user").textContent = currentUser ? currentUser.username : ""; document.querySelector("#auth-action").textContent = currentUser ? "登出" : "登录"; document.querySelector("#auth-admin").classList.toggle("hidden", !currentUser?.isAdmin); }
