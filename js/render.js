@@ -618,8 +618,6 @@ function renderReader() {
   if (!item) {
     setReaderEditing(false);
     readerTitle.textContent = "未选择文献";
-    readerAuthor.textContent = "著者未录";
-    readerYear.textContent = "年份未录";
     readerPageInput.value = "";
     readerPageInput.disabled = true;
     readerPageInput.removeAttribute("max");
@@ -642,8 +640,6 @@ function renderReader() {
   const pageIndex = Math.max(0, sortedPages.findIndex((entry) => entry.id === page?.id));
 
   readerTitle.textContent = getDocumentDisplayTitle(item);
-  readerAuthor.textContent = item.author || "著者未录";
-  readerYear.textContent = item.year || "年份未录";
   readerPageInput.value = page ? String(pageIndex + 1) : "";
   readerPageInput.disabled = !page;
   readerPageInput.max = String(sortedPages.length);
@@ -683,26 +679,20 @@ function applyReaderEditingState() {
 }
 
 function renderReaderSidebar() {
-  if (!readerDetailNode || !readerPageList) {
+  if (!readerDetailNode) {
     return;
   }
 
   const item = getSelectedDocument();
   readerDetailNode.innerHTML = "";
-  readerPageList.innerHTML = "";
 
   if (!item) {
-    readerSelectedStatus.textContent = "未选择";
-    readerPageCount.textContent = "0 页";
     readerRefreshButton.classList.add("hidden");
     readerDetailNode.append(emptyState("请先在文献库打开一本文献"));
-    readerPageList.append(emptyState("暂无页目录"));
     renderStreamProgress(null);
     return;
   }
 
-  readerSelectedStatus.textContent = item.status;
-  readerPageCount.textContent = `${item.pages.length} 页`;
   readerRefreshButton.classList.toggle("hidden", !item.processingTask);
   const rows = [
     ["文献名", item.title || "未识别"],
@@ -729,7 +719,6 @@ function renderReaderSidebar() {
   visibilitySelect.onchange = () => { item.visibility = visibilitySelect.value; item.updatedAt = new Date().toISOString(); persist(); };
   const visibilityDesc = document.createElement("dd"); visibilityDesc.append(visibilitySelect);
   visibilityRow.append(visibilityLabel, visibilityDesc); readerDetailNode.append(visibilityRow);
-  renderPageList(item, readerPageList);
   renderStreamProgress(item);
 }
 
