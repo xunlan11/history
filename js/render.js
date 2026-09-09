@@ -714,31 +714,40 @@ function renderReaderSidebar() {
     readerDetailNode.append(row);
   });
   const visibilityRow = document.createElement("div");
-  const visibilityLabel = document.createElement("dt"); visibilityLabel.textContent = "可见性";
+  visibilityRow.className = "reader-visibility-row";
+  const visibilityLabel = document.createElement("dt");
+  visibilityLabel.textContent = "可见性";
   const visibilityOptions = document.createElement("div");
-  visibilityOptions.className = "visibility-options";
-  const visibilitySelect = visibilityOptions;
-  visibilityOptions.replaceChildren();
-  visibilitySelect.innerHTML = '<option value="private">私密（仅自己）</option><option value="public">公开（所有用户）</option>';
+  visibilityOptions.className = "reader-visibility-options";
+  visibilityOptions.setAttribute("role", "group");
+  visibilityOptions.setAttribute("aria-label", "文献可见性");
   const currentVisibility = item.visibility === "public" ? "public" : "private";
-  visibilityOptions.replaceChildren();
-  [["private", "私密"], ["public", "公开"]].forEach(([value, label]) => {
+  [
+    ["private", "私密"],
+    ["public", "公开"],
+  ].forEach(([value, label]) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "visibility-option";
+    button.className = "reader-visibility-option";
     button.dataset.visibility = value;
     button.textContent = label;
+    button.setAttribute("aria-pressed", String(currentVisibility === value));
     button.classList.toggle("active", currentVisibility === value);
     button.onclick = () => {
       item.visibility = value;
       item.updatedAt = new Date().toISOString();
       persist();
-      visibilityOptions.querySelectorAll(".visibility-option").forEach((option) => option.classList.toggle("active", option.dataset.visibility === value));
+      visibilityOptions.querySelectorAll(".reader-visibility-option").forEach((option) => {
+        option.classList.toggle("active", option.dataset.visibility === value);
+        option.setAttribute("aria-pressed", String(option.dataset.visibility === value));
+      });
     };
     visibilityOptions.append(button);
   });
-  const visibilityDesc = document.createElement("dd"); visibilityDesc.append(visibilityOptions);
-  visibilityRow.append(visibilityLabel, visibilityDesc); readerDetailNode.append(visibilityRow);
+  const visibilityDesc = document.createElement("dd");
+  visibilityDesc.append(visibilityOptions);
+  visibilityRow.append(visibilityLabel, visibilityDesc);
+  readerDetailNode.append(visibilityRow);
   renderStreamProgress(item);
 }
 

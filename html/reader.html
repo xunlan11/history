@@ -36,24 +36,27 @@
           </header>
 
           <div class="reader-layout">
-            <aside class="panel reader-sidebar" aria-label="文献信息">
-              <dl id="reader-document-detail"></dl>
-              <span class="inline-status" id="reader-stream-status">等待处理</span>
-              <div class="reader-progress-area">
-                <div class="progress-stack hidden" id="reader-stream-progress">
-                  <div class="progress-row"><span class="progress-label" id="reader-stream-main-label">逐页处理进度</span><div class="progress-track"><div class="progress-fill" id="reader-stream-main-fill"></div></div><span class="progress-value" id="reader-stream-main-value">0 / 0 页</span></div>
-                  <div class="progress-row"><span class="progress-label" id="reader-stream-sub-label">当前页</span><div class="progress-track"><div class="progress-fill progress-fill-sub" id="reader-stream-sub-fill"></div></div><span class="progress-value" id="reader-stream-sub-value">等待</span></div>
+            <div class="reader-sidebar-stack">
+              <aside class="panel reader-sidebar" aria-label="文献信息">
+                <dl id="reader-document-detail"></dl>
+                <span class="inline-status" id="reader-stream-status">等待处理</span>
+                <div class="reader-progress-area">
+                  <div class="progress-stack hidden" id="reader-stream-progress">
+                    <div class="progress-row"><span class="progress-label" id="reader-stream-main-label">逐页处理进度</span><div class="progress-track"><div class="progress-fill" id="reader-stream-main-fill"></div></div><span class="progress-value" id="reader-stream-main-value">0 / 0 页</span></div>
+                    <div class="progress-row"><span class="progress-label" id="reader-stream-sub-label">当前页</span><div class="progress-track"><div class="progress-fill progress-fill-sub" id="reader-stream-sub-fill"></div></div><span class="progress-value" id="reader-stream-sub-value">等待</span></div>
+                  </div>
+                  <button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果">
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                      <path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path>
+                      <path d="M3 5v5h5"></path>
+                      <path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path>
+                      <path d="M21 19v-5h-5"></path>
+                    </svg>
+                  </button>
                 </div>
-                <button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果">
-                  <svg aria-hidden="true" viewBox="0 0 24 24">
-                    <path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path>
-                    <path d="M3 5v5h5"></path>
-                    <path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path>
-                    <path d="M21 19v-5h-5"></path>
-                  </svg>
-                </button>
-              </div>
-            </aside>
+              </aside>
+              <section class="panel reader-sidebar-reserved" aria-hidden="true"></section>
+            </div>
             <section class="reader-main">
               <section class="panel reader-combined-panel">
                 <div class="reader-compare">

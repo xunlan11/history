@@ -199,10 +199,23 @@ label {
   display: none;
 }
 
+
+.reader-sidebar-stack {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(120px, 28%);
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
 .reader-sidebar {
   min-width: 0;
-  max-height: calc(100vh - 126px);
+  min-height: 0;
   overflow: auto;
+}
+
+.reader-sidebar-reserved {
+  min-height: 0;
 }
 
 .refresh-stream-button.icon-button {
@@ -257,32 +270,47 @@ label {
   overflow-wrap: anywhere;
 }
 
-.visibility-options {
-  display: inline-flex;
+#reader-document-detail .reader-visibility-row {
   align-items: center;
-  padding: 3px;
-  border: 1px solid rgba(174, 184, 175, 0.78);
-  border-radius: 8px;
-  background: #f7faf6;
+  padding: 10px 0 12px;
 }
 
-.visibility-option {
-  min-width: 48px;
-  min-height: 28px;
+.reader-visibility-options {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 6px;
+  width: max-content;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.reader-visibility-option {
+  min-width: 54px;
+  min-height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   background: transparent;
-  color: #414842;
-  padding: 3px 9px;
+  color: var(--muted);
+  padding: 4px 10px;
   font: inherit;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
 }
 
-.visibility-option.active,
-.visibility-option:hover {
-  background: #2f6f5e;
-  color: #ffffff;
+.reader-visibility-option:hover {
+  color: var(--primary-dark);
+  background: rgba(47, 111, 94, 0.10);
+}
+
+.reader-visibility-option.active {
+  color: #fff;
+  background: var(--primary);
+  box-shadow: 0 3px 10px rgba(31, 74, 63, 0.20);
 }
 
 .reader-stream-status {
@@ -823,15 +851,45 @@ body {
   white-space: nowrap;
 }
 
+.progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  margin: -2px -4px 0 0;
+}
+
 .progress-title {
   color: var(--text);
   font-size: 14px;
   font-weight: 700;
 }
 
+.progress-header .refresh-stream-button {
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+}
+
+.progress-header .refresh-stream-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.progress-combined-track {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
 .progress-track-combined {
   position: relative;
-  height: 12px;
+  height: 10px;
+  border-radius: 999px;
+  background: #edf2ef;
+  overflow: hidden;
 }
 
 .progress-track-combined .progress-fill {
@@ -841,37 +899,27 @@ body {
 }
 
 .progress-fill-ocr {
-  z-index: 1;
+  z-index: 2;
   background: linear-gradient(90deg, var(--primary), #3e8f76);
 }
 
 .progress-fill-llm {
-  z-index: 2;
-  opacity: 0.72;
+  z-index: 1;
+  opacity: 0.78;
   background: linear-gradient(90deg, var(--accent), #c7775f);
 }
 
-.progress-pages {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+.progress-ocr-pages,
+.progress-llm-pages {
+  min-width: 20px;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .reader-progress-area {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.reader-progress-area .progress-stack {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.reader-progress-area .refresh-stream-button {
-  margin-top: 14px;
+  display: block;
 }
 
 .reader-actions {
@@ -1663,6 +1711,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .reader-sidebar-stack {
+    grid-template-rows: auto minmax(120px, 28%);
+  }
+
   #reader-view.active {
     overflow: auto;
   }
@@ -1954,24 +2006,6 @@ body {
   overflow: hidden;
 }
 
-.chat-sidebar {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 14px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.chat-sidebar-panel {
-  min-height: 0;
-}
-
-.chat-sidebar-empty {
-  min-height: 0;
-  border: 1px solid rgba(221, 226, 220, 0.9);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.42);
-}
 
 .center-stack {
   display: grid;

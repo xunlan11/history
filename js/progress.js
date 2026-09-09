@@ -11,12 +11,12 @@ let streamProgressTotalPages;
 function setupCombinedProgress() {
   if (!streamProgress) return;
   streamStatus?.remove();
-  streamProgress.innerHTML = '<div class="progress-title">处理进度</div><div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-ocr"></div><div class="progress-fill progress-fill-llm"></div></div><div class="progress-pages"><span class="progress-ocr-pages"></span><span class="progress-llm-pages"></span><span class="progress-total-pages"></span></div>';
+  streamProgress.innerHTML = '<div class="progress-header"><span class="progress-title">处理进度</span><button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path><path d="M3 5v5h5"></path><path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path><path d="M21 19v-5h-5"></path></svg></button></div><div class="progress-combined-track"><div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-ocr"></div><div class="progress-fill progress-fill-llm"></div></div><span class="progress-ocr-pages"></span></div><div class="progress-combined-track"><div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-llm"></div><div class="progress-fill progress-fill-ocr"></div></div><span class="progress-llm-pages"></span></div>';
   streamProgressMainFill = streamProgress.querySelector(".progress-fill-ocr");
   streamProgressSubFill = streamProgress.querySelector(".progress-fill-llm");
   streamProgressOcrPages = streamProgress.querySelector(".progress-ocr-pages");
   streamProgressLlmPages = streamProgress.querySelector(".progress-llm-pages");
-  streamProgressTotalPages = streamProgress.querySelector(".progress-total-pages");
+  streamProgressTotalPages = null;
 }
 
 setupCombinedProgress();
@@ -116,7 +116,6 @@ function renderStreamProgress(item) {
   const llmPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
   if (streamProgressMainFill) streamProgressMainFill.style.width = `${ocrPercent}%`;
   if (streamProgressSubFill) streamProgressSubFill.style.width = `${llmPercent}%`;
-  if (streamProgressOcrPages) streamProgressOcrPages.textContent = `OCR ${ocrDone} 页`;
-  if (streamProgressLlmPages) streamProgressLlmPages.textContent = `大模型 ${finalized} 页`;
-  if (streamProgressTotalPages) streamProgressTotalPages.textContent = `共 ${total} 页`;
+  if (streamProgressOcrPages) streamProgressOcrPages.textContent = `${ocrDone}`;
+  if (streamProgressLlmPages) streamProgressLlmPages.textContent = `${finalized}`;
 }
