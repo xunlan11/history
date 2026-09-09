@@ -2,6 +2,17 @@ let selectedSmartMode = getSelectedConversation()?.mode || "chat";
 let pendingDeleteConversationId = null;
 let pendingDeleteDocumentId = null;
 
+const chatSidebar = document.querySelector(".chat-sidebar");
+if (chatSidebar && !chatSidebar.querySelector(".chat-sidebar-panel")) {
+  const panel = document.createElement("section");
+  panel.className = "home-sidebar chat-sidebar-panel";
+  while (chatSidebar.firstChild) panel.append(chatSidebar.firstChild);
+  const empty = document.createElement("section");
+  empty.className = "chat-sidebar-empty";
+  empty.setAttribute("aria-hidden", "true");
+  chatSidebar.append(panel, empty);
+}
+
 applyGlobalFont(localStorage.getItem(FONT_STORAGE_KEY) || "hei");
 
 fontOptionButtons.forEach((button) => {

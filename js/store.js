@@ -40,6 +40,7 @@ function normalizeDocuments(items) {
         author: item.author || "",
         year: item.year || "",
         publisher: item.publisher || "",
+        creator: item.creator && item.creator.username ? { username: String(item.creator.username) } : null,
       tags: item.tags || "",
       visibility: item.visibility === "public" ? "public" : "private",
         fileName: item.fileName || "",

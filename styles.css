@@ -257,6 +257,34 @@ label {
   overflow-wrap: anywhere;
 }
 
+.visibility-options {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid rgba(174, 184, 175, 0.78);
+  border-radius: 8px;
+  background: #f7faf6;
+}
+
+.visibility-option {
+  min-width: 48px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #414842;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.visibility-option.active,
+.visibility-option:hover {
+  background: #2f6f5e;
+  color: #ffffff;
+}
+
 .reader-stream-status {
   margin-top: 12px;
 }
@@ -793,6 +821,42 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.progress-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.progress-track-combined {
+  position: relative;
+  height: 12px;
+}
+
+.progress-track-combined .progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 0;
+}
+
+.progress-fill-ocr {
+  z-index: 1;
+  background: linear-gradient(90deg, var(--primary), #3e8f76);
+}
+
+.progress-fill-llm {
+  z-index: 2;
+  opacity: 0.72;
+  background: linear-gradient(90deg, var(--accent), #c7775f);
+}
+
+.progress-pages {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .reader-progress-area {
@@ -1888,6 +1952,25 @@ body {
   gap: 14px;
   min-height: 0;
   overflow: hidden;
+}
+
+.chat-sidebar {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-sidebar-panel {
+  min-height: 0;
+}
+
+.chat-sidebar-empty {
+  min-height: 0;
+  border: 1px solid rgba(221, 226, 220, 0.9);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.42);
 }
 
 .center-stack {

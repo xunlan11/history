@@ -696,12 +696,14 @@ function renderReaderSidebar() {
   readerRefreshButton.classList.toggle("hidden", !item.processingTask);
   const rows = [
     ["文献名", item.title || "未识别"],
+    ["创建者", item.creator?.username || "创建者已隐藏"],
     ["作者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
     ["标签", item.tags || "未录"],
     ["处理进度", getProcessingTaskLabel(item)],
   ];
+  rows.splice(0, rows.length, ...rows.filter(([, value]) => value !== getProcessingTaskLabel(item)));
   rows.forEach(([label, value]) => {
     const row = document.createElement("div");
     const term = document.createElement("dt");
@@ -713,11 +715,29 @@ function renderReaderSidebar() {
   });
   const visibilityRow = document.createElement("div");
   const visibilityLabel = document.createElement("dt"); visibilityLabel.textContent = "可见性";
-  const visibilitySelect = document.createElement("select");
+  const visibilityOptions = document.createElement("div");
+  visibilityOptions.className = "visibility-options";
+  const visibilitySelect = visibilityOptions;
+  visibilityOptions.replaceChildren();
   visibilitySelect.innerHTML = '<option value="private">私密（仅自己）</option><option value="public">公开（所有用户）</option>';
-  visibilitySelect.value = item.visibility === "public" ? "public" : "private";
-  visibilitySelect.onchange = () => { item.visibility = visibilitySelect.value; item.updatedAt = new Date().toISOString(); persist(); };
-  const visibilityDesc = document.createElement("dd"); visibilityDesc.append(visibilitySelect);
+  const currentVisibility = item.visibility === "public" ? "public" : "private";
+  visibilityOptions.replaceChildren();
+  [["private", "私密"], ["public", "公开"]].forEach(([value, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visibility-option";
+    button.dataset.visibility = value;
+    button.textContent = label;
+    button.classList.toggle("active", currentVisibility === value);
+    button.onclick = () => {
+      item.visibility = value;
+      item.updatedAt = new Date().toISOString();
+      persist();
+      visibilityOptions.querySelectorAll(".visibility-option").forEach((option) => option.classList.toggle("active", option.dataset.visibility === value));
+    };
+    visibilityOptions.append(button);
+  });
+  const visibilityDesc = document.createElement("dd"); visibilityDesc.append(visibilityOptions);
   visibilityRow.append(visibilityLabel, visibilityDesc); readerDetailNode.append(visibilityRow);
   renderStreamProgress(item);
 }
@@ -810,6 +830,7 @@ function renderDetail() {
 
   const rows = [
     ["文献名", item.title || "未识别"],
+    ["创建者", item.creator?.username || "创建者已隐藏"],
     ["著者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],

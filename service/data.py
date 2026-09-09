@@ -71,6 +71,9 @@ class UserCreate(BaseModel):
 class UserAdminUpdate(BaseModel):
     isAdmin: bool = False
 
+class UserPrivacyUpdate(BaseModel):
+    creatorVisibility: Literal["public", "private"] = "public"
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -124,6 +127,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             is_admin INTEGER NOT NULL DEFAULT 0,
+            creator_visibility TEXT NOT NULL DEFAULT 'public',
             created_at TEXT NOT NULL
         );
 
@@ -197,6 +201,9 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
+    user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+    if "creator_visibility" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN creator_visibility TEXT NOT NULL DEFAULT 'public'")
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
@@ -681,16 +688,28 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     if table == "documents" and user:
         where += " AND (visibility = 'public' OR owner_id = ?)"
         params = (user["id"],)
+    columns = "payload, owner_id" if table == "documents" else "payload"
     rows = connection.execute(
         f"""
-        SELECT payload
+        SELECT {columns}
         FROM {table}
         WHERE {where}
         ORDER BY sort_order ASC, updated_at DESC
         """, params).fetchall()
     payloads = [json_load(row["payload"]) for row in rows]
     if table == "documents":
-        return [rehydrate_document_assets(connection, payload) for payload in payloads]
+        result = []
+        for row, payload in zip(rows, payloads):
+            owner = connection.execute(
+                "SELECT username, creator_visibility FROM users WHERE id = ?",
+                (row["owner_id"],),
+            ).fetchone()
+            payload.pop("creator", None)
+            is_owner = bool(user and row["owner_id"] == user.get("id"))
+            if owner and (is_owner or owner["creator_visibility"] == "public"):
+                payload["creator"] = {"username": owner["username"]}
+            result.append(rehydrate_document_assets(connection, payload))
+        return result
     return [rehydrate_conversation_files(connection, payload) for payload in payloads]
 
 
@@ -1137,7 +1156,7 @@ def register(credentials: Credentials) -> dict[str, Any]:
         try:
             with connection:
                 cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,0,?)", (username, hash_password(credentials.password), now_iso()))
-                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False}
+                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False, "creatorVisibility": "public"}
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="账号已存在") from exc
     token = os.urandom(24).hex(); SESSIONS[token] = user
@@ -1146,16 +1165,27 @@ def register(credentials: Credentials) -> dict[str, Any]:
 @app.post("/api/auth/login")
 def login(credentials: Credentials) -> dict[str, Any]:
     with database() as connection:
-        row = connection.execute("SELECT id,username,is_admin FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
+        row = connection.execute("SELECT id,username,is_admin,creator_visibility FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="账号或密码错误")
-    user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])}
+    user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"]), "creatorVisibility": row["creator_visibility"]}
     token = os.urandom(24).hex(); SESSIONS[token] = user
     return {"token": token, "user": user}
 
 @app.get("/api/auth/me")
 def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     return {"user": current_user(authorization)}
+
+@app.patch("/api/auth/me/privacy")
+def update_my_privacy(payload: UserPrivacyUpdate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
+    with database() as connection:
+        with connection:
+            connection.execute("UPDATE users SET creator_visibility = ? WHERE id = ?", (payload.creatorVisibility, user["id"]))
+    user = {**user, "creatorVisibility": payload.creatorVisibility}
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    SESSIONS[token] = user
+    return {"user": user}
 
 @app.post("/api/auth/logout")
 def logout(authorization: str | None = Header(default=None)) -> dict[str, str]:

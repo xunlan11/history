@@ -2,6 +2,24 @@
 // 子进度显示当前正在 OCR 或由大模型整理的页面。
 
 let streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
+let streamProgressMainFill;
+let streamProgressSubFill;
+let streamProgressOcrPages;
+let streamProgressLlmPages;
+let streamProgressTotalPages;
+
+function setupCombinedProgress() {
+  if (!streamProgress) return;
+  streamStatus?.remove();
+  streamProgress.innerHTML = '<div class="progress-title">处理进度</div><div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-ocr"></div><div class="progress-fill progress-fill-llm"></div></div><div class="progress-pages"><span class="progress-ocr-pages"></span><span class="progress-llm-pages"></span><span class="progress-total-pages"></span></div>';
+  streamProgressMainFill = streamProgress.querySelector(".progress-fill-ocr");
+  streamProgressSubFill = streamProgress.querySelector(".progress-fill-llm");
+  streamProgressOcrPages = streamProgress.querySelector(".progress-ocr-pages");
+  streamProgressLlmPages = streamProgress.querySelector(".progress-llm-pages");
+  streamProgressTotalPages = streamProgress.querySelector(".progress-total-pages");
+}
+
+setupCombinedProgress();
 
 function setStreamSubProgress(pageNumber, text, percent) {
   streamSubState = {
@@ -61,6 +79,7 @@ function renderStreamProgress(item) {
 
   const total = task.totalPages || item.pages.length || 0;
   const finalized = countFinalizedPages(item);
+  const ocrDone = Math.min(total, Number(task.completedPages) || 0);
   const finished = task.status === "已完成" || task.status === "已回填";
   const failed = task.status === "处理失败" || task.status === "提交失败";
   const mainPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
@@ -93,4 +112,11 @@ function renderStreamProgress(item) {
     sub.percent,
     sub.text,
   );
+  const ocrPercent = total > 0 ? (ocrDone / total) * 100 : finished ? 100 : 0;
+  const llmPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
+  if (streamProgressMainFill) streamProgressMainFill.style.width = `${ocrPercent}%`;
+  if (streamProgressSubFill) streamProgressSubFill.style.width = `${llmPercent}%`;
+  if (streamProgressOcrPages) streamProgressOcrPages.textContent = `OCR ${ocrDone} 页`;
+  if (streamProgressLlmPages) streamProgressLlmPages.textContent = `大模型 ${finalized} 页`;
+  if (streamProgressTotalPages) streamProgressTotalPages.textContent = `共 ${total} 页`;
 }
