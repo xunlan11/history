@@ -1184,8 +1184,12 @@ def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
 @app.post("/api/auth/register")
 def register(credentials: Credentials) -> dict[str, Any]:
     username = credentials.username.strip()
-    if len(username) < 2 or len(credentials.password) < 1:
-        raise HTTPException(status_code=400, detail="账号和密码不能为空")
+    if not username:
+        raise HTTPException(status_code=400, detail="账号不能为空")
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="账号至少需要2个字符")
+    if len(credentials.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6个字符")
     with database() as connection:
         try:
             with connection:

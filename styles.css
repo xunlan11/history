@@ -721,12 +721,21 @@ button:focus-visible {
 
 .reader-annotation-heading {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto auto;
   min-height: 28px;
 }
 
 .reader-original-panel > .section-heading {
   min-height: 28px;
+  justify-content: flex-start;
+}
+
+.reader-original-panel > .section-heading .reader-panel-toggle {
+  order: -1;
+}
+
+.reader-annotation-heading h3 {
+  text-align: right;
 }
 
 .reader-annotation-heading .reader-panel-toggle {
@@ -763,6 +772,7 @@ button:focus-visible {
 
 .reader-panel-collapsed {
   grid-template-rows: auto;
+  padding: 7px;
 }
 
 .reader-panel-collapsed > .section-heading {
@@ -772,9 +782,7 @@ button:focus-visible {
 
 .reader-panel-collapsed > .section-heading > h3,
 .reader-panel-collapsed > .section-heading > .reader-annotation-status,
-.reader-panel-collapsed > .reader-original-viewer,
-.reader-panel-collapsed > .reader-annotation,
-.reader-panel-collapsed > label {
+.reader-panel-collapsed > :not(.section-heading) {
   display: none;
 }
 

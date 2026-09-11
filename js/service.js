@@ -1,3 +1,5 @@
+let versionUpdateRequested = false;
+
 function setServiceStatus(node, text, className) {
   if (!node) {
     return;
@@ -83,6 +85,19 @@ async function refreshVersionStatus() {
 
     if (result.updating) {
       showVersionStatus("更新中", "service-warn");
+      if (versionUpdateRequested) {
+        window.setTimeout(refreshVersionStatus, 1000);
+      }
+      return;
+    }
+
+    if (versionUpdateRequested) {
+      versionUpdateRequested = false;
+      if (result.lastError) {
+        showVersionStatus("更新失败", "service-warn");
+        return;
+      }
+      window.location.reload();
       return;
     }
 
@@ -102,6 +117,7 @@ async function requestProjectUpdate() {
     return;
   }
 
+  versionUpdateRequested = true;
   versionUpdateButton.disabled = true;
   versionUpdateButton.textContent = "更新中";
 
@@ -111,6 +127,7 @@ async function requestProjectUpdate() {
     });
     showVersionStatus(result.updating ? "更新中" : "最新", result.updating ? "service-warn" : "service-ok");
   } catch (error) {
+    versionUpdateRequested = false;
     showVersionStatus("更新失败", "service-warn");
   }
 

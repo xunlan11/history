@@ -23,8 +23,16 @@ function authUi() {
   }
   const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<div class="auth-card"><h2 id="auth-title">登录</h2><input id="auth-username" placeholder="账号"><input id="auth-password" type="password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button">登录</button><button id="auth-switch" class="ghost-link">注册账户</button></div>';
   document.body.append(modal);
+  setAuthInputRequirements(false);
   document.querySelector("#auth-action")?.addEventListener("click", () => currentUser ? logout() : modal.classList.remove("hidden"));
-  document.querySelector("#auth-switch").onclick = () => { const reg = document.querySelector("#auth-title").textContent === "注册"; document.querySelector("#auth-title").textContent = reg ? "登录" : "注册"; document.querySelector("#auth-submit").textContent = reg ? "登录" : "注册"; document.querySelector("#auth-switch").textContent = reg ? "注册账户" : "返回登录"; };
+  document.querySelector("#auth-switch").onclick = () => {
+    const reg = document.querySelector("#auth-title").textContent === "注册";
+    const registerMode = !reg;
+    document.querySelector("#auth-title").textContent = registerMode ? "注册" : "登录";
+    document.querySelector("#auth-submit").textContent = registerMode ? "注册" : "登录";
+    document.querySelector("#auth-switch").textContent = registerMode ? "返回登录" : "注册账户";
+    setAuthInputRequirements(registerMode);
+  };
   document.querySelector("#auth-submit").onclick = submitAuth;
   document.querySelectorAll("#auth-username, #auth-password").forEach((input) => {
     input.addEventListener("keydown", (event) => {
@@ -34,6 +42,16 @@ function authUi() {
   document.querySelector("#auth-admin")?.addEventListener("click", manageUsers);
 }
 
+
+function setAuthInputRequirements(registerMode) {
+  const usernameInput = document.querySelector("#auth-username");
+  const passwordInput = document.querySelector("#auth-password");
+  usernameInput.placeholder = registerMode ? "账号（至少2个字符）" : "账号";
+  passwordInput.placeholder = registerMode ? "密码（至少6个字符）" : "密码";
+  usernameInput.minLength = registerMode ? 2 : 0;
+  passwordInput.minLength = registerMode ? 6 : 0;
+  passwordInput.autocomplete = registerMode ? "new-password" : "current-password";
+}
 async function submitAuth() {
   const isRegister = document.querySelector("#auth-title").textContent === "注册";
   const usernameInput = document.querySelector("#auth-username");
@@ -41,8 +59,20 @@ async function submitAuth() {
   const errorNode = document.querySelector("#auth-error");
   const body = { username: usernameInput.value.trim(), password: passwordInput.value };
   errorNode.textContent = "";
-  if (!body.username || !body.password) {
-    errorNode.textContent = "请输入账号和密码";
+  if (!body.username) {
+    errorNode.textContent = "请输入账号";
+    return;
+  }
+  if (!body.password) {
+    errorNode.textContent = "请输入密码";
+    return;
+  }
+  if (isRegister && body.username.length < 2) {
+    errorNode.textContent = "账号至少需要2个字符";
+    return;
+  }
+  if (isRegister && body.password.length < 6) {
+    errorNode.textContent = "密码至少需要6个字符";
     return;
   }
   const submit = document.querySelector("#auth-submit");
