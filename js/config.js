@@ -16,7 +16,7 @@ const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `w
 
 const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
-const DATA_SCHEMA_VERSION = 4;
+const DATA_SCHEMA_VERSION = 6;
 
 function endpoint(proxiedPath) {
   return `${HISTORY_BASE}/api${proxiedPath}`;
@@ -30,6 +30,7 @@ const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
 const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
+const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
 const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
 const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
 const LLM_SERVICE_URL = endpoint("/llm/llm");

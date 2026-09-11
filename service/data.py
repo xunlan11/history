@@ -28,7 +28,7 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SESSIONS: dict[str, dict[str, Any]] = {}
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
@@ -71,8 +71,9 @@ class UserCreate(BaseModel):
 class UserAdminUpdate(BaseModel):
     isAdmin: bool = False
 
-class UserPrivacyUpdate(BaseModel):
-    creatorVisibility: Literal["public", "private"] = "public"
+
+class PageAnnotationUpdate(BaseModel):
+    content: str = Field(default="", max_length=100_000)
 
 
 def now_iso() -> str:
@@ -103,7 +104,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     if documents_exists:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)").fetchall()}
         if "owner_id" not in columns:
-            connection.executescript("DROP TABLE IF EXISTS document_files; DROP TABLE IF EXISTS document_pages; DROP TABLE IF EXISTS documents; DROP TABLE IF EXISTS conversations; DROP TABLE IF EXISTS conversation_files; DROP TABLE IF EXISTS users;")
+            connection.executescript("DROP TABLE IF EXISTS page_annotations; DROP TABLE IF EXISTS document_files; DROP TABLE IF EXISTS document_pages; DROP TABLE IF EXISTS documents; DROP TABLE IF EXISTS conversations; DROP TABLE IF EXISTS conversation_files; DROP TABLE IF EXISTS users;")
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS app_meta (
@@ -127,7 +128,6 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             is_admin INTEGER NOT NULL DEFAULT 0,
-            creator_visibility TEXT NOT NULL DEFAULT 'public',
             created_at TEXT NOT NULL
         );
 
@@ -139,6 +139,15 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
             version INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS page_annotations (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            page_id TEXT NOT NULL REFERENCES document_pages(id) ON DELETE CASCADE,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, page_id)
         );
 
         CREATE TABLE IF NOT EXISTS conversations (
@@ -188,6 +197,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON documents(deleted_at, sort_order, updated_at);
         CREATE INDEX IF NOT EXISTS idx_document_pages_document_order
             ON document_pages(document_id, deleted_at, page_number);
+        CREATE INDEX IF NOT EXISTS idx_page_annotations_document_page
+            ON page_annotations(document_id, page_id, user_id);
         CREATE INDEX IF NOT EXISTS idx_conversations_active_order
             ON conversations(deleted_at, sort_order, updated_at);
         CREATE INDEX IF NOT EXISTS idx_document_files_document_role
@@ -201,9 +212,6 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
-    user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-    if "creator_visibility" not in user_columns:
-        connection.execute("ALTER TABLE users ADD COLUMN creator_visibility TEXT NOT NULL DEFAULT 'public'")
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
@@ -701,12 +709,16 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
         result = []
         for row, payload in zip(rows, payloads):
             owner = connection.execute(
-                "SELECT username, creator_visibility FROM users WHERE id = ?",
+                "SELECT username FROM users WHERE id = ?",
                 (row["owner_id"],),
             ).fetchone()
             payload.pop("creator", None)
+            payload.pop("ownerId", None)
+            payload.pop("canEdit", None)
             is_owner = bool(user and row["owner_id"] == user.get("id"))
-            if owner and (is_owner or owner["creator_visibility"] == "public"):
+            payload["ownerId"] = row["owner_id"] if is_owner else None
+            payload["canEdit"] = is_owner
+            if owner:
                 payload["creator"] = {"username": owner["username"]}
             result.append(rehydrate_document_assets(connection, payload))
         return result
@@ -720,14 +732,21 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
         if not document_id:
             continue
 
-        materialize_document_assets(connection, document_id, document, timestamp)
-        payload = json_dump(document)
         existing = connection.execute(
-            "SELECT version FROM documents WHERE id = ?",
+            "SELECT version, owner_id FROM documents WHERE id = ?",
             (document_id,),
         ).fetchone()
+        if existing and existing["owner_id"] != user["id"]:
+            continue
 
-        visibility = "public" if document.get("visibility") == "public" else "private"
+        stored_document = dict(document)
+        stored_document.pop("creator", None)
+        stored_document.pop("ownerId", None)
+        stored_document.pop("canEdit", None)
+        materialize_document_assets(connection, document_id, stored_document, timestamp)
+        payload = json_dump(stored_document)
+
+        visibility = "public" if stored_document.get("visibility") == "public" else "private"
         if existing:
             connection.execute(
                 """
@@ -746,7 +765,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
                 (document_id, payload, sort_order, timestamp, user["id"], visibility),
             )
 
-        upsert_document_pages(connection, document_id, document.get("pages") or [], timestamp)
+        upsert_document_pages(connection, document_id, stored_document.get("pages") or [], timestamp)
 
 
 def upsert_document_pages(
@@ -766,9 +785,11 @@ def upsert_document_pages(
         page_number = int(page.get("pageNumber") or 0)
         payload = json_dump(page)
         existing = connection.execute(
-            "SELECT version FROM document_pages WHERE id = ?",
+            "SELECT version, document_id FROM document_pages WHERE id = ?",
             (page_id,),
         ).fetchone()
+        if existing and existing["document_id"] != document_id:
+            continue
 
         if existing:
             connection.execute(
@@ -877,7 +898,10 @@ def soft_delete_entities(
     for entity_id in {str(value).strip() for value in entity_ids if str(value).strip()}:
         owner_clause = " AND owner_id = ?" if table == "documents" and user else ""
         params: tuple[Any, ...] = (timestamp, timestamp, entity_id) + ((user["id"],) if owner_clause else ())
-        connection.execute(f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?{owner_clause}", params)
+        cursor = connection.execute(f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?{owner_clause}", params)
+
+        if table == "documents" and user and cursor.rowcount == 0:
+            continue
 
         if table == "documents":
             connection.execute(
@@ -1010,7 +1034,9 @@ async def upload_file(
     documentId: str = Form(...),
     role: str = Form("source"),
     pageId: str = Form(""),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    user = current_user(authorization)
     document_id = documentId.strip()
     if not document_id:
         raise HTTPException(status_code=400, detail="documentId 不能为空")
@@ -1019,6 +1045,14 @@ async def upload_file(
     content = await document.read()
     if not content:
         raise HTTPException(status_code=400, detail="上传文件为空")
+
+    with database() as connection:
+        existing = connection.execute(
+            "SELECT owner_id FROM documents WHERE id = ?",
+            (document_id,),
+        ).fetchone()
+    if existing and existing["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="只有创建者可以修改文献")
 
     mime_type = document.content_type or mimetypes.guess_type(document.filename or "")[0] or "application/octet-stream"
     timestamp = now_iso()
@@ -1156,7 +1190,7 @@ def register(credentials: Credentials) -> dict[str, Any]:
         try:
             with connection:
                 cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,0,?)", (username, hash_password(credentials.password), now_iso()))
-                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False, "creatorVisibility": "public"}
+                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False}
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="账号已存在") from exc
     token = os.urandom(24).hex(); SESSIONS[token] = user
@@ -1165,27 +1199,16 @@ def register(credentials: Credentials) -> dict[str, Any]:
 @app.post("/api/auth/login")
 def login(credentials: Credentials) -> dict[str, Any]:
     with database() as connection:
-        row = connection.execute("SELECT id,username,is_admin,creator_visibility FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
+        row = connection.execute("SELECT id,username,is_admin FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="账号或密码错误")
-    user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"]), "creatorVisibility": row["creator_visibility"]}
+    user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])}
     token = os.urandom(24).hex(); SESSIONS[token] = user
     return {"token": token, "user": user}
 
 @app.get("/api/auth/me")
 def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     return {"user": current_user(authorization)}
-
-@app.patch("/api/auth/me/privacy")
-def update_my_privacy(payload: UserPrivacyUpdate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
-    with database() as connection:
-        with connection:
-            connection.execute("UPDATE users SET creator_visibility = ? WHERE id = ?", (payload.creatorVisibility, user["id"]))
-    user = {**user, "creatorVisibility": payload.creatorVisibility}
-    token = (authorization or "").removeprefix("Bearer ").strip()
-    SESSIONS[token] = user
-    return {"user": user}
 
 @app.post("/api/auth/logout")
 def logout(authorization: str | None = Header(default=None)) -> dict[str, str]:
@@ -1247,6 +1270,80 @@ def set_user_admin(user_id: int, payload: UserAdminUpdate, authorization: str | 
             connection.execute("UPDATE users SET is_admin=? WHERE id=?", (int(payload.isAdmin), user_id))
     purge_sessions_for(user_id)
     return {"id": row["id"], "username": row["username"], "isAdmin": payload.isAdmin}
+
+
+def require_visible_document_page(
+    connection: sqlite3.Connection,
+    user: dict[str, Any],
+    document_id: str,
+    page_id: str,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT p.id
+        FROM document_pages AS p
+        JOIN documents AS d ON d.id = p.document_id
+        WHERE d.id = ?
+          AND p.id = ?
+          AND d.deleted_at IS NULL
+          AND p.deleted_at IS NULL
+          AND (d.visibility = 'public' OR d.owner_id = ?)
+        """,
+        (document_id, page_id, user["id"]),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="文献页不存在或不可见")
+
+
+@app.get("/api/documents/{document_id}/pages/{page_id}/annotation")
+def get_page_annotation(
+    document_id: str,
+    page_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
+    user = current_user(authorization)
+    with database() as connection:
+        require_visible_document_page(connection, user, document_id, page_id)
+        row = connection.execute(
+            "SELECT content, updated_at FROM page_annotations WHERE user_id = ? AND page_id = ?",
+            (user["id"], page_id),
+        ).fetchone()
+    return {
+        "content": row["content"] if row else "",
+        "updatedAt": row["updated_at"] if row else "",
+    }
+
+
+@app.put("/api/documents/{document_id}/pages/{page_id}/annotation")
+def put_page_annotation(
+    document_id: str,
+    page_id: str,
+    payload: PageAnnotationUpdate,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
+    user = current_user(authorization)
+    timestamp = now_iso()
+    with database() as connection:
+        require_visible_document_page(connection, user, document_id, page_id)
+        with connection:
+            if payload.content:
+                connection.execute(
+                    """
+                    INSERT INTO page_annotations(user_id, document_id, page_id, content, updated_at)
+                    VALUES(?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, page_id) DO UPDATE SET
+                        document_id = excluded.document_id,
+                        content = excluded.content,
+                        updated_at = excluded.updated_at
+                    """,
+                    (user["id"], document_id, page_id, payload.content, timestamp),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM page_annotations WHERE user_id = ? AND page_id = ?",
+                    (user["id"], page_id),
+                )
+    return {"status": "ok", "content": payload.content, "updatedAt": timestamp}
 
 @app.get("/api/bootstrap")
 def bootstrap(authorization: str | None = Header(default=None)) -> dict[str, Any]:

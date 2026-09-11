@@ -110,6 +110,9 @@ form?.addEventListener("submit", async (event) => {
     publisher: textValue("publisher"),
     tags: textValue("tags"),
     visibility: "private",
+    creator: currentUser?.username ? { username: currentUser.username } : null,
+    ownerId: currentUser?.id ?? null,
+    canEdit: true,
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
     coverVariant: getNextDocumentCoverVariant(),
@@ -141,7 +144,7 @@ form?.addEventListener("submit", async (event) => {
 
 document.querySelector("#add-page")?.addEventListener("click", () => {
   const item = getSelectedDocument();
-  if (!item) {
+  if (!item || !canEditDocument(item)) {
     return;
   }
 
@@ -226,7 +229,7 @@ exportDocumentPdfButton?.addEventListener("click", exportPdf);
 editDocumentButton?.addEventListener("click", () => {
   const item = getSelectedDocument();
   const page = getSelectedPage();
-  if (!item || !page || !readerText) {
+  if (!item || !page || !readerText || !canEditDocument(item)) {
     return;
   }
 
@@ -250,7 +253,8 @@ pageImageInput?.addEventListener("change", () => {
   const page = getSelectedPage();
   const file = pageImageInput.files[0];
 
-  if (!item || !page || !file) {
+  if (!item || !page || !file || !canEditDocument(item)) {
+    if (pageImageInput) pageImageInput.value = "";
     return;
   }
 
@@ -353,6 +357,7 @@ function openDeleteConversationDialog(item) {
 }
 
 function openDeleteDocumentDialog(item) {
+  if (!canEditDocument(item)) return;
   pendingDeleteDocumentId = item.id;
   pendingDeleteConversationId = null;
   deleteConversationTitle.textContent = "删除文献";
@@ -615,6 +620,7 @@ async function initializeApplication() {
 
 function resumePendingProcessingTasks() {
   documents.forEach((item) => {
+    if (!canEditDocument(item)) return;
     if (isProcessingTaskPending(item)) {
       startProcessingPolling(item);
       return;

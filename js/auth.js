@@ -18,7 +18,7 @@ function authUi() {
   const isHomePage = document.body?.dataset.page === "library";
   if (isHomePage) {
     const bar = document.createElement("div"); bar.className = "auth-bar";
-    bar.innerHTML = '<div class="auth-actions"><button id="auth-admin" class="ghost-link settings-button hidden">管理</button><button id="auth-action" class="ghost-link settings-button">登录</button></div>';
+    bar.innerHTML = '<div class="auth-actions"><button id="auth-admin" class="ghost-link settings-button hidden" type="button" aria-haspopup="dialog" aria-controls="accounts-dialog">管理</button><button id="auth-action" class="ghost-link settings-button" type="button">登录</button></div>';
     document.querySelector("#auth-slot")?.append(bar);
   }
   const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<div class="auth-card"><h2 id="auth-title">登录</h2><input id="auth-username" placeholder="账号"><input id="auth-password" type="password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button">登录</button><button id="auth-switch" class="ghost-link">注册账户</button></div>';
@@ -86,6 +86,6 @@ async function ensureAuthenticated() {
   document.querySelector(".auth-modal").classList.remove("hidden"); return false;
 }
 async function manageUsers() {
-  // 完整账户管理页（列表/搜索/分页/新建/角色/删除），仿 poem 平台的用户管理
-  window.location.href = new URL("accounts.html", location.href).href;
+  if (!currentUser?.isAdmin || typeof window.openAccountsModal !== "function") return;
+  window.openAccountsModal();
 }

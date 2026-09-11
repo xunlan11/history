@@ -42,6 +42,11 @@ async function recognizeCurrentPage() {
     return;
   }
 
+  if (!canEditDocument(item)) {
+    alert("只有创建者可以修改这份文献。");
+    return;
+  }
+
   if (!page.imageDataUrl && !page.imageUrl) {
     alert("请先为本页选择原始资料图片。");
     return;
@@ -119,7 +124,7 @@ function stopProcessingPolling(documentId) {
 }
 
 function startProcessingPolling(item) {
-  if (!item?.id) {
+  if (!item?.id || !canEditDocument(item)) {
     return;
   }
 
@@ -156,7 +161,7 @@ function isProcessingPageFinalized(page) {
 }
 
 function enqueueProcessingFinalize(item, page) {
-  if (!page || !isProcessingPageOcrReady(page) || isProcessingPageFinalized(page)) {
+  if (!canEditDocument(item) || !page || !isProcessingPageOcrReady(page) || isProcessingPageFinalized(page)) {
     return;
   }
 
@@ -191,6 +196,7 @@ function drainProcessingLlmQueue(documentId) {
 }
 
 async function finalizeProcessingPage(item, page) {
+  if (!canEditDocument(item)) return;
   try {
     const result = await requestFinalTextForPage(item, page);
     if (result.ready) {
@@ -224,6 +230,7 @@ function refreshProcessingLlmProgress(item) {
 }
 
 function enqueueNewProcessingPages(item) {
+  if (!canEditDocument(item)) return false;
   let count = 0;
   item.pages.forEach((page) => {
     if (isProcessingPageOcrReady(page) && !isProcessingPageFinalized(page)) {
@@ -274,7 +281,7 @@ function maybeFinishProcessingPipeline(item) {
 }
 
 function triggerProcessingMetadata(item) {
-  if (metadataAutoTriggered.has(item.id)) {
+  if (!canEditDocument(item) || metadataAutoTriggered.has(item.id)) {
     return;
   }
 
@@ -288,6 +295,7 @@ function triggerProcessingMetadata(item) {
 }
 
 async function submitProcessingTask(item, file) {
+  if (!canEditDocument(item)) return;
   try {
     const body = new FormData();
     body.append("document", file, file.name);
@@ -351,7 +359,7 @@ async function submitProcessingTask(item, file) {
 async function refreshProcessingTask() {
   const item = getSelectedDocument();
 
-  if (!item) {
+  if (!item || !canEditDocument(item)) {
     return;
   }
 
@@ -365,6 +373,7 @@ async function refreshProcessingTask() {
 }
 
 async function refreshProcessingDocument(item, options = {}) {
+  if (!canEditDocument(item)) return;
   const taskId = item.processingTask?.remoteTaskId;
   if (!taskId) {
     if (!options.silent) {

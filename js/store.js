@@ -41,8 +41,10 @@ function normalizeDocuments(items) {
         year: item.year || "",
         publisher: item.publisher || "",
         creator: item.creator && item.creator.username ? { username: String(item.creator.username) } : null,
-      tags: item.tags || "",
-      visibility: item.visibility === "public" ? "public" : "private",
+        ownerId: item.ownerId ?? null,
+        canEdit: item.canEdit === true,
+        tags: item.tags || "",
+        visibility: item.visibility === "public" ? "public" : "private",
         fileName: item.fileName || "",
         fileType: item.fileType || "unknown",
         fileSize: Number(item.fileSize) || 0,
@@ -335,7 +337,7 @@ async function pushServerSnapshot() {
 }
 
 async function archiveDocumentSource(item, file) {
-  if (!item?.id || !file?.name) {
+  if (!item?.id || !canEditDocument(item) || !file?.name) {
     return false;
   }
 
@@ -570,7 +572,7 @@ function deleteConversation(id) {
 function deleteDocument(id) {
   const index = documents.findIndex((item) => item.id === id);
 
-  if (index === -1) {
+  if (index === -1 || !canEditDocument(documents[index])) {
     return;
   }
 
@@ -610,6 +612,13 @@ function getSelectedDocument() {
   return documents.find((item) => item.id === selectedDocumentId) || null;
 }
 
+function canEditDocument(item) {
+  if (!item?.canEdit || !currentUser || item.ownerId === null || item.ownerId === undefined) {
+    return false;
+  }
+  return Number(item.ownerId) === Number(currentUser.id);
+}
+
 function getSelectedPage() {
   const item = getSelectedDocument();
   if (!item) {
@@ -621,6 +630,10 @@ function getSelectedPage() {
 
 function ensureSelectedPage(item) {
   if (!item.pages.length) {
+    if (!canEditDocument(item)) {
+      selectedPageId = null;
+      return;
+    }
     const page = createPage(1);
     item.pages.push(page);
     selectedPageId = page.id;
@@ -638,7 +651,7 @@ function nextPageNumber(item) {
 function saveCurrentPage(statusOverride) {
   const item = getSelectedDocument();
   const page = getSelectedPage();
-  if (!item || !page) {
+  if (!item || !page || !canEditDocument(item)) {
     return false;
   }
 
@@ -672,6 +685,10 @@ function moveToAdjacentPage(direction, options = {}) {
   }
 
   if (direction > 0 && options.createIfMissing) {
+    if (!canEditDocument(item)) {
+      renderAll();
+      return;
+    }
     const page = createPage(nextPageNumber(item));
     item.pages.push(page);
     item.pages.sort((a, b) => a.pageNumber - b.pageNumber);

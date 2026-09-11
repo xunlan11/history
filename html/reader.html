@@ -42,27 +42,39 @@
                 <span class="inline-status" id="reader-stream-status">等待处理</span>
                 <div class="reader-progress-area">
                   <div class="progress-stack hidden" id="reader-stream-progress">
-                    <div class="progress-row"><span class="progress-label" id="reader-stream-main-label">逐页处理进度</span><div class="progress-track"><div class="progress-fill" id="reader-stream-main-fill"></div></div><span class="progress-value" id="reader-stream-main-value">0 / 0 页</span></div>
-                    <div class="progress-row"><span class="progress-label" id="reader-stream-sub-label">当前页</span><div class="progress-track"><div class="progress-fill progress-fill-sub" id="reader-stream-sub-fill"></div></div><span class="progress-value" id="reader-stream-sub-value">等待</span></div>
+                    <div class="progress-header">
+                      <span class="progress-title">处理进度</span>
+                      <button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果">
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                          <path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path>
+                          <path d="M3 5v5h5"></path>
+                          <path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path>
+                          <path d="M21 19v-5h-5"></path>
+                        </svg>
+                      </button>
+                    </div>
+                    <div class="progress-combined-track">
+                      <div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-ocr"></div><div class="progress-fill progress-fill-llm"></div></div>
+                      <span class="progress-ocr-pages"></span>
+                    </div>
+                    <div class="progress-combined-track">
+                      <div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-llm"></div><div class="progress-fill progress-fill-ocr"></div></div>
+                      <span class="progress-llm-pages"></span>
+                    </div>
                   </div>
-                  <button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果">
-                    <svg aria-hidden="true" viewBox="0 0 24 24">
-                      <path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path>
-                      <path d="M3 5v5h5"></path>
-                      <path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path>
-                      <path d="M21 19v-5h-5"></path>
-                    </svg>
-                  </button>
                 </div>
               </aside>
               <section class="panel reader-sidebar-reserved" aria-hidden="true"></section>
             </div>
             <section class="reader-main">
               <section class="panel reader-combined-panel">
-                <div class="reader-compare">
-                  <section class="reader-original-panel">
+                <div class="reader-compare" id="reader-compare">
+                  <section class="reader-original-panel" id="reader-original-panel">
                     <div class="section-heading">
                       <h3>原始资料</h3>
+                      <button class="icon-button reader-panel-toggle" id="reader-original-toggle" type="button" aria-label="折叠原始资料" aria-controls="reader-original-preview" aria-expanded="true" title="折叠原始资料">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+                      </button>
                     </div>
                     <div class="reader-original-viewer" id="reader-original-preview"></div>
                   </section>
@@ -73,6 +85,18 @@
                     </div>
                     <div class="reader-text" id="reader-text"></div>
                     <div class="reader-notes hidden" id="reader-notes"></div>
+                  </section>
+
+                  <section class="reader-annotation-panel" id="reader-annotation-panel">
+                    <div class="section-heading reader-annotation-heading">
+                      <span class="reader-annotation-status" id="reader-annotation-status" aria-live="polite"></span>
+                      <h3>笺注</h3>
+                      <button class="icon-button reader-panel-toggle" id="reader-annotation-toggle" type="button" aria-label="折叠笺注" aria-controls="reader-annotation" aria-expanded="true" title="折叠笺注">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+                      </button>
+                    </div>
+                    <label class="sr-only" for="reader-annotation">本页笺注</label>
+                    <textarea class="reader-annotation" id="reader-annotation" maxlength="100000" placeholder="在此记录本页笺注" spellcheck="true"></textarea>
                   </section>
                 </div>
 
@@ -103,6 +127,8 @@
     <script src="../js/auth.js"></script>
     <script src="../js/store.js"></script>
     <script src="../js/dom.js"></script>
+    <script src="../js/reader-panels.js"></script>
+    <script src="../js/annotations.js"></script>
     <script src="../js/render.js"></script>
     <script src="../js/progress.js"></script>
     <script src="../js/service.js"></script>

@@ -277,6 +277,10 @@ function createBookCard(item, index) {
   card.dataset.documentId = item.id;
   card.dataset.documentIndex = String(index);
   card.setAttribute("aria-grabbed", "false");
+  if (!canEditDocument(item)) {
+    card.classList.add("read-only");
+    openButton.title = "公开文献，仅可查看";
+  }
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
   node.querySelector(".book-pages").textContent = `${item.pages.length} 页`;
@@ -320,6 +324,11 @@ function createBookCard(item, index) {
 
 function prepareDocumentDrag(event, card, documentId) {
   if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
+
+  const item = documents.find((entry) => entry.id === documentId);
+  if (!canEditDocument(item)) {
     return;
   }
 
@@ -631,11 +640,16 @@ function renderReader() {
     readerText.classList.add("is-empty");
     readerOriginalPreview.append(readerEmptyState("请先在文献库打开一项文献"));
     readerText.append(readerEmptyState("尚无整理文本"));
+    if (typeof renderReaderAnnotation === "function") {
+      renderReaderAnnotation(null, null);
+    }
     return;
   }
 
   ensureSelectedPage(item);
   const page = getSelectedPage();
+  const canEdit = canEditDocument(item);
+  if (!canEdit) readerEditing = false;
   const sortedPages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
   const pageIndex = Math.max(0, sortedPages.findIndex((entry) => entry.id === page?.id));
 
@@ -648,15 +662,19 @@ function renderReader() {
   readerPrevPageButton.disabled = pageIndex <= 0;
   readerNextPageButton.disabled = pageIndex >= sortedPages.length - 1;
   exportDocumentPdfButton.disabled = false;
-  editDocumentButton.disabled = false;
+  editDocumentButton.disabled = !page || !canEdit;
 
   renderReaderOriginal(page);
   renderReaderText(page);
+  if (typeof renderReaderAnnotation === "function") {
+    renderReaderAnnotation(item, page);
+  }
   applyReaderEditingState();
 }
 
 function setReaderEditing(editing) {
-  readerEditing = Boolean(editing && getSelectedDocument() && getSelectedPage());
+  const item = getSelectedDocument();
+  readerEditing = Boolean(editing && item && getSelectedPage() && canEditDocument(item));
   if (readerEditing && readerText?.classList.contains("is-empty")) {
     readerText.innerHTML = "";
     readerText.classList.remove("is-empty");
@@ -674,8 +692,9 @@ function applyReaderEditingState() {
 
   readerText.contentEditable = String(readerEditing);
   readerText.classList.toggle("is-editing", readerEditing);
-  editDocumentLabel.textContent = readerEditing ? "保存" : "修改";
-  editDocumentButton.setAttribute("aria-label", readerEditing ? "保存整理文本" : "修改整理文本");
+  const canEdit = canEditDocument(getSelectedDocument());
+  editDocumentLabel.textContent = readerEditing ? "保存" : canEdit ? "修改" : "只读";
+  editDocumentButton.setAttribute("aria-label", readerEditing ? "保存整理文本" : canEdit ? "修改整理文本" : "只读文献");
 }
 
 function renderReaderSidebar() {
@@ -693,10 +712,11 @@ function renderReaderSidebar() {
     return;
   }
 
-  readerRefreshButton.classList.toggle("hidden", !item.processingTask);
+  const canEdit = canEditDocument(item);
+  readerRefreshButton.classList.toggle("hidden", !canEdit || !item.processingTask);
   const rows = [
     ["文献名", item.title || "未识别"],
-    ["创建者", item.creator?.username || "创建者已隐藏"],
+    ["创建者", item.creator?.username || "创建者信息不可用"],
     ["作者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
@@ -723,7 +743,7 @@ function renderReaderSidebar() {
   visibilityOptions.setAttribute("aria-label", "文献可见性");
   const currentVisibility = item.visibility === "public" ? "public" : "private";
   [
-    ["private", "私密"],
+    ["private", "仅自己"],
     ["public", "公开"],
   ].forEach(([value, label]) => {
     const button = document.createElement("button");
@@ -733,15 +753,18 @@ function renderReaderSidebar() {
     button.textContent = label;
     button.setAttribute("aria-pressed", String(currentVisibility === value));
     button.classList.toggle("active", currentVisibility === value);
-    button.onclick = () => {
-      item.visibility = value;
-      item.updatedAt = new Date().toISOString();
-      persist();
-      visibilityOptions.querySelectorAll(".reader-visibility-option").forEach((option) => {
-        option.classList.toggle("active", option.dataset.visibility === value);
-        option.setAttribute("aria-pressed", String(option.dataset.visibility === value));
-      });
-    };
+    button.disabled = !canEdit;
+    if (canEdit) {
+      button.onclick = () => {
+        item.visibility = value;
+        item.updatedAt = new Date().toISOString();
+        persist();
+        visibilityOptions.querySelectorAll(".reader-visibility-option").forEach((option) => {
+          option.classList.toggle("active", option.dataset.visibility === value);
+          option.setAttribute("aria-pressed", String(option.dataset.visibility === value));
+        });
+      };
+    }
     visibilityOptions.append(button);
   });
   const visibilityDesc = document.createElement("dd");
@@ -839,7 +862,7 @@ function renderDetail() {
 
   const rows = [
     ["文献名", item.title || "未识别"],
-    ["创建者", item.creator?.username || "创建者已隐藏"],
+    ["创建者", item.creator?.username || "创建者信息不可用"],
     ["著者", item.author || "未录"],
     ["年份", item.year || "未录"],
     ["出版社", item.publisher || "未录"],

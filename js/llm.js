@@ -23,6 +23,11 @@ async function generatePunctuatedText(options = {}) {
     return;
   }
 
+  if (!canEditDocument(item)) {
+    if (!options.silent) alert("只有创建者可以修改这份文献。");
+    return;
+  }
+
   saveCurrentPage();
   const sourceText = cleanText.value.trim() || ocrRawText.value.trim();
 
@@ -78,6 +83,11 @@ async function generateFinalText(options = {}) {
     return;
   }
 
+  if (!canEditDocument(item)) {
+    if (!options.silent) alert("只有创建者可以修改这份文献。");
+    return;
+  }
+
   saveCurrentPage();
 
   if (!hasPageText(page)) {
@@ -118,6 +128,11 @@ async function generateDocumentFinalText() {
   const item = getSelectedDocument();
   if (!item) {
     alert("请先打开一项文献。");
+    return;
+  }
+
+  if (!canEditDocument(item)) {
+    alert("只有创建者可以修改这份文献。");
     return;
   }
 
@@ -218,7 +233,7 @@ function applyFinalTextResult(item, page, result) {
 }
 
 async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
-  if (!item || !text || !needsMetadataAutoFill(item)) {
+  if (!item || !canEditDocument(item) || !text || !needsMetadataAutoFill(item)) {
     return;
   }
 
@@ -259,7 +274,7 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
 }
 
 async function detectDocumentCover(item, file) {
-  if (!item || !file || !file.name) {
+  if (!item || !canEditDocument(item) || !file || !file.name) {
     return;
   }
 

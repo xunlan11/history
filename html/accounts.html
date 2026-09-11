@@ -62,11 +62,23 @@
       }
 
       .accounts-toolbar {
-        display: flex;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
         align-items: center;
-        justify-content: space-between;
         gap: 14px;
-        flex-wrap: wrap;
+      }
+
+      @media (max-width: 720px) {
+        .accounts-toolbar {
+          grid-template-columns: 1fr;
+          justify-items: start;
+        }
+        .accounts-pagination {
+          justify-self: start;
+        }
+        .accounts-count {
+          justify-self: start;
+        }
       }
 
       .accounts-toolbar-left {
@@ -96,12 +108,15 @@
         font-size: 13px;
         font-weight: 700;
         white-space: nowrap;
+        justify-self: end;
+        text-align: right;
       }
 
       .accounts-pagination {
         display: flex;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: center;
+        justify-self: center;
         gap: 10px;
         min-height: 26px;
       }
@@ -288,10 +303,10 @@
               placeholder="搜索用户名"
               autocomplete="off"
             />
-            <span id="accounts-count" class="accounts-count">共 0 人</span>
           </div>
+          <div id="accounts-pagination" class="accounts-pagination"></div>
+          <div id="accounts-count" class="accounts-count">共 0 人</div>
         </div>
-        <div id="accounts-pagination" class="accounts-pagination"></div>
         <div class="accounts-table-wrap">
           <table class="accounts-table">
             <colgroup>
