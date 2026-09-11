@@ -2300,6 +2300,11 @@ body {
   background: #f2f7f4;
 }
 
+/* 「设为普通用户 / 设为管理员」两种文案宽度对齐 */
+.accounts-row .accounts-btn[data-act="role"] {
+  min-width: calc(6em + 20px);
+}
+
 .accounts-btn:disabled {
   cursor: default;
   opacity: 0.45;

@@ -97,6 +97,10 @@ async function refreshVersionStatus() {
         showVersionStatus("更新失败", "service-warn");
         return;
       }
+      // 先通知其它已打开的页面刷新，再刷新本页
+      if (typeof broadcastPlatformReload === "function") {
+        broadcastPlatformReload();
+      }
       window.location.reload();
       return;
     }

@@ -52,3 +52,68 @@ if (SITE_ID !== "history") {
   }
   document.title = nextTitle;
 }
+
+// —— 平台更新广播：任一页面执行「更新」发布后，全平台已打开的页面一起强制刷新 ——
+// 机制：发布页写入 localStorage 信号，其它页通过 storage 事件立即刷新；标签页重新可见/
+// 获得焦点时再比对一次信号，避免后台标签页错过事件。sessionStorage 记录本页已处理的信号，
+// 防止刷新后循环触发。（信号按域名共享，故 /history 与 /literature 会同时刷新。）
+const PLATFORM_RELOAD_KEY = "wenqu.platform.reload";
+const PLATFORM_RELOAD_ACK_KEY = "wenqu.platform.reload.acked";
+
+function acknowledgedReloadSignal() {
+  try {
+    return sessionStorage.getItem(PLATFORM_RELOAD_ACK_KEY);
+  } catch (_) {
+    return null;
+  }
+}
+
+function acknowledgeReloadSignal(signal) {
+  try {
+    sessionStorage.setItem(PLATFORM_RELOAD_ACK_KEY, signal);
+  } catch (_) {
+    /* 隐私模式等存储不可用时忽略 */
+  }
+}
+
+function applyPlatformReloadSignal(force = false) {
+  let signal = null;
+  try {
+    signal = localStorage.getItem(PLATFORM_RELOAD_KEY);
+  } catch (_) {
+    return;
+  }
+  if (!signal) {
+    return;
+  }
+  if (!force && acknowledgedReloadSignal() === signal) {
+    return;
+  }
+  acknowledgeReloadSignal(signal);
+  window.location.reload();
+}
+
+// 发布完成后调用：标记本页已处理，并通知其它页面刷新
+function broadcastPlatformReload() {
+  const signal = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  acknowledgeReloadSignal(signal);
+  try {
+    localStorage.setItem(PLATFORM_RELOAD_KEY, signal);
+  } catch (_) {
+    /* 存储不可用时仅本页刷新 */
+  }
+  return signal;
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === PLATFORM_RELOAD_KEY) {
+    applyPlatformReloadSignal(true);
+  }
+});
+window.addEventListener("focus", () => applyPlatformReloadSignal());
+window.addEventListener("pageshow", () => applyPlatformReloadSignal());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    applyPlatformReloadSignal();
+  }
+});

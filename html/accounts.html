@@ -255,6 +255,11 @@
         background: #f2f7f4;
       }
 
+      /* 「设为普通用户 / 设为管理员」两种文案宽度对齐 */
+      .actions-row .btn-mini[data-act="role"] {
+        min-width: calc(6em + 22px);
+      }
+
       .actions-row .btn-danger {
         border-color: #e3b7b2;
         color: #c0392b;
@@ -423,7 +428,7 @@
           } else {
             const toggle = isAdmin
               ? `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="0">设为普通用户</button>`
-              : `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="1">设为管&nbsp;理&nbsp;员</button>`;
+              : `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="1">设为管理员</button>`;
             actions = `<div class="actions-row">${toggle}<button type="button" class="btn-mini btn-danger" data-id="${user.id}" data-act="delete">删除</button></div>`;
           }
           return (
