@@ -2093,7 +2093,7 @@ body {
   display: grid;
   gap: 14px;
   width: 100%;
-  max-width: 820px;
+  max-width: 634px;
   min-width: 0;
   max-height: calc(100vh - 32px);
   overflow: hidden;
@@ -2192,7 +2192,7 @@ body {
 
 .accounts-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 592px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -2201,7 +2201,7 @@ body {
 .accounts-table td {
   padding: 10px 12px;
   border-bottom: 1px solid #e6ebe7;
-  text-align: left;
+  text-align: center;
   white-space: nowrap;
 }
 
@@ -2221,30 +2221,31 @@ body {
 }
 
 .accounts-table .col-id {
-  width: 54px;
+  width: 56px;
   color: var(--muted);
 }
 
 .accounts-table .col-username {
-  width: 150px;
+  width: 142px;
   overflow: hidden;
   font-weight: 700;
+  text-align: left;
   text-overflow: ellipsis;
 }
 
 .accounts-table .col-role {
-  width: 102px;
+  width: 80px;
 }
 
 .accounts-table .col-created {
-  width: 156px;
+  width: 138px;
   color: var(--muted);
   font-size: 13px;
 }
 
 .accounts-table .col-actions {
-  width: 232px;
-  text-align: right;
+  width: 176px;
+  text-align: center;
 }
 
 .accounts-empty {
@@ -2278,7 +2279,7 @@ body {
 .accounts-row {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 6px;
 }
 

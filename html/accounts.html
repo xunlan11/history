@@ -55,7 +55,7 @@
       }
 
       .accounts-card {
-        width: min(980px, 100%);
+        width: min(634px, 100%);
         margin: 0 auto;
         display: grid;
         gap: 14px;
@@ -149,13 +149,14 @@
       .accounts-table {
         width: 100%;
         border-collapse: collapse;
-        min-width: 680px;
+        table-layout: fixed;
+        min-width: 592px;
       }
 
       .accounts-table th,
       .accounts-table td {
         padding: 11px 14px;
-        text-align: left;
+        text-align: center;
         border-bottom: 1px solid #e6ebe7;
         white-space: nowrap;
       }
@@ -181,16 +182,26 @@
       }
 
       .accounts-table .col-username {
+        width: 142px;
+        overflow: hidden;
         font-weight: 700;
+        text-align: left;
+        text-overflow: ellipsis;
+      }
+
+      .accounts-table .col-role {
+        width: 80px;
       }
 
       .accounts-table .col-created {
+        width: 138px;
         color: var(--muted);
         font-size: 13px;
       }
 
       .accounts-table .col-actions {
-        text-align: right;
+        width: 176px;
+        text-align: center;
       }
 
       .accounts-empty {
@@ -223,7 +234,7 @@
       .actions-row {
         display: inline-flex;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: center;
         gap: 6px;
         flex-wrap: wrap;
       }
@@ -311,8 +322,8 @@
           <table class="accounts-table">
             <colgroup>
               <col class="col-id" />
-              <col />
-              <col style="width: 110px" />
+              <col class="col-username" />
+              <col class="col-role" />
               <col class="col-created" />
               <col class="col-actions" />
             </colgroup>
@@ -412,7 +423,7 @@
           } else {
             const toggle = isAdmin
               ? `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="0">设为普通用户</button>`
-              : `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="1">设为管理员</button>`;
+              : `<button type="button" class="btn-mini" data-id="${user.id}" data-act="role" data-val="1">设为管&nbsp;理&nbsp;员</button>`;
             actions = `<div class="actions-row">${toggle}<button type="button" class="btn-mini btn-danger" data-id="${user.id}" data-act="delete">删除</button></div>`;
           }
           return (

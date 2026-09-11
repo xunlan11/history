@@ -71,7 +71,7 @@
     } else {
       const toggle = isAdmin
         ? `<button type="button" class="accounts-btn" data-id="${user.id}" data-act="role" data-val="0">设为普通用户</button>`
-        : `<button type="button" class="accounts-btn" data-id="${user.id}" data-act="role" data-val="1">设为管理员</button>`;
+        : `<button type="button" class="accounts-btn" data-id="${user.id}" data-act="role" data-val="1">设为管&nbsp;理&nbsp;员</button>`;
       actions = `<div class="accounts-row">${toggle}<button type="button" class="accounts-btn accounts-btn-danger" data-id="${user.id}" data-act="delete">删除</button></div>`;
     }
     return (
