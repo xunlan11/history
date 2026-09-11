@@ -481,7 +481,7 @@ function buildLibraryChatContext(prompt) {
         pageId: page.id,
         pageNumber: page.pageNumber,
         text: snippet,
-        score: scoreSmartContextText(`${item.title}\n${item.author}\n${text}`, prompt),
+        score: scoreTextRelevance(`${item.title}\n${item.author}\n${text}`, prompt),
         documentIndex,
         pageIndex,
       });
@@ -497,16 +497,6 @@ function buildLibraryChatContext(prompt) {
 
   return selectedEntries
     .map(({ score, documentIndex, pageIndex, ...entry }) => entry);
-}
-
-function scoreSmartContextText(text, prompt) {
-  const terms = prompt
-    .toLowerCase()
-    .split(/[\s,，、；;]+/)
-    .map((term) => term.trim())
-    .filter(Boolean);
-  const normalizedText = text.toLowerCase();
-  return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 3 : 0), 1);
 }
 
 function renderChatMessage(prompt, answer, warnings = []) {

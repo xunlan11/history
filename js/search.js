@@ -148,15 +148,7 @@ async function runSearch() {
 
 function buildSearchEntries(item, query) {
   const entries = [];
-  const metadata = [
-    item.title,
-    item.author,
-    item.year,
-    item.publisher,
-    item.tags,
-    item.fileName,
-  ].join("\n");
-  const metadataSnippet = buildSnippet(metadata, query);
+  const metadataSnippet = buildSnippet(buildSearchMetadata(item), query);
 
   if (metadataSnippet) {
     entries.push({ item, page: null, snippet: metadataSnippet });
@@ -191,7 +183,7 @@ function collectSearchDocumentsForLlm(query) {
         page,
         documentIndex,
         pageIndex,
-        score: scoreSearchTextForLlm(`${metadata}\n${text}`, query),
+        score: scoreTextRelevance(`${metadata}\n${text}`, query),
       });
     });
   });
@@ -237,23 +229,6 @@ function buildSearchMetadata(item) {
     item.tags,
     item.fileName,
   ].filter(Boolean).join("\n");
-}
-
-function scoreSearchTextForLlm(text, query) {
-  if (!query) {
-    return 1;
-  }
-
-  const normalizedText = text.toLowerCase();
-  const terms = query
-    .toLowerCase()
-    .split(/[\s,，、；;]+/)
-    .map((term) => term.trim())
-    .filter(Boolean);
-
-  return terms.reduce((score, term) => {
-    return score + (normalizedText.includes(term) ? 3 : 0);
-  }, 1);
 }
 
 function countSearchPages() {

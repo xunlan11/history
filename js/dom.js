@@ -60,7 +60,6 @@ const versionServiceStatus = document.querySelector("#version-service-status");
 const versionUpdateButton = document.querySelector("#version-update-button");
 const ocrServiceStatus = document.querySelector("#ocr-service-status");
 const llmServiceStatus = document.querySelector("#llm-service-status");
-const smartDock = document.querySelector("#smart-dock");
 const conversationList = document.querySelector("#conversation-list");
 const newConversationButton = document.querySelector("#new-conversation");
 const chatTitle = document.querySelector("#chat-title");

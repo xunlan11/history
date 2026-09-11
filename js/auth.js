@@ -21,7 +21,7 @@ function authUi() {
     bar.innerHTML = '<div class="auth-actions"><button id="auth-admin" class="ghost-link settings-button hidden" type="button" aria-haspopup="dialog" aria-controls="accounts-dialog">管理</button><button id="auth-action" class="ghost-link settings-button" type="button">登录</button></div>';
     document.querySelector("#auth-slot")?.append(bar);
   }
-  const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<div class="auth-card"><h2 id="auth-title">登录</h2><input id="auth-username" placeholder="账号"><input id="auth-password" type="password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button">登录</button><button id="auth-switch" class="ghost-link">注册账户</button></div>';
+  const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<form class="auth-card" id="auth-form" method="post" autocomplete="on" novalidate><h2 id="auth-title">登录</h2><input id="auth-username" name="username" autocomplete="username" placeholder="账号"><input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button" type="submit">登录</button><button id="auth-switch" class="ghost-link" type="button">注册账户</button></form>';
   document.body.append(modal);
   setAuthInputRequirements(false);
   document.querySelector("#auth-action")?.addEventListener("click", () => currentUser ? logout() : modal.classList.remove("hidden"));
@@ -33,11 +33,9 @@ function authUi() {
     document.querySelector("#auth-switch").textContent = registerMode ? "返回登录" : "注册账户";
     setAuthInputRequirements(registerMode);
   };
-  document.querySelector("#auth-submit").onclick = submitAuth;
-  document.querySelectorAll("#auth-username, #auth-password").forEach((input) => {
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") submitAuth();
-    });
+  document.querySelector("#auth-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitAuth();
   });
   document.querySelector("#auth-admin")?.addEventListener("click", manageUsers);
 }

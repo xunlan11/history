@@ -391,16 +391,6 @@ function splitConversationAttachmentText(text, maxLength = 1600) {
   return chunks;
 }
 
-function scoreConversationAttachmentText(text, query) {
-  const terms = String(query || "")
-    .toLowerCase()
-    .split(/[\s,，、；;]+/)
-    .map((term) => term.trim())
-    .filter(Boolean);
-  const normalized = text.toLowerCase();
-  return terms.reduce((score, term) => score + (normalized.includes(term) ? 3 : 0), 1);
-}
-
 function collectConversationAttachmentChatEntries(prompt) {
   const entries = [];
   getConversationAttachmentReport().ready.forEach((attachment, attachmentIndex) => {
@@ -413,7 +403,7 @@ function collectConversationAttachmentChatEntries(prompt) {
         pageId: `${attachment.id}-part-${chunkIndex + 1}`,
         pageNumber: chunkIndex + 1,
         text,
-        score: scoreConversationAttachmentText(`${attachment.fileName}\n${text}`, prompt),
+        score: scoreTextRelevance(`${attachment.fileName}\n${text}`, prompt),
         documentIndex: -10000 + attachmentIndex,
         pageIndex: chunkIndex,
       });
@@ -431,7 +421,7 @@ function buildConversationAttachmentDocumentsForLlm(query, maxChunks = 10, chunk
         attachmentIndex,
         chunkIndex,
         text,
-        score: scoreConversationAttachmentText(`${attachment.fileName}\n${text}`, query),
+        score: scoreTextRelevance(`${attachment.fileName}\n${text}`, query),
       });
     });
   });

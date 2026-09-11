@@ -100,3 +100,13 @@ function highlight(text, query) {
   const escaped = escapeRegExp(query);
   return escapeHtml(text).replace(new RegExp(escaped, "gi"), (match) => `<mark>${match}</mark>`);
 }
+
+function scoreTextRelevance(text, query) {
+  const terms = String(query || "")
+    .toLowerCase()
+    .split(/[\s,，、；;]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+  const normalizedText = String(text || "").toLowerCase();
+  return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 3 : 0), 1);
+}
