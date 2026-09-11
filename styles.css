@@ -114,20 +114,6 @@ button {
   min-height: 0;
 }
 
-@media (min-width: 981px) {
-  .reader-compare.is-original-collapsed {
-    grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .reader-compare.is-annotation-collapsed {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
-  }
-
-  .reader-compare.is-original-collapsed.is-annotation-collapsed {
-    grid-template-columns: 44px minmax(0, 1fr) 44px;
-  }
-}
-
 .panel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -273,6 +259,11 @@ label {
   font-size: 13px;
 }
 
+#reader-document-detail .metadata-pair-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  column-gap: 8px;
+}
+
 #reader-document-detail dt {
   color: var(--muted);
   font-weight: 700;
@@ -290,56 +281,38 @@ label {
 }
 
 .reader-visibility-options {
-  display: inline-grid;
-  grid-auto-flow: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: max-content;
+  gap: 8px;
   width: max-content;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-2);
+  border: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .reader-visibility-option {
-  min-width: 54px;
-  min-height: 26px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  padding: 4px 10px;
-  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
   font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
+  font-weight: 400;
+  line-height: 1.3;
   cursor: pointer;
-  transition: background 0.18s ease, color 0.18s ease;
 }
 
-.reader-visibility-option:hover {
-  color: var(--primary-dark);
-  background: rgba(47, 111, 94, 0.10);
+.reader-visibility-option input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--primary);
 }
 
-.reader-visibility-option:disabled {
+.reader-visibility-option.is-disabled {
   cursor: default;
   opacity: 0.62;
-}
-
-.reader-visibility-option:disabled:hover {
-  color: var(--muted);
-  background: transparent;
-}
-
-.reader-visibility-option.active:disabled:hover {
-  color: #fff;
-  background: var(--primary);
-}
-
-.reader-visibility-option.active {
-  color: #fff;
-  background: var(--primary);
-  box-shadow: 0 3px 10px rgba(31, 74, 63, 0.20);
 }
 
 .reader-stream-status {
@@ -484,6 +457,11 @@ button:focus-visible {
   gap: 10px;
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
+}
+
+#document-detail .metadata-pair-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  column-gap: 10px;
 }
 
 #document-detail dt {
@@ -715,8 +693,8 @@ button:focus-visible {
 
 .reader-text-heading {
   min-height: 28px;
-  justify-content: center;
-  text-align: center;
+  justify-content: space-between;
+  text-align: left;
 }
 
 .reader-annotation-heading {
@@ -770,18 +748,6 @@ button:focus-visible {
   transition: transform 160ms ease;
 }
 
-.reader-panel-collapsed {
-  grid-template-rows: auto;
-  padding: 7px;
-}
-
-.reader-panel-collapsed > .section-heading {
-  justify-content: center;
-  margin-bottom: 0;
-}
-
-.reader-panel-collapsed > .section-heading > h3,
-.reader-panel-collapsed > .section-heading > .reader-annotation-status,
 .reader-panel-collapsed > :not(.section-heading) {
   display: none;
 }

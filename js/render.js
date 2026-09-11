@@ -697,6 +697,21 @@ function applyReaderEditingState() {
   editDocumentButton.setAttribute("aria-label", readerEditing ? "保存整理文本" : canEdit ? "修改整理文本" : "只读文献");
 }
 
+function appendDocumentDetailRow(container, entries, className = "") {
+  const row = document.createElement("div");
+  if (className) {
+    row.className = className;
+  }
+  entries.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    const desc = document.createElement("dd");
+    term.textContent = label;
+    desc.textContent = value;
+    row.append(term, desc);
+  });
+  container.append(row);
+}
+
 function renderReaderSidebar() {
   if (!readerDetailNode) {
     return;
@@ -716,56 +731,57 @@ function renderReaderSidebar() {
   readerRefreshButton.classList.toggle("hidden", !canEdit || !item.processingTask);
   const rows = [
     ["文献名", item.title || "未识别"],
-    ["创建者", item.creator?.username || "创建者信息不可用"],
     ["作者", item.author || "未录"],
-    ["年份", item.year || "未录"],
-    ["出版社", item.publisher || "未录"],
+  ];
+  rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+  appendDocumentDetailRow(
+    readerDetailNode,
+    [
+      ["年份", item.year || "未录"],
+      ["出版社", item.publisher || "未录"],
+    ],
+    "metadata-pair-row",
+  );
+  [
+    ["创建者", item.creator?.username || "创建者信息不可用"],
     ["标签", item.tags || "未录"],
     ["处理进度", getProcessingTaskLabel(item)],
-  ];
-  rows.splice(0, rows.length, ...rows.filter(([, value]) => value !== getProcessingTaskLabel(item)));
-  rows.forEach(([label, value]) => {
-    const row = document.createElement("div");
-    const term = document.createElement("dt");
-    const desc = document.createElement("dd");
-    term.textContent = label;
-    desc.textContent = value;
-    row.append(term, desc);
-    readerDetailNode.append(row);
-  });
+  ]
+    .filter(([, value]) => value !== getProcessingTaskLabel(item))
+    .forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
   const visibilityRow = document.createElement("div");
   visibilityRow.className = "reader-visibility-row";
   const visibilityLabel = document.createElement("dt");
   visibilityLabel.textContent = "可见性";
   const visibilityOptions = document.createElement("div");
   visibilityOptions.className = "reader-visibility-options";
-  visibilityOptions.setAttribute("role", "group");
+  visibilityOptions.setAttribute("role", "radiogroup");
   visibilityOptions.setAttribute("aria-label", "文献可见性");
   const currentVisibility = item.visibility === "public" ? "public" : "private";
   [
-    ["private", "仅自己"],
+    ["private", "私密"],
     ["public", "公开"],
   ].forEach(([value, label]) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "reader-visibility-option";
-    button.dataset.visibility = value;
-    button.textContent = label;
-    button.setAttribute("aria-pressed", String(currentVisibility === value));
-    button.classList.toggle("active", currentVisibility === value);
-    button.disabled = !canEdit;
+    const option = document.createElement("label");
+    option.className = "reader-visibility-option";
+    option.classList.toggle("is-disabled", !canEdit);
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = `reader-visibility-${item.id}`;
+    radio.value = value;
+    radio.checked = currentVisibility === value;
+    radio.disabled = !canEdit;
+    const optionLabel = document.createElement("span");
+    optionLabel.textContent = label;
     if (canEdit) {
-      button.onclick = () => {
+      radio.onchange = () => {
         item.visibility = value;
         item.updatedAt = new Date().toISOString();
         persist();
-        visibilityOptions.querySelectorAll(".reader-visibility-option").forEach((option) => {
-          option.classList.toggle("active", option.dataset.visibility === value);
-          option.setAttribute("aria-pressed", String(option.dataset.visibility === value));
-        });
       };
     }
-    visibilityOptions.append(button);
+    option.append(radio, optionLabel);
+    visibilityOptions.append(option);
   });
   const visibilityDesc = document.createElement("dd");
   visibilityDesc.append(visibilityOptions);
@@ -862,10 +878,21 @@ function renderDetail() {
 
   const rows = [
     ["文献名", item.title || "未识别"],
+    ["作者", item.author || "未录"],
+  ];
+
+  rows.forEach(([label, value]) => appendDocumentDetailRow(detailNode, [[label, value]]));
+  appendDocumentDetailRow(
+    detailNode,
+    [
+      ["年份", item.year || "未录"],
+      ["出版社", item.publisher || "未录"],
+    ],
+    "metadata-pair-row",
+  );
+
+  const extraRows = [
     ["创建者", item.creator?.username || "创建者信息不可用"],
-    ["著者", item.author || "未录"],
-    ["年份", item.year || "未录"],
-    ["出版社", item.publisher || "未录"],
     ["标签", item.tags || "未录"],
     ["封面识别", item.coverStatus || "待识别封面"],
     ["文件", item.fileName],
@@ -876,16 +903,7 @@ function renderDetail() {
     ["信息识别", item.metadataStatus || "待自动识别"],
     ["已建页目", `${item.pages.length} 页`],
   ];
-
-  rows.forEach(([label, value]) => {
-    const row = document.createElement("div");
-    const term = document.createElement("dt");
-    const desc = document.createElement("dd");
-    term.textContent = label;
-    desc.textContent = value;
-    row.append(term, desc);
-    detailNode.append(row);
-  });
+  extraRows.forEach(([label, value]) => appendDocumentDetailRow(detailNode, [[label, value]]));
 
   renderPageList(item);
   renderStreamProgress(item);
