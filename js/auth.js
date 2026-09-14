@@ -118,7 +118,7 @@ function updateAuthUi() {
   if (labelNode) labelNode.textContent = label;
   else actionNode.textContent = label;
   actionNode.setAttribute("aria-label", currentUser ? "登出" : "登录");
-  actionNode.title = currentUser ? "登出" : "登录";
+  actionNode.removeAttribute("title");
   const userNode = document.querySelector("#auth-user");
   if (userNode) {
     userNode.textContent = currentUser
