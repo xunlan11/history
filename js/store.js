@@ -592,6 +592,22 @@ function getDocumentDisplayTitle(item) {
   return item?.title || item?.fileName || "未命名文献";
 }
 
+function resolveDocumentSource(source) {
+  const item = source.documentId
+    ? documents.find((documentItem) => documentItem.id === source.documentId)
+    : documents.find((documentItem) => {
+        return getDocumentDisplayTitle(documentItem) === source.title || documentItem.title === source.title;
+      });
+  if (!item) {
+    return null;
+  }
+
+  const page = source.pageId
+    ? item.pages.find((pageItem) => pageItem.id === source.pageId)
+    : item.pages.find((pageItem) => pageItem.pageNumber === Number(source.pageNumber));
+  return { item, page: page || null };
+}
+
 function createPage(pageNumber) {
   return {
     id: newId(),
@@ -704,7 +720,7 @@ function moveToAdjacentPage(direction, options = {}) {
 }
 
 function summarizeDocumentStatus(item) {
-  if (!item.pages.length || item.pages.every((page) => !hasPageText(page))) {
+  if (item.pages.every((page) => !hasPageText(page))) {
     return "待整理";
   }
 
@@ -712,11 +728,7 @@ function summarizeDocumentStatus(item) {
     return "正在生成整理稿";
   }
 
-  if (item.pages.some((page) => hasPageText(page))) {
-    return "已保存文字";
-  }
-
-  return "待整理";
+  return "已保存文字";
 }
 
 function normalizePageStatus(status) {

@@ -220,13 +220,8 @@ function resolveChronicleSource(entry) {
   const sources = Array.isArray(entry.sources) ? entry.sources : [];
 
   for (const source of sources) {
-    const item = source.documentId
-      ? documents.find((documentItem) => documentItem.id === source.documentId)
-      : documents.find((documentItem) => {
-          return getDocumentDisplayTitle(documentItem) === source.title || documentItem.title === source.title;
-        });
-
-    if (!item) {
+    const target = resolveDocumentSource(source);
+    if (!target) {
       const attachment = findConversationAttachment(source.attachmentId || source.documentId, source.title);
       if (attachment) {
         return { attachment };
@@ -234,14 +229,10 @@ function resolveChronicleSource(entry) {
       continue;
     }
 
-    const page = source.pageId
-      ? item.pages.find((pageItem) => pageItem.id === source.pageId)
-      : item.pages.find((pageItem) => pageItem.pageNumber === Number(source.pageNumber));
-
-    if (page) {
+    if (target.page) {
       return {
-        documentId: item.id,
-        pageId: page.id,
+        documentId: target.item.id,
+        pageId: target.page.id,
       };
     }
   }

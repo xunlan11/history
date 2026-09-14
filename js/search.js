@@ -325,23 +325,10 @@ function highlightIfLiteral(text, query) {
 }
 
 function resolveSearchMatch(match) {
-  const item = match.documentId
-    ? documents.find((documentItem) => documentItem.id === match.documentId)
-    : documents.find((documentItem) => {
-        return getDocumentDisplayTitle(documentItem) === match.title || documentItem.title === match.title;
-      });
-
-  if (!item) {
+  const target = resolveDocumentSource(match);
+  if (!target) {
     const attachment = findConversationAttachment(match.attachmentId || match.documentId, match.title);
     return attachment ? { attachment, item: null, page: null } : null;
   }
-
-  const page = match.pageId
-    ? item.pages.find((pageItem) => pageItem.id === match.pageId)
-    : item.pages.find((pageItem) => pageItem.pageNumber === Number(match.pageNumber));
-
-  return {
-    item,
-    page: page || null,
-  };
+  return target;
 }

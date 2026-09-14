@@ -21,23 +21,60 @@ function authUi() {
     bar.innerHTML = '<div class="auth-actions"><button id="auth-admin" class="ghost-link settings-button hidden" type="button" aria-haspopup="dialog" aria-controls="accounts-dialog">管理</button><button id="auth-action" class="ghost-link settings-button" type="button">登录</button></div>';
     document.querySelector("#auth-slot")?.append(bar);
   }
-  const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<form class="auth-card" id="auth-form" method="post" autocomplete="on" novalidate><h2 id="auth-title">登录</h2><input id="auth-username" name="username" autocomplete="username" placeholder="账号"><input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button" type="submit">登录</button><button id="auth-switch" class="ghost-link" type="button">注册账户</button></form>';
+  const modal = document.createElement("div"); modal.className = "auth-modal hidden"; modal.innerHTML = '<form class="auth-card" id="auth-form" method="post" autocomplete="on" novalidate><h2 id="auth-title">登录</h2><input id="auth-username" name="username" type="text" autocomplete="username" placeholder="账号"><input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button" type="submit">登录</button><button id="auth-switch" class="ghost-link" type="button">注册账户</button></form>';
   document.body.append(modal);
+  const authForm = document.querySelector("#auth-form");
+  authForm.action = endpoint("/data/api/auth/login");
   setAuthInputRequirements(false);
-  document.querySelector("#auth-action")?.addEventListener("click", () => currentUser ? logout() : modal.classList.remove("hidden"));
+  document.querySelector("#auth-action")?.addEventListener("click", () => {
+    if (currentUser) {
+      logout();
+      return;
+    }
+    modal.classList.remove("hidden");
+    // Let the browser apply any saved username before checking for its password.
+    setTimeout(fillStoredPassword, 0);
+  });
   document.querySelector("#auth-switch").onclick = () => {
     const reg = document.querySelector("#auth-title").textContent === "注册";
     const registerMode = !reg;
     document.querySelector("#auth-title").textContent = registerMode ? "注册" : "登录";
     document.querySelector("#auth-submit").textContent = registerMode ? "注册" : "登录";
     document.querySelector("#auth-switch").textContent = registerMode ? "返回登录" : "注册账户";
+    authForm.action = endpoint(registerMode ? "/data/api/auth/register" : "/data/api/auth/login");
     setAuthInputRequirements(registerMode);
   };
-  document.querySelector("#auth-form").addEventListener("submit", (event) => {
+  authForm.addEventListener("submit", (event) => {
     event.preventDefault();
     submitAuth();
   });
+  const usernameInput = document.querySelector("#auth-username");
+  const passwordInput = document.querySelector("#auth-password");
+  usernameInput.addEventListener("change", fillStoredPassword);
+  usernameInput.addEventListener("blur", fillStoredPassword);
+  passwordInput.addEventListener("focus", fillStoredPassword);
   document.querySelector("#auth-admin")?.addEventListener("click", manageUsers);
+}
+
+// Browser autofill can populate the username without populating a dynamically
+// created password field. Ask the browser's password store for a silent match
+// after the user chooses an account; no credentials are persisted by the app.
+async function fillStoredPassword() {
+  const title = document.querySelector("#auth-title");
+  const usernameInput = document.querySelector("#auth-username");
+  const passwordInput = document.querySelector("#auth-password");
+  if (!usernameInput || !passwordInput || title?.textContent === "注册") return;
+  const username = usernameInput.value.trim();
+  if (!username || passwordInput.value || !window.isSecureContext || !navigator.credentials?.get) return;
+  try {
+    const credential = await navigator.credentials.get({ password: true, mediation: "silent" });
+    if (credential?.type === "password" && credential.id === username && credential.password) {
+      passwordInput.value = credential.password;
+      passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } catch (_) {
+    // Credential APIs may be unavailable or denied by the browser.
+  }
 }
 
 
