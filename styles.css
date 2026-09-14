@@ -2256,12 +2256,14 @@ body {
 
 .account-tag {
   display: inline-block;
+  min-width: 70px;
   padding: 2px 8px;
   border: 1px solid;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
   line-height: 20px;
+  text-align: center;
 }
 
 .account-tag-admin {
