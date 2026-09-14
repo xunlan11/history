@@ -18,7 +18,7 @@ function authUi() {
   const isHomePage = document.body?.dataset.page === "library";
   if (isHomePage) {
     const bar = document.createElement("div"); bar.className = "auth-bar";
-    bar.innerHTML = '<div class="auth-actions"><button id="auth-action" class="ghost-link settings-button icon-text-button" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"></circle><path d="M5 21a7 7 0 0 1 14 0"></path></svg><span id="auth-label">登录</span></button><button id="auth-admin" class="ghost-link settings-button icon-text-button hidden" type="button" aria-haspopup="dialog" aria-controls="accounts-dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"></circle><path d="M2.5 21a6.5 6.5 0 0 1 13 0"></path><path d="M16 5.5a3 3 0 0 1 0 5.8"></path><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.8"></path></svg>管理</button></div>';
+    bar.innerHTML = '<div class="auth-actions"><span id="auth-user" class="auth-user hidden"></span><button id="auth-action" class="ghost-link settings-button icon-text-button" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"></circle><path d="M5 21a7 7 0 0 1 14 0"></path></svg><span id="auth-label">登录</span></button><button id="auth-admin" class="ghost-link settings-button icon-text-button hidden" type="button" aria-haspopup="dialog" aria-controls="accounts-dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"></circle><path d="M2.5 21a6.5 6.5 0 0 1 13 0"></path><path d="M16 5.5a3 3 0 0 1 0 5.8"></path><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.8"></path></svg>管理</button></div>';
     document.querySelector("#auth-slot")?.append(bar);
   }
   const modal = document.createElement("div");
@@ -114,13 +114,18 @@ function updateAuthUi() {
   const adminNode = document.querySelector("#auth-admin");
   if (!actionNode || !adminNode) return;
   const labelNode = actionNode.querySelector("#auth-label");
-  const label = currentUser
-    ? `${currentUser.username}（${currentUser.isAdmin ? "管理员" : "普通用户"}）`
-    : "登录";
+  const label = currentUser ? "登出" : "登录";
   if (labelNode) labelNode.textContent = label;
   else actionNode.textContent = label;
   actionNode.setAttribute("aria-label", currentUser ? "登出" : "登录");
   actionNode.title = currentUser ? "登出" : "登录";
+  const userNode = document.querySelector("#auth-user");
+  if (userNode) {
+    userNode.textContent = currentUser
+      ? `${currentUser.username}（${currentUser.isAdmin ? "管理员" : "普通用户"}）`
+      : "";
+    userNode.classList.toggle("hidden", !currentUser);
+  }
   adminNode.classList.toggle("hidden", !currentUser?.isAdmin);
 }
 async function ensureAuthenticated() {

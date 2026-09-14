@@ -185,6 +185,8 @@ label {
 }
 .auth-bar { display:inline-flex; align-items:center; gap:0; }
 .auth-bar .auth-actions { display:inline-flex; align-items:center; gap:0; }
+.auth-bar .auth-user { margin-right:12px; color:var(--muted); font-size:13px; font-weight:700; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis; }
+.auth-bar .auth-user.hidden { display:none; }
 .auth-modal { position:fixed; inset:0; background:rgba(15,23,42,.38); display:grid; place-items:center; z-index:20; }
 .auth-modal.hidden { display:none; }
 .auth-card { width:min(360px, calc(100vw - 32px)); background:#fff; padding:24px; border-radius:8px; box-shadow:0 16px 48px rgba(15,23,42,.2); display:grid; gap:12px; }
@@ -350,6 +352,13 @@ button:focus-visible {
   outline: 3px solid rgba(209, 154, 56, 0.28);
   outline-offset: 2px;
   border-color: var(--focus);
+}
+
+/* 首页底栏输入框本身无边框，聚焦时不再显示黄色焦点框。 */
+.smart-input-box textarea:focus,
+.smart-input-box textarea:focus-visible {
+  outline: none;
+  border-color: transparent;
 }
 
 .primary-button,
