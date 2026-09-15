@@ -1,4 +1,6 @@
-## 虚拟环境（根目录）
+## 数据端
+
+### 虚拟环境（根目录）
 
 uv：
 ```bash
@@ -8,45 +10,35 @@ cd history
 uv sync
 ```
 
-## 服务
+### 指向服务端
 
-四个服务，由systemd托管。
+```
+OCR_UPSTREAM_URL=http://<服务端>:8080
+LLM_API_BASE=http://<服务端>:11434/v1
+```
 
-### 数据库
+### 对外接口
 
-使用SQLite。
+数据（SQLite）：
+```
+http://127.0.0.1:8665/health
+http://127.0.0.1:18665/health
+```
 
-### OCR
-
-使用PaddleOCR。
-
-接口（如不在同一主机则改为实际地址）：
+OCR：
 ```
 http://127.0.0.1:8765/ocr
 http://127.0.0.1:8765/ocr/stream
+http://127.0.0.1:8765/health
 ```
 
-### 大模型
-
-通过Ollama调用qwen3:8b。
-
-接口（如不在同一主机则改为实际地址）：
+大模型：
 ```
 http://127.0.0.1:8865/llm
 http://127.0.0.1:8865/health
 ```
 
-Ollama：
-```bash
-winget install Ollama.Ollama # Windows
-curl -fsSL https://ollama.com/install.sh | sh # Linux
-ollama serve # 新终端
-ollama pull qwen3:8b # 新终端
-```
-
-默认配置为（[service/llm.py#L16-L19](./service/llm.py#L16-L19)）
-
-## 数据库
+### 数据库维护
 
 ```bash
 uv run python scripts/storage_admin.py backup # 生成完整备份包
@@ -55,4 +47,22 @@ uv run python scripts/storage_admin.py vacuum # 压缩和优化数据库
 uv run python scripts/storage_admin.py export-json storage/export.json # 导出
 uv run python scripts/storage_admin.py import-json storage/export.json # 导入
 uv run python scripts/storage_admin.py restore storage/backups/history-backup-YYYYMMDD-HHMMSS.zip --yes # 先停止数据服务，再从完整备份包恢复
+```
+
+## 服务端
+
+### OCR
+
+```bash
+pip install "paddlex[ocr]"
+paddlex --serve --pipeline PP-StructureV3 --host 0.0.0.0 --port 8080 --device gpu:0
+```
+
+### 大模型
+
+```bash
+winget install Ollama.Ollama # Windows
+curl -fsSL https://ollama.com/install.sh | sh # Linux
+ollama serve # 新终端
+ollama pull qwen3:8b # 新终端
 ```

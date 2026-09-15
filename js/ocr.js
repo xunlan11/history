@@ -1,3 +1,25 @@
+// 识别能力由数据处理服务器（服务端）提供；这里把 503 detail 翻成人能看懂的提示。
+async function describeOcrFailure(response) {
+  let detail = null;
+  try {
+    const payload = await response.json();
+    detail = payload ? payload.detail : null;
+  } catch (error) {
+    detail = null;
+  }
+
+  if (detail && typeof detail === "object" && detail.message) {
+    return detail.message;
+  }
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (response.status === 503) {
+    return "识别能力尚未部署：请在数据处理服务器上部署 OCR 服务端后再试。";
+  }
+  return `识别服务返回 ${response.status}。`;
+}
+
 async function requestPageOcr(page) {
   const imageBlob = await getPageImageBlob(page);
   const body = new FormData();
@@ -10,7 +32,7 @@ async function requestPageOcr(page) {
   });
 
   if (!response.ok) {
-    throw new Error(`OCR request failed: ${response.status}`);
+    throw new Error(await describeOcrFailure(response));
   }
 
   return response.json();
@@ -70,14 +92,7 @@ async function recognizeCurrentPage() {
 
     page.ocrText = recognizedText.trim();
     page.status = "已识别";
-    page.ocr = {
-      confidence: result.confidence ?? null,
-      engine: result.engine || "本机识别服务",
-      preprocessing: result.preprocessing || null,
-      layout: result.layout || null,
-      warnings: result.warnings || [],
-      recognizedAt: new Date().toISOString(),
-    };
+    page.ocr = buildOcrSummary(result);
     page.updatedAt = new Date().toISOString();
     item.status = summarizeDocumentStatus(item);
     item.updatedAt = new Date().toISOString();
@@ -95,7 +110,7 @@ async function recognizeCurrentPage() {
     recognizeStatus.textContent = "识别服务未连接";
     finishPageStage(page);
     renderStreamProgress(item);
-    alert("暂时无法连接本机识别服务。请确认技术人员已在本机启动 OCR 服务后再试。");
+    alert(error && error.message ? error.message : "暂时无法连接识别服务，请确认服务端识别能力已部署。");
   }
 }
 
@@ -308,7 +323,7 @@ async function submitProcessingTask(item, file) {
     });
 
     if (!response.ok) {
-      throw new Error(`Streaming OCR submit failed: ${response.status}`);
+      throw new Error(await describeOcrFailure(response));
     }
 
     const result = await response.json();
@@ -347,7 +362,9 @@ async function submitProcessingTask(item, file) {
     item.processingTask = {
       ...item.processingTask,
       status: "提交失败",
-      message: "无法连接本机逐页处理服务，请确认服务已启动后重新导入。",
+      message: error && error.message
+        ? error.message
+        : "无法连接逐页处理服务，请确认服务端识别能力已部署后重新导入。",
     };
     item.status = "逐页处理提交失败";
     item.updatedAt = new Date().toISOString();
@@ -365,7 +382,7 @@ async function refreshProcessingTask() {
 
   const taskId = item.processingTask?.remoteTaskId;
   if (!taskId) {
-    alert("当前文献还没有处理任务编号。请确认导入时本机逐页处理服务已启动。");
+    alert("当前文献还没有处理任务编号。请确认导入时逐页处理服务与服务端识别能力均可用。");
     return;
   }
 
@@ -377,7 +394,7 @@ async function refreshProcessingDocument(item, options = {}) {
   const taskId = item.processingTask?.remoteTaskId;
   if (!taskId) {
     if (!options.silent) {
-      alert("当前文献还没有处理任务编号。请确认导入时本机逐页处理服务已启动。");
+      alert("当前文献还没有处理任务编号。请确认导入时逐页处理服务与服务端识别能力均可用。");
     }
     return;
   }
@@ -450,7 +467,7 @@ async function refreshProcessingDocument(item, options = {}) {
   } catch (error) {
     if (streamStatus) streamStatus.textContent = "刷新失败";
     if (!options.silent) {
-      alert("暂时无法刷新处理结果。请确认本机逐页处理服务仍在运行。");
+      alert("暂时无法刷新处理结果。请确认逐页处理服务与服务端识别能力均可用。");
     }
   }
 }

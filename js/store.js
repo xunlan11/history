@@ -80,7 +80,7 @@ function normalizeDocuments(items) {
             imageHash: page.imageHash || "",
             imageMimeType: page.imageMimeType || "",
             imageSize: Number(page.imageSize) || 0,
-            ocr: page.ocr || null,
+            ocr: normalizeStoredOcr(page.ocr),
             updatedAt: page.updatedAt || "",
           }))
           .sort((a, b) => a.pageNumber - b.pageNumber),
@@ -876,9 +876,52 @@ function mergeProcessingPages(item, incomingPages) {
   return added;
 }
 
+// 早期版本在 page.ocr 里存过 layout（自研版面分析）与 preprocessing（自研图像预处理），
+// 这里读取时顺带瘦身，只保留摘要字段，避免历史数据继续占用 localStorage。
+function normalizeStoredOcr(ocr) {
+  if (!ocr) {
+    return null;
+  }
+
+  return {
+    confidence: ocr.confidence ?? null,
+    engine: ocr.engine || "识别服务",
+    width: ocr.width ?? null,
+    height: ocr.height ?? null,
+    blockCount: Number(ocr.blockCount) || 0,
+    blockTypes: Array.isArray(ocr.blockTypes) ? ocr.blockTypes : [],
+    hasMarkdown: Boolean(ocr.hasMarkdown),
+    upstream: ocr.upstream || null,
+    warnings: Array.isArray(ocr.warnings) ? ocr.warnings : [],
+    recognizedAt: ocr.recognizedAt || "",
+  };
+}
+
+// 页面对象会整体同步到数据服务并写入 localStorage，因此 OCR 只保存轻量摘要：
+// 版面块与行的坐标体量很大（一本书可达上万行），详情留在 OCR 服务的任务记录里。
+function buildOcrSummary(result) {
+  const source = result || {};
+  const blocks = Array.isArray(source.blocks) ? source.blocks : [];
+  const blockTypes = Array.from(
+    new Set(blocks.map((block) => block && block.type).filter(Boolean)),
+  );
+
+  return {
+    confidence: source.confidence ?? null,
+    engine: source.engine || "识别服务",
+    width: source.width ?? null,
+    height: source.height ?? null,
+    blockCount: blocks.length,
+    blockTypes,
+    hasMarkdown: Boolean(source.markdown),
+    upstream: source.upstream || null,
+    warnings: Array.isArray(source.warnings) ? source.warnings : [],
+    recognizedAt: source.recognizedAt || new Date().toISOString(),
+  };
+}
+
 function normalizeProcessingPage(page, index) {
   const text = page.text || "";
-  const warnings = Array.isArray(page.warnings) ? page.warnings : [];
 
   return {
     id: page.id || newId(),
@@ -891,14 +934,7 @@ function normalizeProcessingPage(page, index) {
     imageDataUrl: page.imageDataUrl || "",
     imageUrl: page.imageUrl || "",
     imageName: page.imageName || `第 ${Number(page.pageNumber) || index + 1} 页`,
-    ocr: {
-      confidence: page.confidence ?? null,
-      engine: page.engine || "本机逐页处理服务",
-      preprocessing: page.preprocessing || null,
-      layout: page.layout || null,
-      warnings,
-      recognizedAt: page.recognizedAt || new Date().toISOString(),
-    },
+    ocr: buildOcrSummary(page),
     updatedAt: page.updatedAt || new Date().toISOString(),
   };
 }

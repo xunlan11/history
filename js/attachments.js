@@ -223,7 +223,10 @@ async function readConversationFileResponse(response) {
     result = {};
   }
   if (!response.ok) {
-    throw new Error(result.detail || `文件处理失败：${response.status}`);
+    // OCR 服务的失败 detail 是 {code, message} 对象，其它服务是字符串
+    const detail = result.detail;
+    const message = detail && typeof detail === "object" ? detail.message : detail;
+    throw new Error(message || `文件处理失败：${response.status}`);
   }
   return result;
 }

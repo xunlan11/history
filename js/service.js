@@ -28,8 +28,16 @@ async function refreshOcrServiceStatus() {
   }
 
   try {
-    await fetchServiceJson(OCR_HEALTH_URL, "OCR health check failed");
-    setServiceStatus(ocrServiceStatus, "已连接", "service-ok");
+    const result = await fetchServiceJson(OCR_HEALTH_URL, "OCR health check failed");
+    const upstream = result.upstream || {};
+    if (result.ready) {
+      setServiceStatus(ocrServiceStatus, "已连接", "service-ok");
+    } else if (!upstream.configured) {
+      // 数据端不再加载识别模型，识别能力在数据处理服务器上
+      setServiceStatus(ocrServiceStatus, "识别未部署", "service-warn");
+    } else {
+      setServiceStatus(ocrServiceStatus, "服务端不可达", "service-warn");
+    }
   } catch (error) {
     setServiceStatus(ocrServiceStatus, "未连接", "service-warn");
   }

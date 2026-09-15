@@ -9,8 +9,6 @@ dependencies = [
     "uvicorn",
     "python-multipart",
     "pydantic",
-    "paddleocr==3.7.0",
-    "paddlepaddle==3.3.1",
     "Pillow",
     "PyMuPDF",
 ]
