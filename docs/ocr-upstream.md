@@ -20,7 +20,9 @@ Nginx 前缀由 `root/nginx/conf.d/{history,literature}.conf` 剥离，前端固
 
 ## 2. 数据端配置
 
-systemd unit 中追加（示例：服务端在 `10.0.0.5:8080`）：
+systemd unit 中追加（示例：服务端在 `10.0.0.5:8080`；**现网实际值**见
+[service-deploy.md](./service-deploy.md) 第 9 章 —— 服务端在内网，数据端经 SSH 反向隧道
+接入 `http://127.0.0.1:18080`）：
 
 ```ini
 Environment=OCR_UPSTREAM_URL=http://10.0.0.5:8080

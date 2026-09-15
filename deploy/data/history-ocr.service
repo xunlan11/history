@@ -1,0 +1,22 @@
+[Unit]
+Description=History OCR API (PaddleOCR)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OCR_PUBLIC_BASE_URL=/history/api/ocr
+# 识别在服务端（PaddleX serving），数据端只做存储/拆页/编排。
+# 18080 = 服务端 8080 经 SSH 反向隧道反绑到本机回环的端口（docs/service-deploy.md 第 9.5 节）。
+# 未设置即视为「识别能力未部署」，识别接口一律 503。
+Environment=OCR_UPSTREAM_URL=http://127.0.0.1:18080
+Environment=OCR_UPSTREAM_STYLE=paddlex
+Environment=OCR_UPSTREAM_TIMEOUT=300
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.ocr:app --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

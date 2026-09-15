@@ -294,8 +294,8 @@ curl -s http://127.0.0.1:11434/api/chat -H 'Content-Type: application/json' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['message']['content'],
       round(d['eval_count']/(d['eval_duration']/1e9), 2), 'tok/s')"
 
-# 7.6 从数据端机器上做最终联通性验证（换成服务端真实 IP）
-#     cd ~/Codefield/history && OCR_UPSTREAM_URL=http://10.134.194.183:8080 uv run python scripts/check_ocr_upstream.py
+# 7.6 从数据端机器上做最终联通性验证（走反向隧道，见第 9.5 节）
+#     cd ~/Codefield/history && OCR_UPSTREAM_URL=http://127.0.0.1:18080 uv run python scripts/check_ocr_upstream.py
 ```
 
 ## 8. 已知坑
@@ -336,31 +336,37 @@ curl -s http://127.0.0.1:11434/api/chat -H 'Content-Type: application/json' \
 
 ### 9.1 只是对接：改环境变量
 
-在数据端（跑 `service/` 的机器）的 systemd unit 或启动环境里设置：
+在数据端（跑 `service/` 的机器）的 systemd unit 或启动环境里设置。数据端 unit
+已版本化在 `deploy/data/*.service`：
 
 ```ini
-Environment=OCR_UPSTREAM_URL=http://10.134.194.183:8080
+Environment=OCR_UPSTREAM_URL=http://127.0.0.1:18080
 Environment=OCR_UPSTREAM_STYLE=paddlex
 Environment=OCR_UPSTREAM_TIMEOUT=300
-Environment=LLM_API_BASE=http://10.134.194.183:11434/v1
+Environment=LLM_API_BASE=http://127.0.0.1:11435/v1
 Environment=LLM_MODEL=qwen3:8b
 Environment=LLM_TIMEOUT_SECONDS=600
 Environment=LLM_PROVIDER=ollama
 ```
 
+> 这里的 `18080` / `11435` 是**服务端 8080 / 11434 经 SSH 反向隧道反绑到数据端回环**
+> 的端口（现网数据端在腾讯云、服务端在内网，无法直连，见第 9.4、9.5 节）。
+> 两台机器同内网时可直接写 `http://10.134.194.183:8080`、`http://10.134.194.183:11434/v1`。
+
 | 变量 | 为什么这么设 |
 | --- | --- |
-| `OCR_UPSTREAM_URL` | 服务端地址。**不设就是「识别能力未部署」，识别接口一律 503** |
+| `OCR_UPSTREAM_URL` | 服务端地址（现网=隧道本地端口 18080）。**不设就是「识别能力未部署」，识别接口一律 503** |
 | `OCR_UPSTREAM_STYLE=paddlex` | 服务端就是 PaddleX 官方 serving，写死省一次 404 探测 |
 | `OCR_UPSTREAM_TIMEOUT=300` | CPU 单页 7.5 s 起，扫描件大页/多列竖排会更慢，默认 180 太紧 |
-| `LLM_API_BASE` | Ollama 的 OpenAI 兼容面（`/health` 会查它的 `/models`，已实测返回 `qwen3:8b`） |
+| `LLM_API_BASE` | Ollama 的 OpenAI 兼容面（现网=隧道本地端口 11435；`/health` 会查它的 `/models`） |
 | `LLM_TIMEOUT_SECONDS=600` | 默认 180 s：8B 模型在 CPU 上约 4.9 tok/s，一页动辄 60～110 s，长页必超时 |
 
 验证（在数据端机器上执行）：
 
 ```bash
 cd ~/Codefield/history
-OCR_UPSTREAM_URL=http://10.134.194.183:8080 uv run python scripts/check_ocr_upstream.py
+OCR_UPSTREAM_URL=http://127.0.0.1:18080 uv run python scripts/check_ocr_upstream.py
+curl -s http://127.0.0.1:11435/v1/models                        # 隧道通了才有响应，应含 qwen3:8b
 curl -s http://127.0.0.1:8865/health | python3 -m json.tool     # 大模型聚合接口应 ready=true
 curl -s http://127.0.0.1:8765/health | python3 -m json.tool     # OCR 接口 upstream.reachable 应为 true
 ```
@@ -395,18 +401,85 @@ payload = {
 | 关表格 | 数据端不再传 `useTableRecognition=true`，配置里也置 `False` | 省掉表格分类/结构/单元格 4 个模型，单页快约 5 s |
 | 上 GPU | 服务端换带可用 CUDA 的机器：`--device gpu:0`，Ollama 自动用 GPU | OCR 快 10 倍以上，大模型 20～50 tok/s |
 
-### 9.4 网络与运维注意
+### 9.4 网络形态：数据端在公网，服务端在内网（现网）
 
-- 服务端 IP `10.134.194.183` 是 **DHCP 动态地址**，建议改成静态或做 DHCP 保留，
-  否则重启后数据端的 `OCR_UPSTREAM_URL` / `LLM_API_BASE` 会失效。
-- 数据端机器需能访问服务端的 **8080** 与 **11434** 两个端口。本机 ufw 服务虽然在跑，
-  但 `/etc/ufw/ufw.conf` 里是 `ENABLED=no`，等于没启用，无需放行。**若以后启用了 ufw**，
-  需要 `sudo ufw allow 8080/tcp && sudo ufw allow 11434/tcp`。
-- 两个服务都绑在 `0.0.0.0`（`ss -ltn | grep -E ':(8080|11434)'` 可确认），
-  跨机调用不需要额外配置。
-- 服务端两个服务都是 `systemctl --user`，`Restart=always`，且已 `enable-linger`，
-  重启机器后无需登录即自动拉起。
+现网数据端是腾讯云 VM（`192.144.141.60`，域名 `wenqu.art`），服务端在家庭/办公内网
+（`10.134.194.183`，DHCP）。两者**没有直连路由**（实测数据端 ping / 8080 / 11434 全部不通，
+数据端也没有任何 VPN 进程），因此由服务端**主动**向数据端建立 SSH 反向隧道：
+
+- 数据端不需要开放任何新入站端口（隧道反绑在 `127.0.0.1`，`GatewayPorts no` 保证公网访问不到）；
+- 服务端不需要公网地址，只需能出站 22；
+- 服务端换 IP、服务端重启都不影响数据端配置；只有数据端地址变化时才要改隧道 unit。
+
+端口为什么是 `18080` / `11435` 而不是 `8080` / `11434`：数据端 `11434` 被本地 ollama 占用
+（保留作回退），错开可避免冲突。
+
+| 项目 | 值 |
+| --- | --- |
+| 隧道 unit（服务端） | `deploy/service/history-tunnel.service` |
+| 数据端 unit（版本化） | `deploy/data/history-{data,ocr,llm}.service`、`deploy/data/literature-{data,ocr}.service` |
+| 隧道目标 | `ubuntu@192.144.141.60:22`（数据端公网） |
+| 反绑端口 | `127.0.0.1:18080` → 服务端 `8080`；`127.0.0.1:11435` → 服务端 `11434` |
+
+同内网自建时可省掉隧道，直接写 `http://10.134.194.183:8080` / `http://10.134.194.183:11434/v1`。
+
+运维注意：
+
+- 隧道只走 22 出站；数据端 sshd 现状（`sshd -T` 实测）已满足：
+  `PasswordAuthentication no`、`PubkeyAuthentication yes`、`AllowTcpForwarding yes`、
+  `GatewayPorts no`、`PermitListen any` —— **无需改 sshd 配置**。
+- 数据端 `ufw` 未启用（`/etc/ufw/ufw.conf` 里 `ENABLED=no`），隧道不涉及放行；
+  **若以后启用 ufw**，也只需保留 22/80/443，不需要 8080/11434。
+- 服务端两个服务都绑 `0.0.0.0`（`ss -ltn | grep -E ':(8080|11434)'` 可确认），
+  隧道从本机回环接入，天然可用。
+- 服务端侧 `history-ocr` / `history-llm` / `history-tunnel` 都是 `systemctl --user`
+  + `Restart=always`，且已 `enable-linger`，重启后免登录自动拉起。
+- 隧道断了的表现：服务端 `systemctl --user status history-tunnel` 非 active，
+  数据端 `/health` 的 `upstream.reachable=false`、大模型 `ready=false`。
 - 服务端升级/迁移后，务必在数据端重跑 `scripts/check_ocr_upstream.py` 与 `/health`。
+
+### 9.5 建立反向隧道（一次配置，服务端执行）
+
+**第 1 步：服务端生成专用隧道密钥**（不要复用个人密钥；数据端保持 `PasswordAuthentication no`）
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_wenqu -N "" -C nuc-tunnel
+cat ~/.ssh/id_ed25519_wenqu.pub
+```
+
+**第 2 步：把公钥加到数据端**（在数据端执行，`<公钥>` 换成上一步输出；
+`restrict` 关闭一切能力后再只打开 forwarding，`permitlisten` 限定只能反绑这两个回环端口）
+
+```bash
+printf 'restrict,port-forwarding,permitlisten="127.0.0.1:18080",permitlisten="127.0.0.1:11435" %s\n' \
+  '<公钥>' >> ~/.ssh/authorized_keys
+```
+
+**第 3 步：服务端装 unit 并启动**
+
+```bash
+cp ~/history/deploy/service/history-tunnel.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now history-tunnel.service
+systemctl --user status history-tunnel.service --no-pager | head -20
+```
+
+**第 4 步：在数据端验证**
+
+```bash
+ss -ltn | grep -E ':(18080|11435)'                       # 两个端口应在 127.0.0.1 上监听
+curl -s -o /dev/null -w "ocr health=%{http_code}\n" http://127.0.0.1:18080/health    # 200
+curl -s http://127.0.0.1:11435/v1/models | head -c 200   # 含 qwen3:8b
+```
+
+**排错**
+
+| 现象 | 处理 |
+| --- | --- |
+| 数据端看不到 18080/11435 | 看服务端 `journalctl --user -u history-tunnel -n 50`；`remote port forwarding failed for listen port` 一般是 `permitlisten` 写错、或上一次的隧道没退干净（`pkill -f 18080` 后重启 unit） |
+| 端口在、请求 502/连接被拒 | 服务端对应服务没起来：`systemctl --user status history-ocr history-llm`（OCR 首次加载 12 个模型约 40 s，`Restart=always` 会自愈） |
+| 用一会儿就断 | `ServerAliveInterval=30` 已在 unit 里；网络抖动导致的断开由 `Restart=always` + `RestartSec=10` 重建，无需人工干预 |
+| 换数据端地址/域名 | 改 `history-tunnel.service` 里 `ubuntu@<数据端>`，`cp` 回 `~/.config/systemd/user/` 后 `daemon-reload` + `restart` |
 
 ## 10. 接口边界：哪些改动要动服务端
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Literature Data API (SQLite, /literature isolated)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DATA_DB_PATH=/home/ubuntu/Codefield/literature-data/app.db
+Environment=DATA_STORAGE_DIR=/home/ubuntu/Codefield/literature-data
+Environment=DATA_FILE_STORAGE_DIR=/home/ubuntu/Codefield/literature-data/files
+Environment=DATA_PUBLIC_BASE_URL=/literature/api/data
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 18665
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

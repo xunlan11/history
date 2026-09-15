@@ -1,0 +1,21 @@
+[Unit]
+Description=Literature OCR API (PaddleOCR, /literature isolated)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OCR_PUBLIC_BASE_URL=/literature/api/ocr
+Environment=OCR_STORAGE_DIR=/home/ubuntu/Codefield/literature-data/ocr-storage
+# 与 history-ocr 共用同一份服务端能力，仅站点存储隔离。
+Environment=OCR_UPSTREAM_URL=http://127.0.0.1:18080
+Environment=OCR_UPSTREAM_STYLE=paddlex
+Environment=OCR_UPSTREAM_TIMEOUT=300
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.ocr:app --host 127.0.0.1 --port 18765
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -20,6 +20,9 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11434/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
+# 思考型模型（Qwen3）默认关闭思考：同一句话 595 token → 7 token，CPU 上 150s → 1.4s。
+# 详见 docs/service-deploy.md 第 9.2 节；设为 1 可恢复思考模式。
+LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 app = FastAPI(title="近代军史数智平台大模型统一接口")
@@ -676,6 +679,8 @@ def call_ollama_chat_completion(
         "model": LLM_MODEL,
         "messages": normalize_ollama_messages(messages),
         "stream": False,
+        # 关掉思考链：只对思考型模型有效，非思考模型传 false 同样安全。
+        "think": LLM_OLLAMA_THINK,
         "options": {
             "temperature": temperature,
         },

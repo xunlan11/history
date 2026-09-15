@@ -1,0 +1,15 @@
+[Unit]
+Description=History Data API (SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=History LLM API (Ollama)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LLM_PROVIDER=ollama
+Environment=LLM_MODEL=qwen3:8b
+# 大模型在服务端（Ollama 的 OpenAI 兼容面）；11435 = 服务端 11434 经反向隧道反绑到本机回环。
+# 本机 11434 仍留着本地 ollama 作回退，把这里改回 http://127.0.0.1:11434/v1 即可切回本地。
+Environment=LLM_API_BASE=http://127.0.0.1:11435/v1
+# 默认 180s：8B 模型在 CPU 上约 4.9 tok/s，一页动辄 60～110 s，长页必超时。
+Environment=LLM_TIMEOUT_SECONDS=600
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
