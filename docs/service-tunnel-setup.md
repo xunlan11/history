@@ -101,7 +101,8 @@ WantedBy=default.target
 EOF
 ```
 
-> 若本机已有仓库最新代码（`cd ~/history && git pull`），可直接
+> **直接用上面的内联版本即可**（本机 GitHub 不可达，不要在这台机器上 `git pull`）。
+> 若本机已经存在同一份文件 `~/history/deploy/service/history-tunnel.service`，也可以
 > `cp ~/history/deploy/service/history-tunnel.service ~/.config/systemd/user/`，内容完全一致。
 >
 > 关键参数：`ExitOnForwardFailure=yes`（端口绑不上就退出，便于排错）；
