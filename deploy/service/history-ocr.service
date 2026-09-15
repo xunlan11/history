@@ -1,0 +1,27 @@
+[Unit]
+Description=近代军史数智平台 OCR 服务端（PaddleX PP-StructureV3, CPU）
+Documentation=https://github.com/PaddlePaddle/PaddleX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/history-service
+Environment=PYTHONUNBUFFERED=1
+# 从百度 BOS 拉取官方模型（国内可达；默认值 huggingface 在本机网络下不可用）
+Environment=PADDLE_PDX_MODEL_SOURCE=bos
+Environment=OMP_NUM_THREADS=8
+ExecStart=%h/history-service/venv-ocr/bin/paddlex \
+    --serve \
+    --pipeline %h/history-service/PP-StructureV3-cpu.yaml \
+    --device cpu \
+    --host 0.0.0.0 \
+    --port 8080
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+StandardOutput=append:%h/history-service/logs/ocr.log
+StandardError=append:%h/history-service/logs/ocr.log
+
+[Install]
+WantedBy=default.target

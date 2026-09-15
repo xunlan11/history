@@ -1,0 +1,23 @@
+[Unit]
+Description=近代军史数智平台 大模型服务端（Ollama, CPU）
+Documentation=https://ollama.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 数据端通过 http://<本机>:11434/v1 调用（OpenAI 兼容）
+Environment=OLLAMA_HOST=0.0.0.0:11434
+Environment=OLLAMA_MODELS=%h/history-service/models
+# 常驻显存/内存，避免每次请求重新加载 8B 模型（CPU 上加载一次约 30 秒）
+Environment=OLLAMA_KEEP_ALIVE=24h
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_NUM_PARALLEL=1
+ExecStart=%h/.local/bin/ollama serve
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/history-service/logs/llm.log
+StandardError=append:%h/history-service/logs/llm.log
+
+[Install]
+WantedBy=default.target
