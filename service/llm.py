@@ -16,9 +16,11 @@ from service.chronology import normalize_chronicle_entries
 
 
 # 修改默认大模型配置时，请同步更新 readme.md。
+# 数据端不跑任何本地模型：默认地址是服务端 Ollama（OpenAI 兼容面）经反向隧道反绑到本机
+# 回环的 11435 端口；本机没有 11434 这一路（本地 ollama 已于 2026-09-16 清理）。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
-LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11434/v1")
+LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 # 思考型模型（Qwen3）默认关闭思考：同一句话 595 token → 7 token，CPU 上 150s → 1.4s。
 # 详见 docs/service-deploy.md 第 9.2 节；设为 1 可恢复思考模式。
@@ -108,7 +110,7 @@ def provider_configured() -> bool:
 
 def probe_provider() -> tuple[bool, str]:
     if not provider_configured():
-        return False, "尚未配置本地模型或外部 API。"
+        return False, "尚未配置大模型服务（服务端地址 / 模型名）。"
 
     try:
         result = request_json("GET", f"{LLM_API_BASE.rstrip('/')}/models", timeout=3)
@@ -644,7 +646,7 @@ def call_chat_completion(
     json_response: bool = True,
 ) -> str:
     if not provider_configured():
-        raise LlmServiceError("尚未配置本地模型或外部 API。")
+        raise LlmServiceError("尚未配置大模型服务（服务端地址 / 模型名）。")
 
     if LLM_PROVIDER == "ollama":
         return call_ollama_chat_completion(messages, temperature, json_response)

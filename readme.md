@@ -30,6 +30,12 @@ LLM_TIMEOUT_SECONDS=600
 同内网时可省掉隧道直连：`OCR_UPSTREAM_URL=http://10.134.194.183:8080`、
 `LLM_API_BASE=http://10.134.194.183:11434/v1`。
 
+> **数据端不跑任何模型服务**，本仓库只保留调用服务端的接口实现
+> （`service/ocr_upstream.py` 走 HTTP、`service/llm.py` 走 Ollama OpenAI 兼容面）。
+> 本机此前的本地 ollama（服务 / 4.9G 模型 / 二进制）与 `~/.paddlex` 模型缓存已于
+> 2026-09-16 清理，依赖里也不再有 paddleocr / paddlepaddle / paddlex。
+> 隧道未通时：OCR 接口 503、大模型 `/health` 报 `ready=false`，属预期。
+
 ### 对外接口
 
 数据（SQLite）：

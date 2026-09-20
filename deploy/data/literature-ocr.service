@@ -1,5 +1,5 @@
 [Unit]
-Description=Literature OCR API (PaddleOCR, /literature isolated)
+Description=Literature OCR API (服务端 PaddleX 经隧道，/literature 隔离)
 After=network.target
 
 [Service]
