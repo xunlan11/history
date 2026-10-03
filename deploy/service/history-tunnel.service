@@ -1,5 +1,5 @@
 [Unit]
-# 服务端（nuc-05zt）→ 数据端（wenqu.art）的 SSH 反向隧道。
+# 服务端（zhs22）→ 数据端（wenqu.art）的 SSH 反向隧道。
 # 把服务端本机的 8080(PaddleX) / 11434(Ollama) 反绑到数据端的 127.0.0.1:18080 / 127.0.0.1:11435。
 # 安装：详见 docs/service-deploy.md 第 9.5 节
 #   cp ~/history/deploy/service/history-tunnel.service ~/.config/systemd/user/
@@ -12,7 +12,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i %h/.ssh/id_ed25519_wenqu -R 127.0.0.1:18080:127.0.0.1:8080 -R 127.0.0.1:11435:127.0.0.1:11434 ubuntu@192.144.141.60
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=15 -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i %h/.ssh/cloud-tunnel -R 127.0.0.1:18080:127.0.0.1:8080 -R 127.0.0.1:11435:127.0.0.1:11434 tunneluser@192.144.141.60
 Restart=always
 RestartSec=10
 

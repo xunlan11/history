@@ -70,7 +70,8 @@ uv run python scripts/storage_admin.py restore storage/backups/history-backup-YY
 
 ## 服务端
 
-跑 PaddleX PP-StructureV3（`8080`）与 Ollama + Qwen3-8B（`11434`）的机器，纯 CPU 即可，
+跑 PaddleX PP-StructureV3（`8080`）与 Ollama + Qwen3-8B（`11434`）的机器：OCR 纯 CPU 即可，
+大模型有显卡就上 GPU（6 GB 显存实测 28～31 tok/s，纯 CPU 约 4.9 tok/s），
 **不落任何数据、不需要本仓库代码**，只需对数据端提供 HTTP 接口。
 
 **完整部署手册见 [docs/service-deploy.md](./docs/service-deploy.md)**：从零部署并逐条验证过的命令

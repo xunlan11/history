@@ -5,6 +5,7 @@
 不给图片时自动生成一张带文字的测试图。
 """
 
+import argparse
 import base64
 import json
 import sys
@@ -30,9 +31,16 @@ def build_image(path: str) -> None:
 
 
 def main() -> int:
-    image_path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/selftest-page.png"
-    base_url = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8080"
-    if len(sys.argv) <= 1:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("image", nargs="?")
+    parser.add_argument("base_url", nargs="?", default="http://127.0.0.1:8080")
+    parser.add_argument("--full", action="store_true", help="启用公式、印章和图表解析")
+    parser.add_argument("--preprocess", action="store_true", help="启用方向分类与去扭曲")
+    parser.add_argument("--expect", action="append", default=[], help="要求出现的版面标签，可重复")
+    args = parser.parse_args()
+    image_path = args.image or "/tmp/selftest-page.png"
+    base_url = args.base_url.rstrip("/")
+    if args.image is None:
         build_image(image_path)
 
     payload = {
@@ -42,12 +50,12 @@ def main() -> int:
         "pageNumber": 1,
         "useLayoutDetection": True,
         "useTableRecognition": True,
-        "useDocOrientationClassify": False,
-        "useDocUnwarping": False,
+        "useDocOrientationClassify": args.preprocess,
+        "useDocUnwarping": args.preprocess,
         "useTextlineOrientation": True,
-        "useFormulaRecognition": False,
-        "useSealRecognition": False,
-        "useChartRecognition": False,
+        "useFormulaRecognition": args.full,
+        "useSealRecognition": args.full,
+        "useChartRecognition": args.full,
         "visualize": False,
     }
     request = urllib.request.Request(
@@ -76,6 +84,12 @@ def main() -> int:
         )
     print("识别文本行：", overall.get("rec_texts"))
     print("markdown 长度：", len(((result.get("markdown") or {}).get("text") or "")))
+    print("实际模块设置：", pruned.get("model_settings"))
+    labels = {block.get("block_label") for block in blocks}
+    missing = set(args.expect) - labels
+    if missing:
+        print("缺少要求的版面标签：", sorted(missing))
+        return 3
     return 0 if blocks else 2
 
 

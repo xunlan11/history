@@ -1,4 +1,4 @@
-# 服务端部署手册（OCR + 大模型，纯 CPU）
+# 服务端部署手册（OCR + 大模型）
 
 > 术语沿用 [ocr-upstream.md](./ocr-upstream.md)：**服务端** = 本手册部署的机器，跑
 > PaddleX 与 Ollama，只提供 HTTP 接口、不存数据；**数据端** = 跑本仓库 `service/`
@@ -6,6 +6,10 @@
 >
 > 本文是 2026-09-15 在 `nuc-05zt`（Ubuntu 20.04, i7-1165G7）上**从零部署并逐条验证过**
 > 的命令。全程不需要 `sudo`，所有文件都在 `$HOME` 下。
+>
+> **两套都已验证的形态**：第 0–10 节是 `nuc-05zt` 的**全 CPU** 版（大模型 4.9 tok/s）；
+> 第 11 节是 `zhs22` 的 **GPU 大模型 + CPU OCR 完整版**（大模型 28～31 tok/s）。
+> 两者的资产快源（ModelScope）、模型清单与 `PP-Chart2Table_safetensors` 命名差异见第 11 节。
 
 ## 0. 部署结果
 
@@ -156,6 +160,10 @@ diff $SP/configs/pipelines/PP-StructureV3.yaml ~/history-service/PP-StructureV3-
 配置副本已入库：`deploy/service/PP-StructureV3-cpu.yaml`。
 
 ## 4. 拉取 PaddleX 官方模型
+
+> 本节的源与清单只适用于第 0–10 节的**全 CPU 精简版**。若采用第 11 节的形态
+> （ModelScope 快源、完整版 15 个模型、图表模型要用 `PP-Chart2Table_safetensors`），
+> 直接用第 11.2 节的 `fetch-assets.py`，**不要照抄下面的 curl 清单**。
 
 默认模型源是 HuggingFace（本机不可达），必须改成百度 BOS：
 
@@ -331,6 +339,11 @@ curl -s http://127.0.0.1:11434/api/chat -H 'Content-Type: application/json' \
 7. **PaddleX 服务化是串行的**：`PADDLE_PDX_SERVING_SERIAL_PIPELINE_CALLS` 默认
    `True`，所有请求排同一个 worker 线程——并发调用只会排队（不会报错），单页耗时
    会随之拉长。CPU 机器上别指望靠并发提速，数据端保持逐页串行调用即可。
+8. **`PP-Chart2Table` 在 paddlex 3.7.2 上要的是 `PP-Chart2Table_safetensors`**：
+   模型名解析在 `inference/utils/official_models.py::_format_download_model_name()`，
+   默认 safetensors 格式会把名字拼成 `<name>_safetensors`。只预取旧的 `PP-Chart2Table`
+   （pdparams，1.4 GB）**不会被使用**：服务启动到图表子管线时会改去百度 BOS 以
+   0.19 MB/s 重下 2.1 GB（实测卡在这一步 300 s 仍未就绪）。正确清单见第 11.2 节。
 
 ## 9. 数据端需要做什么
 
@@ -420,7 +433,7 @@ ollama 服务 / 模型 / 二进制、`~/.paddlex` 模型缓存都没了），端
 | --- | --- |
 | 隧道 unit（服务端） | `deploy/service/history-tunnel.service` |
 | 数据端 unit（版本化） | `deploy/data/history-{data,ocr,llm}.service`、`deploy/data/literature-{data,ocr}.service` |
-| 隧道目标 | `ubuntu@192.144.141.60:22`（数据端公网） |
+| 隧道目标 | `tunneluser@192.144.141.60:22`（数据端公网上的**专用只转发账号**，登录 shell 为 nologin） |
 | 反绑端口 | `127.0.0.1:18080` → 服务端 `8080`；`127.0.0.1:11435` → 服务端 `11434` |
 
 同内网自建时可省掉隧道，直接写 `http://10.134.194.183:8080` / `http://10.134.194.183:11434/v1`。
@@ -443,19 +456,26 @@ ollama 服务 / 模型 / 二进制、`~/.paddlex` 模型缓存都没了），端
 ### 9.5 建立反向隧道（一次配置，服务端执行）
 
 **第 1 步：服务端生成专用隧道密钥**（不要复用个人密钥；数据端保持 `PasswordAuthentication no`）
+文件名要和 unit 里的 `-i %h/.ssh/cloud-tunnel` 一致：
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_wenqu -N "" -C nuc-tunnel
-cat ~/.ssh/id_ed25519_wenqu.pub
+ssh-keygen -t ed25519 -f ~/.ssh/cloud-tunnel -N "" -C wenqu-tunnel
+cat ~/.ssh/cloud-tunnel.pub
 ```
 
-**第 2 步：把公钥加到数据端**（在数据端执行，`<公钥>` 换成上一步输出；
+**第 2 步：把公钥加到数据端的 `tunneluser` 账号**（在数据端执行，`<公钥>` 换成上一步输出；
 `restrict` 关闭一切能力后再只打开 forwarding，`permitlisten` 限定只能反绑这两个回环端口）
 
 ```bash
+sudo -u tunneluser mkdir -p ~tunneluser/.ssh && sudo -u tunneluser chmod 700 ~tunneluser/.ssh
 printf 'restrict,port-forwarding,permitlisten="127.0.0.1:18080",permitlisten="127.0.0.1:11435" %s\n' \
-  '<公钥>' >> ~/.ssh/authorized_keys
+  '<公钥>' | sudo tee -a ~tunneluser/.ssh/authorized_keys >/dev/null
+sudo chown tunneluser: ~tunneluser/.ssh/authorized_keys && sudo chmod 600 ~tunneluser/.ssh/authorized_keys
 ```
+
+> `tunneluser` 的 shell 用 nologin 即可（unit 是 `ssh -N`，不需要交互 shell）；
+> 实测连上去会打印 `This account is currently not available.`，**这不影响转发**，
+> 只要不报 `Permission denied` 就说明密钥已生效。
 
 **第 3 步：服务端装 unit 并启动**
 
@@ -481,7 +501,7 @@ curl -s http://127.0.0.1:11435/v1/models | head -c 200   # 含 qwen3:8b
 | 数据端看不到 18080/11435 | 看服务端 `journalctl --user -u history-tunnel -n 50`；`remote port forwarding failed for listen port` 一般是 `permitlisten` 写错、或上一次的隧道没退干净（`pkill -f 18080` 后重启 unit） |
 | 端口在、请求 502/连接被拒 | 服务端对应服务没起来：`systemctl --user status history-ocr history-llm`（OCR 首次加载 12 个模型约 40 s，`Restart=always` 会自愈） |
 | 用一会儿就断 | `ServerAliveInterval=30` 已在 unit 里；网络抖动导致的断开由 `Restart=always` + `RestartSec=10` 重建，无需人工干预 |
-| 换数据端地址/域名 | 改 `history-tunnel.service` 里 `ubuntu@<数据端>`，`cp` 回 `~/.config/systemd/user/` 后 `daemon-reload` + `restart` |
+| 换数据端地址/域名 | 改 `history-tunnel.service` 里 `tunneluser@<数据端>`，`cp` 回 `~/.config/systemd/user/` 后 `daemon-reload` + `restart` |
 
 ## 10. 接口边界：哪些改动要动服务端
 
@@ -516,3 +536,107 @@ curl -s http://127.0.0.1:11435/v1/models | head -c 200   # 含 qwen3:8b
 - 「多传一个为 `true` 的开关」「换模型名」「改超时」→ 先看上面这张表。
 - 拿不准就用两次请求自证：改完在数据端跑 `scripts/check_ocr_upstream.py` 与
   `/llm/health`，两条都通过就说明边界没破。
+
+## 11. GPU 大模型 + CPU OCR 完整版（`zhs22` 实测，2026-10-03）
+
+第 0–10 节是 `nuc-05zt` 的**全 CPU** 版。本机 `zhs22`（Ubuntu 22.04.5、20 核、31 GB、
+RTX 3060 Laptop **6 GB**、驱动 580.178.04 / CUDA 13.0）采用**大模型走 GPU、OCR 仍留 CPU**
+的形态：6 GB 显存放不下 Qwen3-8B 的 5.2 GB 权重 **再加上** PP-StructureV3 完整版
+（方向矫正 + 表格 + 公式 + 印章 + 图表全开）约 4 GB 的权重，两者无法同时驻留。
+
+### 11.1 与第 0–10 节的差异
+
+| 项目 | 第 0–10 节（`nuc-05zt`） | 本节（`zhs22`） |
+| --- | --- | --- |
+| 依赖 / 模型源 | 阿里云 PyPI + 百度 BOS（实测 0.19 MB/s） | **ModelScope CDN**（本机出口上限约 1.2 MB/s，比 BOS 快约 6 倍） |
+| 8B 权重 | `ollama pull qwen3:8b`（registry 实测 0.09 MB/s） | **ModelScope GGUF + Modelfile**（实测约 1.1 MB/s） |
+| Ollama | 0.12.9 tgz | **0.35.1 tar.zst**（自带 `lib/ollama/cuda_v12` 与 `cuda_v13`） |
+| 大模型 | CPU，4.9 tok/s | **GPU**，`ollama ps` 显示 `25%/75% CPU/GPU`，**28～31 tok/s** |
+| OCR | 精简版（关公式 / 印章 / 图表） | **完整版**（全开），仍为 CPU |
+| 监听 | `0.0.0.0:8080` / `0.0.0.0:11434` | `127.0.0.1:8080` / `127.0.0.1:11434` + 第 9.5 节反向隧道 |
+
+### 11.2 资产预取（串行，约 3 小时）
+
+`deploy/service/fetch-assets.py` 一次把 Ollama 二进制、Qwen3-8B GGUF、完整版 **15** 个
+PaddleX 模型落到运行位置（`~/history-service/dl`、`~/history-service/gguf`、
+`~/.paddlex/official_models`）。
+
+```bash
+python3 ~/history/deploy/service/fetch-assets.py            # 串行全量（可反复重跑，断点续传）
+python3 ~/history/deploy/service/fetch-assets.py --verify   # 只做 sha256 校验，不下载
+```
+
+- **默认串行**（`--workers 1`）：本机出口带宽是硬上限（约 1.2 MB/s），并行只会互相抢。
+- 每个传输带 `--speed-limit 51200 --speed-time 45`：低速超过 45 s 自动断开重试，避免干挂。
+- 实测：17/17 任务完成；`--verify` 66 个文件、0 问题。有效资产约 10 GB
+  （Ollama 1.4 + GGUF 4.8 + PaddleX 4.0），另有 1.4 GB 因第 8 节第 8 条的命名坑作废。
+
+### 11.3 Ollama 0.35.1 + Qwen3-8B（GPU）
+
+```bash
+mkdir -p ~/history-service/ollama
+tar --zstd -xf ~/history-service/dl/ollama-linux-amd64.tar.zst -C ~/history-service/ollama
+~/history-service/ollama/bin/ollama --version      # → 0.35.1；unit 的 ExecStart 就指这里
+
+OLLAMA_MODELS=$HOME/history-service/models ~/history-service/ollama/bin/ollama serve &
+OLLAMA_HOST=127.0.0.1:11434 ~/history-service/ollama/bin/ollama create qwen3:8b \
+    -f ~/history/deploy/service/Modelfile.qwen3-8b
+```
+
+> Modelfile 里的 `FROM` 是**相对路径**，`ollama create` 按 **Modelfile 所在目录**解析它
+> （实测：用仓库那份重建得到的 ID 与绝对路径版完全一致，都是 `e886af8fc1f9`）。
+> 所以必须写 `-f ~/history/deploy/service/Modelfile.qwen3-8b`，不要拷到临时目录再执行。
+
+GPU 生效确认（`OLLAMA_DEBUG=1` 启动日志）：
+
+```
+inference compute id=0 library=CUDA compute=8.6 name=CUDA0
+  description="NVIDIA GeForce RTX 3060 Laptop GPU" driver=13.0 total="5.6 GiB" available="5.2 GiB"
+```
+
+| 实测项 | 值 |
+| --- | --- |
+| 常驻显存 | `llama-server` 4250 MiB；整卡 4681 / 6144 MiB |
+| 分层 | `ollama ps` → `25%/75% CPU/GPU`（5.8 GB 放不进 5.2 GiB 可用显存，自动溢出部分到 CPU） |
+| 首答 | 10 token / 0.32 s = **30.99 tok/s**（另含 24.8 s 首次加载） |
+| 常驻后 | 32 token / 1.1 s = **28.24 tok/s** |
+
+### 11.4 OCR 完整版（CPU）
+
+`PP-StructureV3-cpu.yaml` 四个开关全开（`use_doc_preprocessor` / `use_seal_recognition` /
+`use_formula_recognition` / `use_chart_recognition`），服务启动加载 15 个模型、**约 40 s**
+就绪。逐页是否做几何矫正仍由**请求字段**决定（第 3 节），数据端默认行为不变。
+
+```bash
+systemctl --user enable --now history-ocr.service
+curl -s http://127.0.0.1:8080/health        # {"errorCode":0,"errorMsg":"Healthy"}
+```
+
+| 实测项（`test-layout-parsing.py`） | 值 |
+| --- | --- |
+| 合成文本页（默认参数） | 8.7 s，4 个版面块，`block_bbox` 与原图逐像素对应 |
+| 合成文本页（`--full --preprocess`） | 6.2 s，响应里 `model_settings` 六个开关全为 `True` |
+| 合成表格页 | 7.9 s，返回 `table_res_list`，`block_content` 为 HTML 表格 |
+
+> 9.3 节「上 GPU」这张牌在本机打不出来——显存不足，OCR 只能留 CPU。
+
+### 11.5 常驻与自启
+
+```bash
+cp ~/history/deploy/service/history-{ocr,llm,tunnel}.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now history-ocr.service history-llm.service history-tunnel.service
+loginctl enable-linger "$USER"
+```
+
+- 三个 unit 都绑 `127.0.0.1`，数据端经第 9.5 节的反向隧道（`18080`→8080、`11435`→11434）
+  接入；同内网直连时把 `--host` 与 `OLLAMA_HOST` 改成 `0.0.0.0` 即可。
+- 隧道 unit 带 `ExitOnForwardFailure=yes`：远端端口反绑失败会立刻退出，由 `Restart=always`
+  重试 —— 因此「ssh 进程还在」等价于「远端端口已绑上」。
+- 服务端换机 / 升级后，在数据端重跑 `scripts/check_ocr_upstream.py` 与 `/llm/health`。
+
+### 11.6 本节的坑
+
+见第 8 节第 8 条（`PP-Chart2Table_safetensors`）。另：本机 `HTTP(S)_PROXY` 默认指向本机 Clash
+（`127.0.0.1:7897`）—— `fetch-assets.py` 已显式 `--noproxy '*'`，`ollama` 客户端对回环地址
+不走代理，都无需额外处理；但**手工 curl 下载时要留意**，别被代理带偏。

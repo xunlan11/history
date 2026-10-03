@@ -1,4 +1,4 @@
-"""服务端 LLM 冒烟测试：按 OpenAI 兼容接口调用，测量 CPU 生成速度。
+"""服务端 LLM 冒烟测试：按 OpenAI 兼容接口调用，测量生成速度（GPU 机器上走显卡）。
 
 用法：
     ~/history-service/venv-ocr/bin/python ~/history-service/test-llm.py [基地址] [模型名]
@@ -31,6 +31,8 @@ def main() -> int:
         "messages": [{"role": "user", "content": PROMPT}],
         "stream": False,
         "temperature": 0.2,
+        "reasoning_effort": "none",
+        "max_tokens": 256,
     }
     request = urllib.request.Request(
         f"{BASE}/chat/completions",
@@ -48,7 +50,7 @@ def main() -> int:
     print(f"总耗时 {elapsed:.1f}s，输出 {completion_tokens} tokens"
           f"，约 {completion_tokens / elapsed:.2f} tok/s")
     print("返回内容：", content.strip()[:300])
-    return 0
+    return 0 if content.strip() else 1
 
 
 if __name__ == "__main__":
