@@ -498,7 +498,8 @@ curl -s http://127.0.0.1:11435/v1/models | head -c 200   # 含 qwen3:8b
 
 | 现象 | 处理 |
 | --- | --- |
-| 数据端看不到 18080/11435 | 看服务端 `journalctl --user -u history-tunnel -n 50`；`remote port forwarding failed for listen port` 一般是 `permitlisten` 写错、或上一次的隧道没退干净（`pkill -f 18080` 后重启 unit） |
+| 数据端看不到 18080/11435 | 看服务端 `journalctl --user -u history-tunnel -n 50` |
+| `remote port forwarding failed for listen port 18080`（或 11435） | 两种原因：(1) `permitlisten` 写错；(2) 该端口在**数据端**已被上一次的隧道会话占着。第 2 种在服务端崩溃/重启后极常见——服务端侧已随重启清干净，但数据端 sshd 仍持有那条半开连接的监听 socket，默认要等 TCP keepalive（约 2 h）才回收。**只在服务端 `pkill` 没用。** 清法：在数据端用 `sudo ss -ltnp` 找到监听 18080/11435 的 `sshd: tunneluser@` 子进程，`sudo kill <pid>`（或 `sudo pkill -f 'tunneluser@'`，不必重启 sshd）。unit 的 `Restart=always` 会在端口释放后自动接上 |
 | 端口在、请求 502/连接被拒 | 服务端对应服务没起来：`systemctl --user status history-ocr history-llm`（OCR 首次加载 12 个模型约 40 s，`Restart=always` 会自愈） |
 | 用一会儿就断 | `ServerAliveInterval=30` 已在 unit 里；网络抖动导致的断开由 `Restart=always` + `RestartSec=10` 重建，无需人工干预 |
 | 换数据端地址/域名 | 改 `history-tunnel.service` 里 `tunneluser@<数据端>`，`cp` 回 `~/.config/systemd/user/` 后 `daemon-reload` + `restart` |
@@ -600,6 +601,7 @@ inference compute id=0 library=CUDA compute=8.6 name=CUDA0
 | 分层 | `ollama ps` → `25%/75% CPU/GPU`（5.8 GB 放不进 5.2 GiB 可用显存，自动溢出部分到 CPU） |
 | 首答 | 10 token / 0.32 s = **30.99 tok/s**（另含 24.8 s 首次加载） |
 | 常驻后 | 32 token / 1.1 s = **28.24 tok/s** |
+| 冷启动（重启后首次调用） | `time` 实测约 **130 s**：主要耗在首次加载模型，加载完成后同一请求仅 2.0 s；随后复测 32 token / 1.15 s = **27.75 tok/s** |
 
 ### 11.4 OCR 完整版（CPU）
 
