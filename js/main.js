@@ -142,12 +142,18 @@ form?.addEventListener("submit", async (event) => {
   form.reset();
   closeDocumentForm();
   renderAll();
-  setView("reader");
+
+  // 先完成原件归档、封面识别与逐页任务提交，并把本地快照推送到服务端，再进入阅读页。
+  // 阅读页加载时会拉取服务端快照；若此时新文献尚未同步，本地缓存会被空快照覆盖，
+  // 表现为“未选择文献”。因此跳转前必须等待推送完成。
   await Promise.allSettled([
     archiveDocumentSource(item, file),
     detectDocumentCover(item, file),
     submitProcessingTask(item, file),
   ]);
+  await flushPendingSync();
+
+  setView("reader");
 });
 
 readerPrevPageButton?.addEventListener("click", () => {

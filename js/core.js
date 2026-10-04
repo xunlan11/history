@@ -279,6 +279,7 @@ const DOCUMENT_COVER_VARIANT_COUNT = 6;
 const CONVERSATION_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.conversations.schema4`;
 const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
 const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
+const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema4`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
 const DELETED_CONVERSATION_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedConversations.schema4`;
 const SYNC_INTERVAL_MS = 30000;
@@ -290,7 +291,9 @@ let conversations = loadCachedConversations();
 let selectedConversationId = conversations[0]?.id || null;
 let syncCursor = localStorage.getItem(SYNC_CURSOR_STORAGE_KEY) || "";
 let syncReady = false;
-let syncDirty = false;
+// 脏标记跨页面保留：若本地改动尚未成功推送就发生跳转（如登记后进入阅读页），
+// 下一页加载时会先把本地快照推送上去，而不是直接拉取服务端快照覆盖本地。
+let syncDirty = localStorage.getItem(SYNC_DIRTY_STORAGE_KEY) === "1";
 let syncPushTimer = null;
 let syncPushInFlight = null;
 let syncPullInFlight = null;
@@ -559,6 +562,7 @@ async function initializeServerData() {
 
 function scheduleServerPush() {
   syncDirty = true;
+  localStorage.setItem(SYNC_DIRTY_STORAGE_KEY, "1");
   syncRevision += 1;
   persistDeletedIdCache();
 
@@ -608,6 +612,7 @@ async function pushServerSnapshot() {
 
       if (syncRevision === pushedRevision) {
         syncDirty = false;
+        localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
         deletedDocumentIds.clear();
         deletedConversationIds.clear();
         if (Array.isArray(result.documents) || Array.isArray(result.conversations)) {
@@ -627,6 +632,19 @@ async function pushServerSnapshot() {
     });
 
   return syncPushInFlight;
+}
+
+// 立即把本地改动推送到服务端并等待完成（取消防抖）。
+// 用于跳转前确保数据已落服务端，避免下一页拉取快照时覆盖本地未同步内容。
+async function flushPendingSync() {
+  window.clearTimeout(syncPushTimer);
+  syncPushTimer = null;
+
+  if (!syncReady || !syncDirty) {
+    return false;
+  }
+
+  return pushServerSnapshot();
 }
 
 async function archiveDocumentSource(item, file) {
