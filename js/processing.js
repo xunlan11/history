@@ -26,6 +26,36 @@ function stopProcessingPolling(documentId) {
   }
 }
 
+// 文献被删除时调用：停轮询、把还没跑的整页整理任务丢掉，
+// 别让已经不存在的文献继续占着大模型（单路执行，会拖住后登记的文献）。
+function stopDocumentProcessing(documentId) {
+  if (!documentId) {
+    return;
+  }
+
+  stopProcessingPolling(documentId);
+
+  const state = processingLlmStates.get(documentId);
+  if (state) {
+    if (state.queue.length) {
+      state.queue = state.queue.filter((entry) => entry.item?.id !== documentId);
+    }
+    if (!state.inFlight) {
+      processingLlmStates.delete(documentId);
+    }
+  }
+
+  metadataAutoTriggered.delete(documentId);
+  processingRecoveryInFlight.delete(documentId);
+  coverRecognitionInFlight.delete(documentId);
+
+  if (streamLlmRingItem?.id === documentId) {
+    stopLlmRingTimer();
+    streamLlmRingPercent = 0;
+    streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
+  }
+}
+
 // 逐页任务没提交成功时的恢复入口：
 //   1. 浏览器里还暂存着原件（上传被打断）→ 直接续传整条上传流水线；
 //   2. 原件已归档、只是逐页任务没提交上→ 从服务端取回原件重新提交；
@@ -251,6 +281,10 @@ function drainProcessingLlmQueue(documentId) {
 
   while (state.inFlight < PROCESSING_LLM_MAX_CONCURRENT && state.queue.length) {
     const next = state.queue.shift();
+    // 文献已经被删除（可能来自其它标签页）：丢掉该项，不要占用大模型。
+    if (!documents.some((entry) => entry.id === next.item?.id)) {
+      continue;
+    }
     state.inFlight += 1;
     state.attempted += 1;
     startLlmPageProgress(next.item, next.page.pageNumber);

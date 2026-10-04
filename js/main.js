@@ -560,6 +560,7 @@ async function initializeApplication() {
     window.history.replaceState(null, "", url.href);
   }
   resumePendingProcessingTasks();
+  flushPendingProcessingCancels();
   startPeriodicSync();
 }
 

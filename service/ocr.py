@@ -19,7 +19,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import threading
+import time
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -57,6 +59,118 @@ app.add_middleware(
 
 TASKS: dict[str, dict[str, Any]] = {}
 PROCESSING_SLOT = threading.Semaphore(1)
+
+# 取消标记：**存在任务目录之外**（cancelled/<task_id>），因为取消时要立刻删掉任务目录
+# （原件 + 逐页图，动辄几十 MB），标记如果跟着被删，正在跑的循环就发现不了、会继续跑完。
+CANCEL_DIR = STORAGE_DIR / "cancelled"
+# temp/ 下临时文件（封面候选图、单页识别残留）的保留时长
+TEMP_MAX_AGE_SECONDS = 24 * 3600
+# 没有 task.json 的空壳任务目录的保留时长
+ORPHAN_TASK_MAX_AGE_SECONDS = 3600
+# 取消标记的保留时长（够长到任务不可能再写文件即可）
+CANCEL_MARKER_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+
+class TaskCancelled(Exception):
+    """任务被取消（文献已删除 / 手动停止）。"""
+
+
+def cancel_marker_path(task_id: str) -> Path:
+    return CANCEL_DIR / task_id
+
+
+def is_task_cancelled(task_id: str) -> bool:
+    return cancel_marker_path(task_id).exists()
+
+
+def raise_if_cancelled(task_id: str) -> None:
+    """逐页循环毎页前调用：命中取消标记就中断整本任务。"""
+    if is_task_cancelled(task_id):
+        raise TaskCancelled(f"任务 {task_id} 已取消")
+
+
+def mark_task_cancelled(task_id: str) -> bool:
+    try:
+        CANCEL_DIR.mkdir(parents=True, exist_ok=True)
+        cancel_marker_path(task_id).write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def cleanup_cancel_markers(max_age_seconds: int = CANCEL_MARKER_MAX_AGE_SECONDS) -> int:
+    if not CANCEL_DIR.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for path in CANCEL_DIR.iterdir():
+        if not path.is_file():
+            continue
+        try:
+            if now - path.stat().st_mtime > max_age_seconds:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def task_storage_bytes(task_id: str) -> int:
+    task_dir = TASKS_DIR / task_id
+    if not task_dir.exists():
+        return 0
+    return sum(path.stat().st_size for path in task_dir.rglob("*") if path.is_file())
+
+
+def delete_task_storage(task_id: str) -> int:
+    """删掉任务目录（原件 + 逐页图），返回释放的字节数。"""
+    freed = task_storage_bytes(task_id)
+    shutil.rmtree(TASKS_DIR / task_id, ignore_errors=True)
+    TASKS.pop(task_id, None)
+    return freed
+
+
+def cancel_task(task_id: str) -> int:
+    mark_task_cancelled(task_id)
+    return delete_task_storage(task_id)
+
+
+def cleanup_temp_files(max_age_seconds: int = TEMP_MAX_AGE_SECONDS) -> int:
+    """清理 temp/ 下的陈旧临时文件，给新登记腾地方。"""
+    temp_dir = STORAGE_DIR / "temp"
+    if not temp_dir.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for path in temp_dir.iterdir():
+        if not path.is_file():
+            continue
+        try:
+            if now - path.stat().st_mtime > max_age_seconds:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def cleanup_orphan_task_dirs(max_age_seconds: int = ORPHAN_TASK_MAX_AGE_SECONDS) -> int:
+    """清理没有 task.json 的空壳任务目录（提交中断留下的）。"""
+    if not TASKS_DIR.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for task_dir in TASKS_DIR.glob("task-*"):
+        if not task_dir.is_dir() or (task_dir / "task.json").exists():
+            continue
+        try:
+            if now - task_dir.stat().st_mtime > max_age_seconds:
+                shutil.rmtree(task_dir, ignore_errors=True)
+                TASKS.pop(task_dir.name, None)
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 # 不进入正文的版面角色（按服务端标签判定，不含任何本地版面推断）：
 # 页眉、页脚、页码，以及不含文字内容的图片 / 图表 / 印章区域。
@@ -164,12 +278,52 @@ def get_stream(task_id: str):
     return JSONResponse(public_task(task))
 
 
+@app.delete("/ocr/stream/{task_id}")
+def cancel_stream(task_id: str):
+    """取消单个任务并删除它的缓存（原件 + 逐页图）。正在跑的任务会在本页结束后停下。"""
+    task = load_task(task_id)
+    if not task and not (TASKS_DIR / task_id).exists():
+        raise HTTPException(status_code=404, detail="任务不存在")
+    freed = cancel_task(task_id)
+    return {"status": "ok", "cancelled": [task_id], "freedBytes": freed}
+
+
+@app.delete("/ocr/stream")
+def cancel_streams_by_document(documentId: str = ""):
+    """按文献取消它的全部任务并清缓存（删除文献时调用），幂等。"""
+    document_id = (documentId or "").strip()
+    if not document_id:
+        raise HTTPException(status_code=400, detail="documentId 不能为空")
+
+    cancelled: list[str] = []
+    freed = 0
+    for task_file in TASKS_DIR.glob("task-*/task.json"):
+        task = load_task(task_file.parent.name)
+        if not task or str(task.get("documentId") or "") != document_id:
+            continue
+        task_id = str(task.get("taskId") or task_file.parent.name)
+        freed += cancel_task(task_id)
+        cancelled.append(task_id)
+    return {"status": "ok", "cancelled": cancelled, "freedBytes": freed}
+
+
 @app.on_event("startup")
 def recover_pending_tasks() -> None:
     """Resume tasks that were queued when the OCR service was restarted."""
+    cleanup_temp_files()
+    cleanup_orphan_task_dirs()
+    cleanup_cancel_markers()
+
     for task_path in TASKS_DIR.glob("task-*/task.json"):
         task = load_task(task_path.parent.name)
-        if not task or task.get("status") not in {"排队中", "处理中", "准备中"}:
+        if not task:
+            continue
+        task_id = str(task.get("taskId") or task_path.parent.name)
+        # 被取消的任务（文献已删除 / 手动停止）不恢复，顺手把缓存清掉。
+        if is_task_cancelled(task_id):
+            delete_task_storage(task_id)
+            continue
+        if task.get("status") not in {"排队中", "处理中", "准备中"}:
             continue
         task["status"] = "排队中"
         task["message"] = "服务已恢复，任务等待处理。"
@@ -202,14 +356,16 @@ async def save_task_source(upload: UploadFile, task_dir: Path) -> Path:
 
 
 def process_stream_task(task_id: str) -> None:
-    task = load_task(task_id)
-    if not task:
+    if is_task_cancelled(task_id):
+        delete_task_storage(task_id)
         return
 
     PROCESSING_SLOT.acquire()
     try:
         task = load_task(task_id)
         if not task:
+            return
+        if is_task_cancelled(task_id):
             return
         quick_read = bool(task.get("quickRead"))
         task["status"] = "处理中"
@@ -222,6 +378,7 @@ def process_stream_task(task_id: str) -> None:
         save_task(task)
 
         try:
+            raise_if_cancelled(task_id)
             pages, total_pages = process_document(
                 Path(task["sourcePath"]),
                 task_id,
@@ -239,6 +396,9 @@ def process_stream_task(task_id: str) -> None:
                 if quick_read
                 else "逐页处理完成，请回到平台查看结果。"
             )
+        except TaskCancelled:
+            task["status"] = "已取消"
+            task["message"] = "任务已取消，缓存已清理。"
         except ocr_upstream.OcrUpstreamError as exc:
             task["status"] = "处理失败"
             task["message"] = f"识别服务端不可用：{exc}"
@@ -249,6 +409,9 @@ def process_stream_task(task_id: str) -> None:
         save_task(task)
     finally:
         PROCESSING_SLOT.release()
+        # 被取消的任务不留缓存（原件 + 逐页图），腾出空间给后登记的文献。
+        if is_task_cancelled(task_id):
+            delete_task_storage(task_id)
 
 
 def process_document(
@@ -305,6 +468,7 @@ def process_pdf(
 
     try:
         for index, page in enumerate(doc, start=1):
+            raise_if_cancelled(task_id)
             set_stream_progress(
                 task_id,
                 completed_pages=index - 1,

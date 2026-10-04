@@ -282,6 +282,8 @@ const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
 const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema4`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
 const DELETED_CONVERSATION_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedConversations.schema4`;
+// 待向 OCR 服务确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
+const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema4`;
 const SYNC_INTERVAL_MS = 30000;
 
 let documents = normalizeDocuments(loadCachedDocuments());
@@ -909,7 +911,66 @@ function deleteDocument(id) {
     selectedPageId = nextDocument?.pages?.[0]?.id || null;
   }
 
+  cancelDocumentProcessing(id);
+  if (typeof stopDocumentProcessing === "function") {
+    stopDocumentProcessing(id);
+  }
   persist();
+}
+
+// 删除文献时让 OCR 服务终止它的任务并清掉缓存（原件 + 逐页图），
+// 否则那个任务会一直占着唯一的处理槽，后面的文献排不进来。
+// 待取消的 id 记在 localStorage 里，请求失败或页面提前关闭时下次打开页面补发，直到服务端确认。
+function cancelDocumentProcessing(documentId) {
+  if (!documentId) {
+    return;
+  }
+
+  const pending = loadPendingProcessingCancels();
+  pending.add(documentId);
+  savePendingProcessingCancels(pending);
+  void flushProcessingCancel(documentId);
+}
+
+function loadPendingProcessingCancels() {
+  try {
+    const values = JSON.parse(localStorage.getItem(PENDING_PROCESSING_CANCELS_KEY)) || [];
+    return new Set(values.map((value) => String(value)).filter(Boolean));
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function savePendingProcessingCancels(ids) {
+  localStorage.setItem(PENDING_PROCESSING_CANCELS_KEY, JSON.stringify(Array.from(ids)));
+}
+
+async function flushProcessingCancel(documentId) {
+  try {
+    const response = await fetch(
+      `${OCR_STREAM_SERVICE_URL}?documentId=${encodeURIComponent(documentId)}`,
+      { method: "DELETE", keepalive: true },
+    );
+    if (!response.ok) {
+      return false;
+    }
+  } catch (error) {
+    return false;
+  }
+
+  const pending = loadPendingProcessingCancels();
+  if (pending.delete(documentId)) {
+    savePendingProcessingCancels(pending);
+  }
+  return true;
+}
+
+// 页面每次启动补发一遍未确认的取消请求（幂等，服务端查不到就是空操作）。
+async function flushPendingProcessingCancels() {
+  const pending = Array.from(loadPendingProcessingCancels());
+  for (const documentId of pending) {
+    await flushProcessingCancel(documentId);
+  }
 }
 
 function getDocumentDisplayTitle(item) {
