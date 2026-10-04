@@ -11,7 +11,7 @@ OCR and LLM models. See the runtime layout below for hosts and ports.
 | History data API | data host | 8665 | `data/history-data.service` |
 | History OCR orchestration | data host | 8765 | `data/history-ocr.service` |
 | History LLM API | data host | 8865 | `data/history-llm.service` |
-| Literature data API | data host | 18665 | `data/literature-data.service` |
+| Literature data API | data host | 18665 | `data/literature.service` |
 | Literature OCR orchestration | data host | 18765 | `data/literature-ocr.service` |
 | PaddleX OCR | remote host | 8080 | `service/history-ocr.service` |
 | Ollama / Qwen3-8B | remote host | 11434 | `service/history-llm.service` |
@@ -35,7 +35,7 @@ mkdir -p ~/.config/systemd/user
 cp deploy/data/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now history-data history-ocr history-llm
-systemctl --user enable --now literature-data literature-ocr
+systemctl --user enable --now literature literature-ocr
 ```
 
 The data services use `/home/ubuntu/Codefield/history` as their working
@@ -43,7 +43,7 @@ directory. Their persistent data lives outside this directory:
 
 - `history/storage/`
 - `history/ocr-storage/`
-- `/home/ubuntu/Codefield/literature-data/`
+- `/home/ubuntu/Codefield/literature/`
 
 ### Configuration
 

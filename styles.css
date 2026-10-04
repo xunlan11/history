@@ -93,11 +93,52 @@ button {
 }
 
 .reader-compare {
+  --reader-compare-column-gap: 14px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px var(--reader-compare-column-gap);
   width: 100%;
   min-height: 0;
+}
+
+/* 标题栏固定在各自列的第一行，不随折叠状态移动 */
+.reader-original-heading {
+  grid-area: 1 / 1;
+}
+
+.reader-text-heading {
+  grid-area: 1 / 2;
+}
+
+.reader-annotation-heading {
+  grid-area: 1 / 3;
+}
+
+/* 内容栏占第二行 */
+.reader-original-panel {
+  grid-area: 2 / 1;
+}
+
+.reader-text-panel {
+  grid-area: 2 / 2;
+}
+
+.reader-annotation-panel {
+  grid-area: 2 / 3;
+}
+
+/* 折叠某侧时，整理文本栏的边缘扩展到原侧栏边缘 */
+.reader-compare.is-original-collapsed .reader-text-panel {
+  grid-column: 1 / 3;
+}
+
+.reader-compare.is-annotation-collapsed .reader-text-panel {
+  grid-column: 2 / 4;
+}
+
+.reader-compare.is-original-collapsed.is-annotation-collapsed .reader-text-panel {
+  grid-column: 1 / -1;
 }
 
 .panel {
@@ -181,10 +222,28 @@ label {
 
 .reader-sidebar-stack {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(120px, 28%);
+  grid-template-rows: auto auto minmax(120px, 1fr);
   gap: 14px;
   min-width: 0;
   min-height: 0;
+}
+
+/* 中栏不再是卡片，由内部进度框自带边框，因此不会有额外上下留白 */
+.reader-progress-panel {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.reader-progress-panel .progress-stack {
+  margin-top: 0;
+}
+
+/* 状态文字为空时不占高度 */
+.reader-sidebar > .inline-status:empty {
+  display: none;
 }
 
 .reader-sidebar {
@@ -201,13 +260,17 @@ label {
   margin: 0;
 }
 
-#reader-document-detail div {
+#reader-document-detail > div {
   display: grid;
   grid-template-columns: 62px 1fr;
   gap: 8px;
   border-bottom: 1px solid var(--line);
   padding: 8px 0;
   font-size: 13px;
+}
+
+#reader-document-detail > div:last-child {
+  border-bottom: 0;
 }
 
 #reader-document-detail .metadata-pair-row {
@@ -228,13 +291,12 @@ label {
 
 #reader-document-detail .reader-visibility-row {
   align-items: center;
-  padding: 10px 0 12px;
 }
 
 .reader-visibility-options {
-  display: grid;
-  grid-template-columns: max-content;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
   width: max-content;
   border: 0;
   padding: 0;
@@ -616,10 +678,19 @@ button:focus-visible {
 }
 
 .reader-original-panel,
-.reader-text-panel,
 .reader-annotation-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.reader-text-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+/* 标题栏已脱离内容栏，与内容栏的间距交给网格行间距 */
+.reader-compare > .section-heading {
+  margin-bottom: 0;
 }
 
 .reader-text-heading {
@@ -628,18 +699,46 @@ button:focus-visible {
   text-align: left;
 }
 
+/* 与左右两栏的标题行保持同高，避免整理文本栏内容整体下移 */
+.reader-text-heading .ghost-link {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+/* 标题栏（第一行）列间两条竖虚线，落在列间空隙正中并撑满行高 */
+.reader-text-heading {
+  position: relative;
+}
+
+.reader-text-heading::before,
+.reader-text-heading::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--line);
+}
+
+.reader-text-heading::before {
+  left: calc(var(--reader-compare-column-gap) / -2);
+}
+
+.reader-text-heading::after {
+  right: calc(var(--reader-compare-column-gap) / -2);
+}
+
 .reader-annotation-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   min-height: 28px;
 }
 
-.reader-original-panel > .section-heading {
+.reader-original-heading {
   min-height: 28px;
   justify-content: flex-start;
 }
 
-.reader-original-panel > .section-heading .reader-panel-toggle {
+.reader-original-heading .reader-panel-toggle {
   order: -1;
 }
 
@@ -679,11 +778,14 @@ button:focus-visible {
   transition: transform 160ms ease;
 }
 
-.reader-panel-collapsed > :not(.section-heading) {
+/* 折叠时只隐藏内容栏，标题栏与按钮保持原位 */
+#reader-original-panel.reader-panel-collapsed,
+#reader-annotation-panel.reader-panel-collapsed {
   display: none;
 }
 
-.reader-panel-collapsed .reader-panel-toggle svg {
+.reader-compare.is-original-collapsed .reader-original-heading .reader-panel-toggle svg,
+.reader-compare.is-annotation-collapsed .reader-annotation-heading .reader-panel-toggle svg {
   transform: rotate(180deg);
 }
 
@@ -1858,8 +1960,47 @@ a.citation:hover {
     grid-template-columns: 1fr;
   }
 
+  /* 窄屏单列：标题栏与内容栏按 标题-内容 顺序堆叠 */
+  .reader-compare {
+    grid-template-rows: auto;
+  }
+
+  .reader-compare > * {
+    grid-area: auto;
+  }
+
+  .reader-compare.is-original-collapsed .reader-text-panel,
+  .reader-compare.is-annotation-collapsed .reader-text-panel,
+  .reader-compare.is-original-collapsed.is-annotation-collapsed .reader-text-panel {
+    grid-column: auto;
+  }
+
+  .reader-original-heading {
+    order: 1;
+  }
+
+  .reader-original-panel {
+    order: 2;
+  }
+
+  .reader-text-heading {
+    order: 3;
+  }
+
+  .reader-text-panel {
+    order: 4;
+  }
+
+  .reader-annotation-heading {
+    order: 5;
+  }
+
+  .reader-annotation-panel {
+    order: 6;
+  }
+
   .reader-sidebar-stack {
-    grid-template-rows: auto minmax(120px, 28%);
+    grid-template-rows: auto auto minmax(120px, 1fr);
   }
 
   #reader-view.active {
