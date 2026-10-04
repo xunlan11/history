@@ -237,6 +237,10 @@ const searchInput = document.querySelector("#search-input");
 const searchResults = document.querySelector("#search-results");
 const chronicleTopic = document.querySelector("#chronicle-topic");
 const chronicleResults = document.querySelector("#chronicle-results");
+const resultToolbar = document.querySelector("#result-toolbar");
+const resultToolbarStatus = document.querySelector("#result-toolbar-status");
+const resultRegenerateButton = document.querySelector("#result-regenerate");
+const resultUpdateButton = document.querySelector("#result-update");
 const cardTemplate = document.querySelector("#document-card-template");
 const versionServiceStatus = document.querySelector("#version-service-status");
 const versionUpdateButton = document.querySelector("#version-update-button");
@@ -476,6 +480,7 @@ function normalizeConversations(items) {
       locked: Boolean(item.locked),
       referenceDocumentIds: normalizeReferenceDocumentIds(item.referenceDocumentIds),
       attachments: normalizeConversationAttachments(item.attachments),
+      result: normalizeConversationResult(item.result),
       createdAt: item.createdAt || "",
       updatedAt: item.updatedAt || "",
     }));
@@ -487,6 +492,21 @@ function normalizeReferenceDocumentIds(values) {
   }
 
   return Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean)));
+}
+
+function normalizeConversationResult(value) {
+  if (!value || typeof value !== "object" || !value.mode) {
+    return null;
+  }
+
+  return {
+    mode: String(value.mode),
+    prompt: String(value.prompt || ""),
+    payload: value.payload && typeof value.payload === "object" ? value.payload : {},
+    warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
+    sourceDocumentIds: normalizeReferenceDocumentIds(value.sourceDocumentIds),
+    generatedAt: value.generatedAt || "",
+  };
 }
 
 function normalizeConversationAttachments(values) {
@@ -726,6 +746,7 @@ function createConversation(title = "新对话", mode = "chat") {
     locked: false,
     referenceDocumentIds: [],
     attachments: [],
+    result: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

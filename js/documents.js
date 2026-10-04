@@ -225,6 +225,7 @@ function renderActiveConversation() {
 
   chatTitle.textContent = conversation?.title || "新对话";
   chatHint.textContent = getConversationModeLabel(selectedSmartMode);
+  updateConversationToolbar();
 }
 
 function getConversationModeLabel(mode) {

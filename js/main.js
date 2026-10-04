@@ -199,6 +199,8 @@ editDocumentButton?.addEventListener("click", () => {
 });
 
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
+document.querySelector("#result-regenerate")?.addEventListener("click", regenerateConversationResult);
+document.querySelector("#result-update")?.addEventListener("click", supplementConversation);
 const exportPdfButton = document.querySelector("#export-pdf");
 if (exportPdfButton) {
   exportPdfButton.addEventListener("click", exportPdf);
@@ -296,11 +298,19 @@ function closeDeleteConversationDialog() {
   pendingDeleteDocumentId = null;
 }
 
-async function runSmartChat() {
+async function runSmartChat(options = {}) {
   const prompt = searchInput.value.trim();
 
   if (!prompt) {
     renderSmartEmpty();
+    return;
+  }
+
+  const conversation = getSelectedConversation();
+  const saved = conversation?.result;
+  if (!options.regenerate && saved?.mode === "chat" && saved.prompt === prompt && saved.payload?.answer) {
+    renderChatMessage(prompt, saved.payload.answer, saved.warnings || []);
+    updateConversationToolbar();
     return;
   }
 
@@ -335,7 +345,14 @@ async function runSmartChat() {
       return;
     }
 
-    renderChatMessage(prompt, result.answer || "未生成回答。", contextReport.warnings);
+    const answer = result.answer || "未生成回答。";
+    renderChatMessage(prompt, answer, contextReport.warnings);
+    saveConversationResult(getSelectedConversation(), {
+      mode: "chat",
+      prompt,
+      payload: { answer },
+      warnings: contextReport.warnings || [],
+    });
   } catch (error) {
     renderChatNotice("暂时无法调用大模型服务。");
   }

@@ -50,6 +50,13 @@
                   <span id="chat-hint">输入后在这里显示检索或编年结果</span>
                 </div>
                 <div class="message-scroll" id="message-feed">
+                  <div class="result-toolbar hidden" id="result-toolbar">
+                    <span class="result-toolbar-status" id="result-toolbar-status"></span>
+                    <div class="result-toolbar-actions">
+                      <button class="ghost-link" id="result-regenerate" type="button">重新生成</button>
+                      <button class="ghost-link" id="result-update" type="button">纳入新文献</button>
+                    </div>
+                  </div>
                   <div class="smart-results">
                     <div class="result-list" id="search-results"></div>
                     <div class="result-list" id="chronicle-results"></div>

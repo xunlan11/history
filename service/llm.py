@@ -88,6 +88,13 @@ class ChronicleRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class SupplementChronicleRequest(BaseModel):
+    topic: str = ""
+    previousEntries: list[dict[str, Any]] = Field(default_factory=list)
+    documents: list[dict[str, Any]] = Field(default_factory=list)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
 class SearchRequest(BaseModel):
     query: str
     documents: list[dict[str, Any]] = Field(default_factory=list)
@@ -465,6 +472,66 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
         entries = []
         warnings = [str(exc)]
         response = base_response("chronicle", ready=False, message=str(exc))
+
+    response.update(
+        {
+            "topic": payload.topic,
+            "entries": entries,
+            "warnings": warnings,
+        }
+    )
+    return response
+
+
+@app.post("/llm/chronicle/supplement")
+def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
+    prompt = f"""
+/no_think
+你将得到一份“已有史事编年”和“当前选定文献的完整整理材料”（材料可能与已有编年重叠）。请依据材料与已有编年合并，输出合并后的完整编年。
+
+任务：
+1. 保留已有编年的每一条及其来源；除非材料明确显示该条需要修正，否则内容与来源都照旧。
+2. 从材料中提取与主题相关的史事，按时间插入。
+3. 材料中的史事与已有条目重复时（同一史事或同一日期），合并为一条：sources 中并列多个来源，不重复叙述。
+4. 不同来源对同一史事记载冲突时，保留并列来源，并在该条的 conflict 字段写明冲突点；无冲突则 conflict 为空字符串。
+5. 只使用输入材料，不引入外部史实；不做历法换算，只按原文和上下文填写 calendarType、year、month、day、eraName、eraYear、lunarMonth、lunarDay、lunarLeap、ganzhiYear，无法确定留空。
+6. 每条 sources 必须保留 documentId、attachmentId、sourceType、pageId、pageNumber、author、title、publisher、year、quote。
+7. 输出必须是 JSON，不要输出解释文字或 Markdown。
+
+返回格式：
+{{
+  "entries": [
+    {{
+      "dateOriginal": "原文时间表述",
+      "summary": "客观史事",
+      "conflict": "冲突说明或空字符串",
+      "sources": [ {{ 与生成编年相同的来源字段 }} ]
+    }}
+  ],
+  "warnings": ["处理提示"]
+}}
+
+主题：
+{payload.topic}
+
+已有编年：
+{json.dumps(payload.previousEntries, ensure_ascii=False)}
+
+当前文献材料：
+{json.dumps(payload.documents, ensure_ascii=False)}
+""".strip()
+
+    try:
+        result = call_json_task(prompt)
+        entries, chronology_warnings = normalize_chronicle_entries(
+            normalize_entries(result.get("entries"))
+        )
+        warnings = list_value(result.get("warnings")) + chronology_warnings
+        response = base_response("chronicle-supplement", ready=True)
+    except LlmServiceError as exc:
+        entries = []
+        warnings = [str(exc)]
+        response = base_response("chronicle-supplement", ready=False, message=str(exc))
 
     response.update(
         {

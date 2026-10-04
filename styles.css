@@ -1567,6 +1567,73 @@ body {
   margin-top: 18px;
 }
 
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.result-toolbar-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.result-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.result-toolbar-actions .ghost-link:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.citation-markers {
+  white-space: nowrap;
+}
+
+.citation {
+  margin-left: 3px;
+  color: var(--primary);
+  font-size: 12px;
+  vertical-align: super;
+  cursor: help;
+}
+
+a.citation {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.citation:hover {
+  text-decoration: underline;
+}
+
+.citation-missing {
+  color: var(--muted);
+  vertical-align: baseline;
+}
+
+.citation-conflict-mark {
+  color: var(--red);
+}
+
+.citation-conflict {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(216, 66, 51, 0.14);
+  color: var(--red);
+  font-size: 12px;
+  vertical-align: super;
+  cursor: help;
+}
+
 .form-sheet {
   position: fixed;
   inset: 0;

@@ -803,8 +803,18 @@ function runLiteralSearch(notice = "") {
   });
 }
 
-async function runSearch() {
+async function runSearch(options = {}) {
   const query = searchInput.value.trim();
+  const conversation = getSelectedConversation();
+  const saved = conversation?.result;
+
+  if (!options.regenerate && saved?.mode === "search" && saved.prompt === query && saved.payload?.matches) {
+    clearSmartResults();
+    renderLlmSearchResults(saved.payload.matches, saved.warnings || [], query);
+    updateConversationToolbar();
+    return;
+  }
+
   const runToken = searchRunToken + 1;
   searchRunToken = runToken;
   searchResults.innerHTML = "";
@@ -858,11 +868,17 @@ async function runSearch() {
       return;
     }
 
-    renderLlmSearchResults(
-      result.matches || [],
-      [...contextReport.warnings, ...(result.warnings || [])],
-      query,
-    );
+    const warnings = [...contextReport.warnings, ...(result.warnings || [])];
+    renderLlmSearchResults(result.matches || [], warnings, query);
+    saveConversationResult(getSelectedConversation(), {
+      mode: "search",
+      prompt: query,
+      payload: {
+        matches: result.matches || [],
+        expandedTerms: result.expandedTerms || [],
+      },
+      warnings,
+    });
   } catch (error) {
     if (runToken !== searchRunToken) {
       return;
@@ -1011,23 +1027,13 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
     reason.className = "meta-line";
     action.className = "secondary-button";
     action.type = "button";
-    action.textContent = attachment ? "打开文件" : "打开";
-    action.disabled = !target || Boolean(attachment && !attachment.fileUrl);
+    action.textContent = attachment ? "打开文件" : "打开原文";
+    const actionHref = searchResultHref(attachment, item, page);
+    action.disabled = !actionHref;
     action.addEventListener("click", () => {
-      if (!target) {
-        return;
+      if (actionHref) {
+        window.open(actionHref, "_blank", "noopener");
       }
-
-      if (attachment) {
-        openConversationAttachment(attachment);
-        return;
-      }
-
-      selectedDocumentId = item.id;
-      selectedPageId = page?.id || item.pages[0]?.id || null;
-      setReaderReturnView("library");
-      renderAll();
-      setView("reader");
     });
 
     content.append(title, meta, excerpt);
@@ -1058,8 +1064,114 @@ function resolveSearchMatch(match) {
   }
   return target;
 }
-async function buildChronicle() {
+const RESULT_MODE_LABELS = {
+  chat: { update: "用当前文献重答", regenerate: "重新回答", showRegenerate: false },
+  search: { update: "用当前文献重检", regenerate: "重新检索", showRegenerate: false },
+  chronicle: { update: "并入当前文献", regenerate: "从零重生成", showRegenerate: true },
+};
+
+function getScopeProcessedDocumentIds() {
+  return getSmartScopeDocuments()
+    .filter((item) => item.pages.some((page) => getPageProcessedText(page).trim()))
+    .map((item) => item.id);
+}
+
+function saveConversationResult(conversation, { mode, prompt, payload, warnings }) {
+  if (!conversation) {
+    return;
+  }
+
+  conversation.result = {
+    mode,
+    prompt: prompt || "",
+    payload: payload || {},
+    warnings: Array.isArray(warnings) ? warnings : [],
+    sourceDocumentIds: getScopeProcessedDocumentIds(),
+    generatedAt: new Date().toISOString(),
+  };
+  conversation.updatedAt = new Date().toISOString();
+  persistConversations();
+  updateConversationToolbar();
+}
+
+function updateConversationToolbar() {
+  if (!resultToolbar) {
+    return;
+  }
+
+  const result = getSelectedConversation()?.result;
+  if (!result) {
+    resultToolbar.classList.add("hidden");
+    return;
+  }
+
+  const labels = RESULT_MODE_LABELS[result.mode] || RESULT_MODE_LABELS.chat;
+  const documentCount = (result.sourceDocumentIds || []).length;
+  resultToolbar.classList.remove("hidden");
+
+  if (resultToolbarStatus) {
+    const title = result.prompt ? `“${result.prompt}”` : "本次结果";
+    resultToolbarStatus.textContent = `${title}已保存 · 依据 ${documentCount} 篇文献`;
+  }
+  if (resultUpdateButton) {
+    resultUpdateButton.textContent = labels.update;
+    resultUpdateButton.disabled = false;
+    resultUpdateButton.title = "按当前文献范围重新更新结果";
+  }
+  if (resultRegenerateButton) {
+    resultRegenerateButton.textContent = labels.regenerate;
+    resultRegenerateButton.classList.toggle("hidden", !labels.showRegenerate);
+  }
+}
+
+async function supplementConversation() {
+  const conversation = getSelectedConversation();
+  const result = conversation?.result;
+  if (!conversation || !result) {
+    return;
+  }
+
+  if (result.mode === "chronicle") {
+    await supplementChronicle(conversation, result);
+    return;
+  }
+
+  if (result.mode === "search") {
+    await runSearch({ regenerate: true });
+    return;
+  }
+
+  await runSmartChat({ regenerate: true });
+}
+
+function regenerateConversationResult() {
+  const mode = getSelectedConversation()?.result?.mode || selectedSmartMode;
+
+  if (mode === "chronicle") {
+    buildChronicle({ regenerate: true });
+    return;
+  }
+
+  if (mode === "search") {
+    runSearch({ regenerate: true });
+    return;
+  }
+
+  runSmartChat({ regenerate: true });
+}
+
+async function buildChronicle(options = {}) {
   const topic = chronicleTopic.value.trim();
+  const conversation = getSelectedConversation();
+  const saved = conversation?.result;
+
+  if (!options.regenerate && saved?.mode === "chronicle" && saved.prompt === topic && saved.payload?.entries?.length) {
+    clearSmartResults();
+    renderChronicleLlmEntries(saved.payload.entries, saved.warnings || []);
+    updateConversationToolbar();
+    return;
+  }
+
   const contextReport = getConversationContextReport();
   if (contextReport.error) {
     renderChronicleNotice(contextReport.error);
@@ -1097,21 +1209,69 @@ async function buildChronicle() {
       return;
     }
 
-    renderChronicleLlmEntries(
-      result.entries || [],
-      [...contextReport.warnings, ...(result.warnings || [])],
-    );
+    const warnings = [...contextReport.warnings, ...(result.warnings || [])];
+    renderChronicleLlmEntries(result.entries || [], warnings);
+    saveConversationResult(conversation, {
+      mode: "chronicle",
+      prompt: topic,
+      payload: { entries: result.entries || [] },
+      warnings,
+    });
   } catch (error) {
     renderChronicleNotice("暂时无法调用大模型生成编年。");
   }
 }
 
-function collectChronicleDocumentsForLlm(topic) {
+async function supplementChronicle(conversation, saved) {
+  const topic = saved.prompt;
+  const documents = collectChronicleDocumentsForLlm(topic, { limit: 0 });
+  if (!documents.length) {
+    renderChronicleNotice("当前文献范围内暂无可用的整理文本。");
+    return;
+  }
+
+  renderChronicleLoading();
+
+  try {
+    const result = await requestLlmTask("/chronicle/supplement", {
+      topic,
+      previousEntries: saved.payload?.entries || [],
+      documents,
+      options: {
+        source: "conversation-scope",
+        maxEntries: 60,
+      },
+    });
+
+    if (!result.ready) {
+      renderChronicleNotice(result.message || "大模型服务未连接。");
+      return;
+    }
+
+    const warnings = [...(saved.warnings || []), ...(result.warnings || [])];
+    renderChronicleLlmEntries(result.entries || [], warnings);
+    saveConversationResult(conversation, {
+      mode: "chronicle",
+      prompt: topic,
+      payload: { entries: result.entries || [] },
+      warnings,
+    });
+  } catch (error) {
+    renderChronicleNotice("暂时无法更新编年。");
+  }
+}
+
+function collectChronicleDocumentsForLlm(topic, options = {}) {
   const records = [];
-  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(topic, 10, 1800);
+  const includeAttachments = options.includeAttachments !== false;
+  const attachmentDocuments = includeAttachments ? buildConversationAttachmentDocumentsForLlm(topic, 10, 1800) : [];
   const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
+  const onlyDocumentIds = options.onlyDocumentIds ? new Set(options.onlyDocumentIds) : null;
 
   getSmartScopeDocuments().forEach((item, documentIndex) => {
+    if (onlyDocumentIds && !onlyDocumentIds.has(item.id)) {
+      return;
+    }
     item.pages.forEach((page, pageIndex) => {
       const text = getSmartPagePrimaryText(page).trim();
       if (!text) {
@@ -1128,11 +1288,14 @@ function collectChronicleDocumentsForLlm(topic) {
     });
   });
 
+  const sortedRecords = records.sort(
+    (a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex,
+  );
+  const limit = options.limit === undefined ? Math.max(18, 36 - attachmentPageCount) : options.limit;
+  const selectedRecords = limit > 0 ? sortedRecords.slice(0, limit) : sortedRecords;
+
   const grouped = new Map();
-  records
-    .sort((a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex)
-    .slice(0, Math.max(18, 36 - attachmentPageCount))
-    .forEach(({ item, page }) => {
+  selectedRecords.forEach(({ item, page }) => {
       if (!grouped.has(item.id)) {
         grouped.set(item.id, {
           documentId: item.id,
@@ -1206,96 +1369,125 @@ function renderChronicleLlmEntries(entries, warnings = []) {
     const content = document.createElement("div");
     const title = document.createElement("h4");
     const summary = document.createElement("p");
-    const source = document.createElement("p");
-    const action = document.createElement("button");
     const dateLabel = getChronicleDateLabel(entry);
     const sameDay = Boolean(entry.sameDay) || (index > 0 && dateLabel === getChronicleDateLabel(list[index - 1]));
-    const sourceTarget = resolveChronicleSource(entry);
-    const attachment = sourceTarget?.attachment || null;
 
-    result.className = "result-item";
+    result.className = "result-item chronicle-item";
     title.textContent = sameDay ? `同日：${dateLabel}` : dateLabel;
-    summary.textContent = entry.summary || entry.event || "史事待核";
-    source.textContent = formatChronicleLlmSources(entry.sources);
-    action.className = "secondary-button";
-    action.type = "button";
-    action.textContent = attachment ? "打开文件" : "查看原页";
-    action.disabled = !sourceTarget || Boolean(attachment && !attachment.fileUrl);
-    action.addEventListener("click", () => {
-      if (!sourceTarget) {
-        return;
-      }
+    summary.className = "chronicle-summary";
+    summary.textContent = `${entry.summary || entry.event || "史事待核"} `;
+    summary.append(buildCitationMarkers(entry));
 
-      if (attachment) {
-        openConversationAttachment(attachment);
-        return;
-      }
-
-      selectedDocumentId = sourceTarget.documentId;
-      selectedPageId = sourceTarget.pageId;
-      setReaderReturnView("library");
-      renderAll();
-      setView("reader");
-    });
-
-    content.append(title, summary, source);
+    content.append(title, summary);
     if (Array.isArray(warnings) && warnings.length && index === entries.length - 1) {
       content.append(formatWarnings(warnings));
     }
-    result.append(content, action);
+    result.append(content);
     chronicleResults.append(result);
   });
+}
+
+function buildCitationMarkers(entry) {
+  const wrap = document.createElement("span");
+  wrap.className = "citation-markers";
+  const sources = Array.isArray(entry.sources) ? entry.sources : [];
+  const conflictText = String(entry.conflict || "").trim();
+
+  if (!sources.length) {
+    const missing = document.createElement("span");
+    missing.className = "citation citation-missing";
+    missing.textContent = "[来源待核]";
+    wrap.append(missing);
+    return wrap;
+  }
+
+  sources.forEach((source, index) => {
+    wrap.append(buildCitationMarker(source, index + 1, conflictText));
+  });
+
+  if (conflictText) {
+    const badge = document.createElement("span");
+    badge.className = "citation-conflict";
+    badge.textContent = "冲突";
+    badge.title = `来源冲突：${conflictText}`;
+    wrap.append(badge);
+  }
+  return wrap;
+}
+
+function buildCitationMarker(source, number, conflictText = "") {
+  const href = citationHref(source);
+  const node = document.createElement(href ? "a" : "span");
+  node.className = "citation";
+  if (conflictText) {
+    node.classList.add("citation-conflict-mark");
+  }
+  node.textContent = `[${number}]`;
+  node.title = formatCitationTooltip(source, conflictText);
+  if (href) {
+    node.href = href;
+    node.target = "_blank";
+    node.rel = "noopener";
+  }
+  return node;
+}
+
+function citationHref(source) {
+  if (source.sourceType === "conversation-file" || source.attachmentId) {
+    const attachment = findConversationAttachment(source.attachmentId || source.documentId, source.title);
+    return attachment?.fileUrl || "";
+  }
+
+  const target = resolveDocumentSource(source);
+  if (!target?.item) {
+    return "";
+  }
+
+  const params = new URLSearchParams();
+  params.set("document", target.item.id);
+  if (target.page?.id) {
+    params.set("page", target.page.id);
+  }
+  return `reader.html?${params.toString()}`;
+}
+
+function formatCitationTooltip(source, conflictText = "") {
+  const author = source.author || "著者未录";
+  const title = source.title || "文献名未录";
+  const publisher = source.publisher || "出版信息未录";
+  const year = source.year || "年份未录";
+  const page = source.pageNumber
+    ? source.sourceType === "conversation-file"
+      ? `内容片段 ${source.pageNumber}`
+      : `第 ${source.pageNumber} 页`
+    : "";
+  const lines = [`${author}：《${title}》`, `${publisher}，${year}${page ? `，${page}` : ""}`];
+  if (source.quote) {
+    lines.push(`原文：${source.quote}`);
+  }
+  if (conflictText) {
+    lines.push(`冲突：${conflictText}`);
+  }
+  return lines.join("\n");
 }
 
 function getChronicleDateLabel(entry) {
   return entry?.dateLabel || entry?.dateGregorian || entry?.dateOriginal || "日期待核";
 }
 
-function formatChronicleLlmSources(sources = []) {
-  if (!Array.isArray(sources) || !sources.length) {
-    return "来源：待核。";
+function searchResultHref(attachment, item, page) {
+  if (attachment) {
+    return attachment.fileUrl || "";
+  }
+  if (!item?.id) {
+    return "";
   }
 
-  return sources
-    .map((source) => {
-      const author = source.author || "著者未录";
-      const title = source.title || "文献名未录";
-      const publisher = source.publisher || "出版信息未录";
-      const year = source.year || "年份未录";
-      const pageNumber = source.pageNumber
-        ? source.sourceType === "conversation-file"
-          ? `，内容片段 ${source.pageNumber}`
-          : `，第 ${source.pageNumber} 页`
-        : "";
-      const quote = source.quote ? `；原文：${source.quote}` : "";
-      if (source.sourceType === "conversation-file") {
-        return `来源：当前对话上传文件（快速读取）：《${title}》${pageNumber}${quote}`;
-      }
-      return `来源：${author}：《${title}》，${publisher}，${year}${pageNumber}${quote}`;
-    })
-    .join("\n");
-}
-
-function resolveChronicleSource(entry) {
-  const sources = Array.isArray(entry.sources) ? entry.sources : [];
-
-  for (const source of sources) {
-    const target = resolveDocumentSource(source);
-    if (!target) {
-      const attachment = findConversationAttachment(source.attachmentId || source.documentId, source.title);
-      if (attachment) {
-        return { attachment };
-      }
-      continue;
-    }
-
-    if (target.page) {
-      return {
-        documentId: target.item.id,
-        pageId: target.page.id,
-      };
-    }
+  const params = new URLSearchParams();
+  params.set("document", item.id);
+  const pageId = page?.id || item.pages?.[0]?.id;
+  if (pageId) {
+    params.set("page", pageId);
   }
-
-  return null;
+  return `reader.html?${params.toString()}`;
 }
