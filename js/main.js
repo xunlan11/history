@@ -567,9 +567,14 @@ function resumePendingProcessingTasks() {
   documents.forEach((item) => {
     if (!canEditDocument(item)) return;
     if (!item.processingTask?.remoteTaskId) {
-      resumeMissingProcessingTask(item);
+      // 登记没跑完（原件或逐页任务没提交上）：先续传，成功后再补做封面识别。
+      resumeMissingProcessingTask(item).then(() => resumePendingRecognition(item));
       return;
     }
+
+    // 登记已完成：封面识别（要跑大模型）在后台补做，不阻塞页面。
+    resumePendingRecognition(item);
+
     if (isProcessingTaskPending(item)) {
       startProcessingPolling(item);
       return;

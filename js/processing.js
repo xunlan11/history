@@ -1,10 +1,13 @@
 const PROCESSING_POLL_INTERVAL_MS = 1500;
+// 封面判断是后台任务（OCR 完成前就能先给出封面），给大模型一个上限，避免一直挂着。
+const COVER_RECOGNITION_TIMEOUT_MS = 90000;
 // 仅大模型整理队列按页码顺序执行；OCR 在后端独立连续推进，不等待大模型。
 const PROCESSING_LLM_MAX_CONCURRENT = 1;
 const processingPollTimers = new Map();
 const processingLlmStates = new Map();
 const metadataAutoTriggered = new Set();
 const processingRecoveryInFlight = new Set();
+const coverRecognitionInFlight = new Set();
 
 function isProcessingTaskPending(item) {
   const task = item?.processingTask;
@@ -88,8 +91,9 @@ async function downloadArchivedSource(item) {
   });
 }
 
-// 上传流水线：原件归档 → 封面识别 → 逐页任务提交（三段均分 100%）。
-// 开始前先把原件暂存进 IndexedDB，三段全部成功才删除；任一环节失败/页面被刷新，
+// 上传流水线：原件归档 → 逐页任务提交（登记只在等这两段，各占一半进度）。
+// 开始前先把原件暂存进 IndexedDB；封面识别等“识别”类工作全部放在登记之后后台跑，
+// 不阻塞进入阅读页（大模型在 CPU 上可能要几分钟）。任一环节失败/页面被刷新，
 // 下次打开页面时 resumeMissingProcessingTask() 会从暂存里接着传，不会丢原件。
 async function runDocumentUploadPipeline(item, file) {
   if (!canEditDocument(item)) {
@@ -121,17 +125,14 @@ async function runDocumentUploadPipeline(item, file) {
       setUploadStage(documentId, 0, "上传原件", fraction);
     });
 
-    setUploadStage(documentId, 1, "识别封面", 0);
-    await detectDocumentCover(liveItem(), file, (fraction) => {
-      setUploadStage(documentId, 1, "识别封面", fraction);
-    });
-
-    setUploadStage(documentId, 2, "提交逐页任务", 0);
+    setUploadStage(documentId, 1, "提交逐页任务", 0);
     await submitProcessingTask(liveItem(), file, (fraction) => {
-      setUploadStage(documentId, 2, "提交逐页任务", fraction);
+      setUploadStage(documentId, 1, "提交逐页任务", fraction);
     });
 
-    await dropPendingUpload(documentId);
+    // 到这一步登记就算完成了（原件已归档、逐页任务已提交），可以进阅读页。
+    // 封面识别要跑大模型（CPU 上可能几分钟），一律放到阅读页后台做，
+    // 所以暂存的原件先不删：resumePendingRecognition() 还要用它。
     markDocumentUploadFinished(documentId);
     return true;
   } catch (error) {
@@ -150,9 +151,47 @@ async function runDocumentUploadPipeline(item, file) {
   }
 }
 
+// 登记只等【原件归档】+【逐页任务提交】两段，各占一半进度。
 function setUploadStage(documentId, stageIndex, stage, fraction) {
-  const percent = Math.min(100, Math.max(0, ((stageIndex + (Number(fraction) || 0)) / 3) * 100));
+  const total = 2;
+  const percent = Math.min(100, Math.max(0, ((stageIndex + (Number(fraction) || 0)) / total) * 100));
   updateDocumentUploadState(documentId, { active: true, stageIndex, stage, percent });
+}
+
+// 封面识别：不属于登记流程，登记完成后在任意页面后台跑（用浏览器暂存的原件）。
+// 单页残片这类没有标题信息的文件也走同一条路：识别不到就置为未识别，不影响文献本身。
+async function resumePendingRecognition(item) {
+  const target = getLiveDocument(item.id) || item;
+  if (!canEditDocument(target) || isDocumentUploadActive(target.id) || coverRecognitionInFlight.has(target.id)) {
+    return;
+  }
+
+  if (target.coverImageDataUrl || target.coverImageUrl) {
+    await dropPendingUpload(target.id);
+    return;
+  }
+
+  const record = await readPendingUpload(target.id);
+  const file = pendingUploadToFile(record);
+  if (!file) {
+    if (target.coverStatus === "正在识别封面") {
+      target.coverStatus = "未识别到封面";
+      target.updatedAt = new Date().toISOString();
+      persist();
+      renderAll();
+    }
+    return;
+  }
+
+  coverRecognitionInFlight.add(target.id);
+  try {
+    await detectDocumentCover(getLiveDocument(target.id) || target, file);
+  } catch (error) {
+    // 封面只是书架展示，失败不影响文献与识别结果。
+  } finally {
+    coverRecognitionInFlight.delete(target.id);
+    await dropPendingUpload(target.id);
+  }
 }
 
 function startProcessingPolling(item) {
@@ -492,20 +531,31 @@ function collectMetadataCandidateText(item) {
     .filter(Boolean)
     .join("\n\n");
 }
-async function requestLlmTask(path, payload) {
-  const response = await fetch(`${LLM_SERVICE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+async function requestLlmTask(path, payload, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 0;
+  const controller = timeoutMs > 0 && typeof AbortController === "function"
+    ? new AbortController()
+    : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
 
-  if (!response.ok) {
-    throw new Error(`LLM request failed: ${response.status}`);
+  try {
+    const response = await fetch(`${LLM_SERVICE_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller ? controller.signal : undefined,
+    });
+
+    if (!response.ok) {
+      throw new Error(`LLM request failed: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
   }
-
-  return response.json();
 }
 
 async function requestFinalTextForPage(item, page) {
@@ -590,6 +640,8 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
   }
 }
 
+// 封面识别不在登记流程里等待：登记完成后由 resumePendingRecognition() 在后台调用。
+// 这里要传原图给服务端渲染/归一化，再让大模型判断是否“像封面”。
 async function detectDocumentCover(item, file, onProgress) {
   if (!item || !canEditDocument(item) || !file || !file.name) {
     return;
@@ -616,7 +668,7 @@ async function detectDocumentCover(item, file, onProgress) {
       imageDataUrl: candidate.imageDataUrl,
       fileName: file.name,
       metadata: buildLlmMetadata(item),
-    });
+    }, { timeoutMs: COVER_RECOGNITION_TIMEOUT_MS });
 
     const target = getLiveDocument(item.id) || item;
     if (result.ready && result.hasCover) {

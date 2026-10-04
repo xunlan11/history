@@ -281,7 +281,9 @@ label {
 #reader-document-detail dt {
   color: var(--muted);
   font-weight: 700;
-  text-align: right;
+  /* 标题两端对齐：2～4 字的标签都撑满标签列（文字少的自动拉开间距），左右边缘对齐 */
+  text-align: justify;
+  text-align-last: justify;
   white-space: nowrap;
 }
 
@@ -996,9 +998,22 @@ body {
   font-weight: 700;
 }
 
+/* 进度区自上而下：OCR 页数 / 进度条 + 末尾总页数 / LLM 页数 */
 .progress-body {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+}
+
+.progress-marker-row {
+  position: relative;
+  height: 15px;
+}
+
+.progress-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
 }
 
 .progress-track-main {
@@ -1025,18 +1040,13 @@ body {
   background: linear-gradient(90deg, var(--accent), #c7775f);
 }
 
-.progress-markers {
-  position: relative;
-  height: 14px;
-}
-
 .progress-marker {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
   color: var(--muted);
   font-size: 12px;
-  line-height: 14px;
+  line-height: 15px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transition: left 0.3s ease;
@@ -1047,8 +1057,18 @@ body {
   font-weight: 700;
 }
 
+/* 页数颜色复用对应进度条的颜色 */
+.progress-marker-ocr b {
+  color: var(--primary);
+}
+
+.progress-marker-llm b {
+  color: var(--accent);
+}
+
+/* 总页数固定跟在进度条末尾，与进度条同一行 */
 .progress-marker-total {
-  right: 0;
+  position: static;
   transform: none;
 }
 

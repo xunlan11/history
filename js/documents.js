@@ -742,16 +742,11 @@ function renderReaderSidebar() {
   const rows = [
     ["文献名", item.title || "未识别"],
     ["作者", item.author || "未录"],
+    // 出版时间单独一行：值可以是「1936」「1936年10月」「1936年10月5日」等精度
+    ["出版时间", item.year || "未录"],
+    ["出版社", item.publisher || "未录"],
   ];
   rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
-  appendDocumentDetailRow(
-    readerDetailNode,
-    [
-      ["年份", item.year || "未录"],
-      ["出版社", item.publisher || "未录"],
-    ],
-    "metadata-pair-row",
-  );
   [
     ["创建者", item.creator?.username || "创建者信息不可用"],
     ["标签", item.tags || "未录"],

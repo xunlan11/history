@@ -57,14 +57,18 @@
                       </div>
                     </div>
                     <div class="progress-body">
-                      <div class="progress-track progress-track-main">
-                        <div class="progress-fill progress-fill-ocr"></div>
-                        <div class="progress-fill progress-fill-llm"></div>
+                      <div class="progress-marker-row">
+                        <span class="progress-marker progress-marker-ocr" title="OCR 已识别页数"><b class="progress-ocr-pages">0</b></span>
                       </div>
-                      <div class="progress-markers">
-                        <span class="progress-marker progress-marker-ocr"><b class="progress-ocr-pages">0</b></span>
-                        <span class="progress-marker progress-marker-llm"><b class="progress-llm-pages">0</b></span>
-                        <span class="progress-marker progress-marker-total"><b class="progress-total-pages">0</b></span>
+                      <div class="progress-bar-row">
+                        <div class="progress-track progress-track-main">
+                          <div class="progress-fill progress-fill-ocr"></div>
+                          <div class="progress-fill progress-fill-llm"></div>
+                        </div>
+                        <span class="progress-marker progress-marker-total" title="总页数"><b class="progress-total-pages">0</b></span>
+                      </div>
+                      <div class="progress-marker-row">
+                        <span class="progress-marker progress-marker-llm" title="大模型已整理页数"><b class="progress-llm-pages">0</b></span>
                       </div>
                     </div>
                   </div>

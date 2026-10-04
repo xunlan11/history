@@ -28,7 +28,7 @@ function buildPrintHtml(item) {
   const metadata = [
     ["文献名", item.title || "未录"],
     ["著者", item.author || "未录"],
-    ["年份", item.year || "未录"],
+    ["出版时间", item.year || "未录"],
     ["出版社", item.publisher || "未录"],
     ["主题标签", item.tags || "未录"],
     ["原始文件", item.fileName || "未录"],

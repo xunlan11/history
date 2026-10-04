@@ -304,13 +304,14 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
 1. 只依据输入文本，不要猜测。
 2. 未识别到的字段必须返回空字符串。
 3. 不要把正文内容误判为著者或出版社。
-4. 输出必须是 JSON，不要输出解释文字。
+4. 时间能确定到什么精度就写到什么精度（只有年份写「1936」，能确定月份写「1936年10月」，能确定日期写「1936年10月5日」），不确定的位数不要补全。
+5. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
   "title": "文献名或空",
   "author": "著者或空",
-  "year": "出版年份或成书年份或空",
+  "year": "出版时间或成书时间（年 / 年月 / 年月日，不确定的位数不补全）或空",
   "publisher": "出版社或出版机构或空",
   "warnings": ["处理提示"]
 }}
@@ -859,7 +860,7 @@ def format_metadata(metadata: DocumentMetadata) -> str:
         [
             f"文献名：{metadata.title}",
             f"著者：{metadata.author}",
-            f"年份：{metadata.year}",
+            f"出版时间：{metadata.year}",
             f"出版社：{metadata.publisher}",
         ]
     )
