@@ -41,11 +41,10 @@ function buildPrintHtml(item) {
 
   const pagesHtml = sortedPages
     .map((page) => {
-      const imageHtml = page.imageDataUrl
-        ? `<figure><img src="${page.imageDataUrl}" alt="第 ${page.pageNumber} 页原始资料" /><figcaption>原始资料：${escapeHtml(page.imageName || `第 ${page.pageNumber} 页`)}</figcaption></figure>`
-        : page.imageUrl
-          ? `<figure><img src="${escapeHtml(page.imageUrl)}" alt="第 ${page.pageNumber} 页原始资料" /><figcaption>原始资料：${escapeHtml(page.imageName || `第 ${page.pageNumber} 页`)}</figcaption></figure>`
-          : `<p class="no-image">本页未放入原始资料图片。</p>`;
+      const imageSource = getPageImageSource(page);
+      const imageHtml = imageSource
+        ? `<figure><img src="${escapeHtml(imageSource)}" alt="第 ${page.pageNumber} 页原始资料" /><figcaption>原始资料：${escapeHtml(page.imageName || `第 ${page.pageNumber} 页`)}</figcaption></figure>`
+        : `<p class="no-image">本页未放入原始资料图片。</p>`;
       const notesHtml = page.notes
         ? `<h3>页备注</h3><div class="notes">${escapeHtml(page.notes)}</div>`
         : "";

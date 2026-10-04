@@ -261,16 +261,32 @@ function isProcessingPageFinalized(page) {
     ["已生成整理稿", "正在生成整理稿", "生成失败"].includes(page.status);
 }
 
+// 页 id → 本次页面会话里的整理尝试次数（刷新页面会重置）
+const finalizeAttempts = new Map();
+// 「生成失败」最多自动重试几次：中途刷新/网络抖动导致的失败不该让整理文本永远空着
+const FINALIZE_MAX_ATTEMPTS = 3;
+
+// 返回是否真的排进了队列。
 function enqueueProcessingFinalize(item, page) {
-  if (!canEditDocument(item) || !page || !isProcessingPageOcrReady(page) || isProcessingPageFinalized(page)) {
-    return;
+  if (!canEditDocument(item) || !page || !isProcessingPageOcrReady(page)) {
+    return false;
   }
 
+  const attempts = finalizeAttempts.get(page.id) || 0;
+  if (isProcessingPageFinalized(page)) {
+    // 只有「生成失败」且没超次数才重试，其余（有整理稿/正在跑）一律不重复排队。
+    if (page.status !== "生成失败" || attempts >= FINALIZE_MAX_ATTEMPTS) {
+      return false;
+    }
+  }
+
+  finalizeAttempts.set(page.id, attempts + 1);
   page.status = "正在生成整理稿";
   const state = getProcessingLlmState(item.id);
   state.queue.push({ item, page });
   state.queue.sort((a, b) => a.page.pageNumber - b.page.pageNumber);
   drainProcessingLlmQueue(item.id);
+  return true;
 }
 
 function drainProcessingLlmQueue(documentId) {
@@ -341,8 +357,7 @@ function enqueueNewProcessingPages(item) {
   if (!canEditDocument(item)) return false;
   let count = 0;
   item.pages.forEach((page) => {
-    if (isProcessingPageOcrReady(page) && !isProcessingPageFinalized(page)) {
-      enqueueProcessingFinalize(item, page);
+    if (isProcessingPageOcrReady(page) && enqueueProcessingFinalize(item, page)) {
       count += 1;
     }
   });

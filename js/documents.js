@@ -724,6 +724,139 @@ function appendDocumentDetailRow(container, entries, className = "") {
   container.append(row);
 }
 
+// 信息栏可编辑字段（创建者、处理进度等由系统维护，不在这里）
+const READER_DETAIL_FIELDS = [
+  { key: "title", label: "文献名", placeholder: "未识别" },
+  { key: "author", label: "作者", placeholder: "未录" },
+  { key: "year", label: "出版时间", placeholder: "如 1936 ／ 1936年10月" },
+  { key: "publisher", label: "出版社", placeholder: "未录" },
+  { key: "tags", label: "标签", placeholder: "以逗号分隔" },
+];
+
+let readerDetailEditing = false;
+let readerDetailEditingDocumentId = "";
+
+// 编辑按钮只对文献创建者显示（canEditDocument 已按 ownerId 判定）。
+function renderReaderDetailActions(item, canEdit, editing) {
+  if (!readerDetailActions) {
+    return;
+  }
+
+  readerDetailActions.innerHTML = "";
+  if (!item || !canEdit) {
+    return;
+  }
+
+  if (editing) {
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "ghost-link";
+    cancelButton.id = "reader-detail-cancel";
+    cancelButton.textContent = "取消";
+    cancelButton.addEventListener("click", () => setReaderDetailEditing(false));
+
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "ghost-link icon-text-button";
+    saveButton.id = "reader-detail-save";
+    saveButton.title = "保存文献信息";
+    saveButton.innerHTML =
+      '<span>保存</span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg>';
+    saveButton.addEventListener("click", () => saveReaderDetailEdits(item.id));
+
+    readerDetailActions.append(cancelButton, saveButton);
+    return;
+  }
+
+  const editButton = document.createElement("button");
+  editButton.type = "button";
+  editButton.className = "ghost-link icon-text-button";
+  editButton.id = "reader-detail-edit";
+  editButton.title = "编辑文献信息";
+  editButton.setAttribute("aria-label", "编辑文献信息");
+  editButton.innerHTML =
+    '<span>修改</span><svg aria-hidden="true" viewBox="0 0 24 24">' +
+    '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>';
+  editButton.addEventListener("click", () => setReaderDetailEditing(true));
+  readerDetailActions.append(editButton);
+}
+
+// 编辑态按与只读态完全相同的顺序与行数渲染，避免切换编辑时行位置/高度跳动。
+const READER_DETAIL_EDIT_ORDER = ["title", "author", "year", "publisher", "creator", "tags"];
+
+function appendReaderDetailEditor(item) {
+  READER_DETAIL_EDIT_ORDER.forEach((key) => {
+    if (key === "creator") {
+      appendDocumentDetailRow(readerDetailNode, [["创建者", item.creator?.username || "创建者信息不可用"]]);
+      return;
+    }
+
+    const field = READER_DETAIL_FIELDS.find((entry) => entry.key === key);
+    if (!field) {
+      return;
+    }
+
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const desc = document.createElement("dd");
+    const input = document.createElement("input");
+
+    term.textContent = field.label;
+    input.type = "text";
+    input.className = "reader-detail-input";
+    input.dataset.detailField = field.key;
+    input.value = item[field.key] || "";
+    input.placeholder = field.placeholder;
+    input.setAttribute("aria-label", field.label);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveReaderDetailEdits(item.id);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        setReaderDetailEditing(false);
+      }
+    });
+
+    desc.append(input);
+    row.append(term, desc);
+    readerDetailNode.append(row);
+  });
+}
+
+function setReaderDetailEditing(editing) {
+  readerDetailEditing = Boolean(editing);
+  renderAll();
+
+  if (readerDetailEditing) {
+    const input = readerDetailNode?.querySelector("input[data-detail-field]");
+    input?.focus();
+    input?.select?.();
+  }
+}
+
+function saveReaderDetailEdits(documentId) {
+  const item = getLiveDocument(documentId);
+  if (!item || !canEditDocument(item)) {
+    setReaderDetailEditing(false);
+    return;
+  }
+
+  readerDetailNode?.querySelectorAll("input[data-detail-field]").forEach((input) => {
+    const key = input.dataset.detailField;
+    if (key) {
+      item[key] = input.value.trim();
+    }
+  });
+
+  item.updatedAt = new Date().toISOString();
+  persist();
+  setReaderDetailEditing(false);
+  if (typeof showUploadToast === "function") {
+    showUploadToast("文献信息已保存");
+  }
+}
+
 function renderReaderSidebar() {
   if (!readerDetailNode) {
     return;
@@ -733,27 +866,42 @@ function renderReaderSidebar() {
   readerDetailNode.innerHTML = "";
 
   if (!item) {
+    readerDetailEditing = false;
+    readerDetailEditingDocumentId = "";
+    renderReaderDetailActions(null, false, false);
     readerDetailNode.append(emptyState("请先在文献库打开一本文献"));
     renderStreamProgress(null);
     return;
   }
 
   const canEdit = canEditDocument(item);
-  const rows = [
-    ["文献名", item.title || "未识别"],
-    ["作者", item.author || "未录"],
-    // 出版时间单独一行：值可以是「1936」「1936年10月」「1936年10月5日」等精度
-    ["出版时间", item.year || "未录"],
-    ["出版社", item.publisher || "未录"],
-  ];
-  rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
-  [
-    ["创建者", item.creator?.username || "创建者信息不可用"],
-    ["标签", item.tags || "未录"],
-    ["处理进度", getProcessingTaskLabel(item)],
-  ]
-    .filter(([, value]) => value !== getProcessingTaskLabel(item))
-    .forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+  // 换到别的文献时退出编辑态，避免把 A 的输入存到 B 上。
+  if (readerDetailEditingDocumentId !== item.id) {
+    readerDetailEditing = false;
+    readerDetailEditingDocumentId = item.id;
+  }
+  const editing = readerDetailEditing && canEdit;
+  renderReaderDetailActions(item, canEdit, editing);
+
+  if (editing) {
+    appendReaderDetailEditor(item);
+  } else {
+    const rows = [
+      ["文献名", item.title || "未识别"],
+      ["作者", item.author || "未录"],
+      // 出版时间单独一行：值可以是「1936」「1936年10月」「1936年10月5日」等精度
+      ["出版时间", item.year || "未录"],
+      ["出版社", item.publisher || "未录"],
+    ];
+    rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+    [
+      ["创建者", item.creator?.username || "创建者信息不可用"],
+      ["标签", item.tags || "未录"],
+      ["处理进度", getProcessingTaskLabel(item)],
+    ]
+      .filter(([, value]) => value !== getProcessingTaskLabel(item))
+      .forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+  }
   const visibilityRow = document.createElement("div");
   visibilityRow.className = "reader-visibility-row";
   const visibilityLabel = document.createElement("dt");
@@ -800,7 +948,7 @@ function getReaderTextLayer(page) {
 }
 
 function renderReaderOriginal(page) {
-  const imageSource = page?.imageDataUrl || page?.imageUrl || "";
+  const imageSource = getPageImageSource(page);
 
   if (!imageSource) {
     readerOriginalPreview.classList.add("is-empty");

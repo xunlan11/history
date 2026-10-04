@@ -106,10 +106,6 @@ form?.addEventListener("submit", async (event) => {
   }
 
   const firstPage = createPage(1);
-  if (file.type.startsWith("image/")) {
-    firstPage.imageDataUrl = URL.createObjectURL(file);
-    firstPage.imageName = file.name;
-  }
   const item = {
     id: newId(),
     title: textValue("title"),

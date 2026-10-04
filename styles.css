@@ -260,6 +260,44 @@ label {
   margin: 0;
 }
 
+.reader-detail-heading {
+  margin-bottom: 8px;
+}
+
+.reader-detail-heading h3 {
+  font-size: 14px;
+}
+
+.reader-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 信息栏编辑态：去掉输入框自带的边框与内边距，让它的高度与只读文字行完全一致
+   （切换编辑态时行高、整个面板高度都不变）；可编辑感用底色 + 内阴影表达，
+   hover/focus 都不影响布局。 */
+#reader-document-detail .reader-detail-input {
+  width: 100%;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  line-height: normal;
+}
+
+#reader-document-detail .reader-detail-input:hover {
+  background: #e6eeea;
+}
+
+#reader-document-detail .reader-detail-input:focus {
+  outline: none;
+  background: #f2f8f5;
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
 #reader-document-detail > div {
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr);

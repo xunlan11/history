@@ -231,6 +231,7 @@ const exportDocumentPdfButton = document.querySelector("#export-document-pdf");
 const editDocumentButton = document.querySelector("#edit-document");
 const editDocumentLabel = document.querySelector("#edit-document-label");
 const readerDetailNode = document.querySelector("#reader-document-detail");
+const readerDetailActions = document.querySelector("#reader-detail-actions");
 const streamStatus = document.querySelector("#stream-status, #reader-stream-status");
 const streamProgress = document.querySelector("#stream-progress, #reader-stream-progress");
 const searchInput = document.querySelector("#search-input");
@@ -1065,6 +1066,22 @@ function summarizeDocumentStatus(item) {
 
 function normalizePageStatus(status) {
   return status || "待整理";
+}
+
+// 页图片地址：优先用服务端地址（跨页面/跨设备都有效）。
+// `blob:` 只在创建它的那个页面里有效，上传页 createObjectURL 出来的地址存进快照后必然失效，
+// 所以遇到 blob: 一律忽略，避免阅读页/导出里出现裂图。
+function getPageImageSource(page) {
+  const imageUrl = String(page?.imageUrl || "").trim();
+  if (imageUrl) {
+    return imageUrl;
+  }
+
+  const dataUrl = String(page?.imageDataUrl || "").trim();
+  if (!dataUrl || dataUrl.startsWith("blob:")) {
+    return "";
+  }
+  return dataUrl;
 }
 
 function hasPageText(page) {
