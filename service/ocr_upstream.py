@@ -206,16 +206,14 @@ def health(force: bool = False) -> dict[str, Any]:
     except OcrUpstreamHttpError as exc:
         # 有 HTTP 响应即说明主机与端口可达：404/405/501 多半只是没实现该探活路径。
         result["reachable"] = exc.status < 500 or exc.status == 501
-        result["latencyMs"] = int((time.perf_counter() - started) * 1000)
         result["detail"] = f"HTTP {exc.status}"
     except OcrUpstreamError as exc:
         result["reachable"] = False
-        result["latencyMs"] = int((time.perf_counter() - started) * 1000)
         result["detail"] = str(exc)
     else:
         result["reachable"] = True
-        result["latencyMs"] = int((time.perf_counter() - started) * 1000)
         result["detail"] = f"HTTP {status}"
+    result["latencyMs"] = int((time.perf_counter() - started) * 1000)
 
     _health_cache.update({"at": now, "value": result})
     return result
@@ -458,18 +456,15 @@ def _paddlex_blocks(pruned: dict[str, Any], lines: list[dict[str, Any]]) -> list
             if not isinstance(item, dict):
                 continue
             label = str(item.get("block_label") or "text")
-            bbox = _coerce_bbox(item.get("block_bbox"))
             order = _int_or_none(item.get("block_order"))
             blocks.append(
-                {
-                    "type": _block_type(label),
-                    "label": label,
-                    "bbox": bbox,
-                    "order": order if order is not None else index + 1,
-                    "confidence": None,
-                    "text": str(item.get("block_content") or "").strip(),
-                    "lines": [],
-                }
+                _make_block(
+                    label,
+                    _coerce_bbox(item.get("block_bbox")),
+                    order if order is not None else index + 1,
+                    None,
+                    str(item.get("block_content") or "").strip(),
+                )
             )
     else:
         boxes = (pruned.get("layout_det_res") or {}).get("boxes")
@@ -478,16 +473,15 @@ def _paddlex_blocks(pruned: dict[str, Any], lines: list[dict[str, Any]]) -> list
                 if not isinstance(box, dict):
                     continue
                 label = str(box.get("label") or "text")
+                order = _int_or_none(box.get("order"))
                 blocks.append(
-                    {
-                        "type": _block_type(label),
-                        "label": label,
-                        "bbox": _coerce_bbox(box.get("coordinate") or box.get("bbox")),
-                        "order": _int_or_none(box.get("order")) if _int_or_none(box.get("order")) is not None else index + 1,
-                        "confidence": _float_or_none(box.get("score")),
-                        "text": "",
-                        "lines": [],
-                    }
+                    _make_block(
+                        label,
+                        _coerce_bbox(box.get("coordinate") or box.get("bbox")),
+                        order if order is not None else index + 1,
+                        _float_or_none(box.get("score")),
+                        "",
+                    )
                 )
 
     if not blocks:
@@ -549,15 +543,14 @@ def _normalize_native(payload: dict[str, Any]) -> dict[str, Any]:
             if not text:
                 text = "\n".join(line["text"] for line in block_lines).strip()
             blocks.append(
-                {
-                    "type": _block_type(label),
-                    "label": label,
-                    "bbox": _coerce_bbox(item.get("bbox")),
-                    "order": order if order is not None else index + 1,
-                    "confidence": _float_or_none(item.get("confidence")),
-                    "text": text,
-                    "lines": block_lines,
-                }
+                _make_block(
+                    label,
+                    _coerce_bbox(item.get("bbox")),
+                    order if order is not None else index + 1,
+                    _float_or_none(item.get("confidence")),
+                    text,
+                    block_lines,
+                )
             )
 
     if not blocks:
@@ -601,6 +594,25 @@ def _block_type(label: str) -> str:
     return BLOCK_TYPE_MAP.get(key, key or "text")
 
 
+def _make_block(
+    label: str,
+    bbox: list[float] | None,
+    order: int,
+    confidence: float | None,
+    text: str,
+    lines: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": _block_type(label),
+        "label": label,
+        "bbox": bbox,
+        "order": order,
+        "confidence": confidence,
+        "text": text,
+        "lines": lines if lines is not None else [],
+    }
+
+
 def _attach_lines(blocks: list[dict[str, Any]], lines: list[dict[str, Any]]) -> None:
     for line in lines:
         bbox = line.get("bbox")
@@ -624,15 +636,14 @@ def _block_from_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not lines:
         return []
     return [
-        {
-            "type": "text",
-            "label": "text",
-            "bbox": _union_bbox([line["bbox"] for line in lines if line.get("bbox")]),
-            "order": 1,
-            "confidence": None,
-            "text": "\n".join(line["text"] for line in lines).strip(),
-            "lines": lines,
-        }
+        _make_block(
+            "text",
+            _union_bbox([line["bbox"] for line in lines if line.get("bbox")]),
+            1,
+            None,
+            "\n".join(line["text"] for line in lines).strip(),
+            lines,
+        )
     ]
 
 
@@ -640,17 +651,7 @@ def _block_from_text(text: str) -> list[dict[str, Any]]:
     text = (text or "").strip()
     if not text:
         return []
-    return [
-        {
-            "type": "text",
-            "label": "text",
-            "bbox": None,
-            "order": 1,
-            "confidence": None,
-            "text": text,
-            "lines": [],
-        }
-    ]
+    return [_make_block("text", None, 1, None, text)]
 
 
 def _union_bbox(boxes: list[Any]) -> list[float] | None:

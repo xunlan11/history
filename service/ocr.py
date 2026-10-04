@@ -181,8 +181,12 @@ def recover_pending_tasks() -> None:
         ).start()
 
 
+def upload_suffix(filename: str | None, fallback: str) -> str:
+    return Path(filename or fallback).suffix or ".bin"
+
+
 async def save_upload(upload: UploadFile, prefix: str | None = None) -> Path:
-    suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
+    suffix = upload_suffix(upload.filename, "upload.bin")
     name = f"{prefix or uuid.uuid4().hex}{suffix}"
     path = STORAGE_DIR / "temp" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +195,7 @@ async def save_upload(upload: UploadFile, prefix: str | None = None) -> Path:
 
 
 async def save_task_source(upload: UploadFile, task_dir: Path) -> Path:
-    suffix = Path(upload.filename or "document.bin").suffix or ".bin"
+    suffix = upload_suffix(upload.filename, "document.bin")
     path = task_dir / f"source{suffix}"
     path.write_bytes(await upload.read())
     return path
@@ -411,11 +415,7 @@ def recognize_image(
         for block in blocks
         if block.get("text") and block.get("type") not in NON_BODY_BLOCK_TYPES
     ).strip()
-    scores = [
-        line["confidence"]
-        for line in lines
-        if isinstance(line.get("confidence"), (int, float))
-    ]
+    scores = confidences(lines)
 
     payload: dict[str, Any] = {
         "text": text,
@@ -444,16 +444,20 @@ def recognize_image(
     return payload
 
 
+def confidences(lines: list[dict[str, Any]]) -> list[float]:
+    return [
+        line["confidence"]
+        for line in lines
+        if isinstance(line.get("confidence"), (int, float))
+    ]
+
+
 def build_warnings(result: dict[str, Any]) -> list[str]:
     """只依据服务端返回的识别结果提示，不做任何自研版面判断。"""
     warnings = [str(item) for item in result.get("warnings") or [] if str(item).strip()]
     blocks = result.get("blocks") or []
     lines = result.get("lines") or []
-    scores = [
-        line.get("confidence")
-        for line in lines
-        if isinstance(line.get("confidence"), (int, float))
-    ]
+    scores = confidences(lines)
 
     if not blocks and not lines:
         warnings.append("服务端没有返回任何文本，请检查原图清晰度或服务端识别配置。")

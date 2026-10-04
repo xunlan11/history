@@ -82,7 +82,6 @@ def extract_file_content(content: bytes, file_name: str, mime_type: str = "") ->
         needs_ocr = not text.strip()
     elif suffix == ".docx":
         text = extract_docx(content)
-        kind = "document"
     elif suffix == ".xlsx":
         text = extract_xlsx(content)
         kind = "spreadsheet"
@@ -94,7 +93,6 @@ def extract_file_content(content: bytes, file_name: str, mime_type: str = "") ->
         kind = "spreadsheet" if suffix == ".ods" else "document"
     elif suffix == ".rtf":
         text = extract_rtf(content)
-        kind = "document"
     else:
         decoded = decode_text(content)
         if suffix in {".html", ".htm"}:
@@ -265,8 +263,7 @@ def extract_xlsx(content: bytes) -> str:
                         values.extend([""] * min(column - current_column, 200))
                     values.append(xlsx_cell_value(cell, main_ns, shared_strings))
                     current_column = max(column + 1, current_column + 1)
-                while values and not values[-1]:
-                    values.pop()
+                trim_trailing_empty(values)
                 if values:
                     rows.append("\t".join(values))
             if rows:
@@ -320,8 +317,7 @@ def extract_open_document(content: bytes, spreadsheet: bool = False) -> str:
         rows: list[str] = []
         for row in table.iter(f"{table_ns}table-row"):
             values = [" ".join(cell.itertext()).strip() for cell in row.findall(f"{table_ns}table-cell")]
-            while values and not values[-1]:
-                values.pop()
+            trim_trailing_empty(values)
             if values:
                 rows.append("\t".join(values))
         if rows:
@@ -376,3 +372,8 @@ def natural_number(value: str) -> int:
 
 def unique_strings(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
+
+
+def trim_trailing_empty(values: list[str]) -> None:
+    while values and not values[-1]:
+        values.pop()

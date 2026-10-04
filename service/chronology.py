@@ -28,16 +28,13 @@ ERA_DEFINITIONS = {
     "民国": (1912, None, "gregorian"),
 }
 
+# 仅收录繁体→简体不一致的年号；康熙/雍正/乾隆/道光/同治繁简同形，
+# 已在 ERA_DEFINITIONS 中，无需别名。
 ERA_ALIASES = {
     "天聰": "天聪",
     "順治": "顺治",
-    "康熙": "康熙",
-    "雍正": "雍正",
-    "乾隆": "乾隆",
     "嘉慶": "嘉庆",
-    "道光": "道光",
     "咸豐": "咸丰",
-    "同治": "同治",
     "光緒": "光绪",
     "宣統": "宣统",
     "民國": "民国",
@@ -169,32 +166,13 @@ def normalize_chronicle_entry(
             calendar_type = calendar_type or "gregorian"
 
     if not structured_year and ganzhi_original:
-        value.update(
-            {
-                "dateGregorian": "",
-                "dateLunar": "",
-                "dateGanzhi": f"{ganzhi_original}年",
-                "dateEra": era_label,
-                "datePrecision": "unknown",
-                "calendarConversionStatus": "unresolved",
-                "dateLabel": pending_label(original or f"{ganzhi_original}年", "公历年份待核"),
-            }
-        )
+        mark_unresolved(value, era_label, f"{ganzhi_original}年", original or f"{ganzhi_original}年", "公历年份待核")
         warnings.append(f"{ganzhi_original}年每六十年重复，缺少时代锚点，不能唯一换算。")
         return value, warnings
 
     if not structured_year:
-        value.update(
-            {
-                "dateGregorian": "",
-                "dateLunar": "",
-                "dateGanzhi": f"{ganzhi_original}年" if ganzhi_original else "",
-                "dateEra": era_label,
-                "datePrecision": "unknown",
-                "calendarConversionStatus": "unresolved",
-                "dateLabel": pending_label(original or "日期待核", "公历待核"),
-            }
-        )
+        # 走到这里说明 ganzhi_original 为空（非空时上一个分支已返回）。
+        mark_unresolved(value, era_label, "", original or "日期待核", "公历待核")
         return value, warnings
 
     if calendar_type == "lunar":
@@ -331,7 +309,7 @@ def extract_absolute_date(text: str) -> tuple[int, int, int] | None:
         return None
     return (
         parse_chinese_number(match.group("year")),
-        parse_month(match.group("month")),
+        parse_chinese_number(match.group("month")),
         parse_chinese_number(match.group("day")),
     )
 
@@ -346,7 +324,7 @@ def extract_lunar_date(value: dict[str, Any], text: str) -> tuple[int, int, bool
         text,
     )
     if match:
-        month = parse_month(match.group("month")) or month
+        month = parse_chinese_number(match.group("month")) or month
         day = parse_chinese_number(match.group("day")) or day
         leap = bool(match.group("leap")) or leap
     return month, day, leap
@@ -395,17 +373,6 @@ def parse_chinese_number(value: Any) -> int:
         else:
             return 0
     return total + current
-
-
-def parse_month(value: Any) -> int:
-    text = string_value(value).strip()
-    if text == "正":
-        return 1
-    if text == "冬":
-        return 11
-    if text in {"腊", "臘"}:
-        return 12
-    return parse_chinese_number(text)
 
 
 def parse_iso_date(value: str) -> str:
@@ -489,6 +456,26 @@ def format_gregorian_label(value: str) -> str:
 
 def pending_label(original: str, suffix: str) -> str:
     return f"{original}（{suffix}）" if suffix not in original else original
+
+
+def mark_unresolved(
+    value: dict[str, Any],
+    era_label: str,
+    ganzhi_label: str,
+    label_source: str,
+    label_suffix: str,
+) -> None:
+    value.update(
+        {
+            "dateGregorian": "",
+            "dateLunar": "",
+            "dateGanzhi": ganzhi_label,
+            "dateEra": era_label,
+            "datePrecision": "unknown",
+            "calendarConversionStatus": "unresolved",
+            "dateLabel": pending_label(label_source, label_suffix),
+        }
+    )
 
 
 def chronicle_sort_key(entry: dict[str, Any], original_index: int) -> tuple[int, int, int, int, int]:

@@ -21,6 +21,21 @@ def now_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+def database_size() -> int:
+    return data_service.DB_PATH.stat().st_size if data_service.DB_PATH.exists() else 0
+
+
+def ensure_schema_version(value: object, label: str) -> bool:
+    if value == data_service.SCHEMA_VERSION:
+        return True
+
+    print(
+        f"{label} schema {value} does not match current schema {data_service.SCHEMA_VERSION}.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def backup_database(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(source) as source_connection:
@@ -59,7 +74,7 @@ def command_backup(args: argparse.Namespace) -> int:
         snapshot_db = Path(tmp_dir) / "app.db"
         backup_database(db_path, snapshot_db)
         manifest = {
-            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "createdAt": data_service.now_iso(),
             "database": str(db_path),
             "files": str(data_service.FILE_STORAGE_DIR),
             "schemaVersion": data_service.SCHEMA_VERSION,
@@ -91,12 +106,7 @@ def command_restore(args: argparse.Namespace) -> int:
                 print("Archive is missing manifest.json", file=sys.stderr)
                 return 1
             manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-            if manifest.get("schemaVersion") != data_service.SCHEMA_VERSION:
-                print(
-                    f"Backup schema {manifest.get('schemaVersion')} does not match current schema "
-                    f"{data_service.SCHEMA_VERSION}.",
-                    file=sys.stderr,
-                )
+            if not ensure_schema_version(manifest.get("schemaVersion"), "Backup"):
                 return 1
             safe_extract(archive, tmp_path)
 
@@ -129,13 +139,12 @@ def command_check(_: argparse.Namespace) -> int:
 
 
 def command_vacuum(_: argparse.Namespace) -> int:
-    data_service.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    before = data_service.DB_PATH.stat().st_size if data_service.DB_PATH.exists() else 0
+    before = database_size()
     with data_service.database() as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         connection.execute("VACUUM")
         connection.execute("PRAGMA optimize")
-    after = data_service.DB_PATH.stat().st_size if data_service.DB_PATH.exists() else 0
+    after = database_size()
     print(json.dumps({"database": str(data_service.DB_PATH), "beforeBytes": before, "afterBytes": after}, indent=2))
     return 0
 
@@ -145,7 +154,7 @@ def command_export_json(args: argparse.Namespace) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     with data_service.database() as connection:
         payload = data_service.build_snapshot(connection)
-        payload["exportedAt"] = datetime.now(timezone.utc).isoformat()
+        payload["exportedAt"] = data_service.now_iso()
 
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(output)
@@ -155,12 +164,7 @@ def command_export_json(args: argparse.Namespace) -> int:
 def command_import_json(args: argparse.Namespace) -> int:
     input_path = Path(args.input).resolve()
     payload = json.loads(input_path.read_text(encoding="utf-8"))
-    if payload.get("schemaVersion") != data_service.SCHEMA_VERSION:
-        print(
-            f"JSON schema {payload.get('schemaVersion')} does not match current schema "
-            f"{data_service.SCHEMA_VERSION}.",
-            file=sys.stderr,
-        )
+    if not ensure_schema_version(payload.get("schemaVersion"), "JSON"):
         return 1
     timestamp = data_service.now_iso()
     with data_service.database() as connection:
@@ -186,11 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--yes", action="store_true", help="Confirm overwriting the current database and files.")
     restore.set_defaults(func=command_restore)
 
-    check = subparsers.add_parser("check", help="Run SQLite and file integrity checks.")
-    check.set_defaults(func=command_check)
+    subparsers.add_parser("check", help="Run SQLite and file integrity checks.").set_defaults(func=command_check)
 
-    vacuum = subparsers.add_parser("vacuum", help="Checkpoint WAL, VACUUM, and optimize SQLite.")
-    vacuum.set_defaults(func=command_vacuum)
+    subparsers.add_parser("vacuum", help="Checkpoint WAL, VACUUM, and optimize SQLite.").set_defaults(func=command_vacuum)
 
     export_json = subparsers.add_parser("export-json", help="Export active documents and conversations as JSON.")
     export_json.add_argument("output", help="Output JSON path.")

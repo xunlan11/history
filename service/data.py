@@ -281,6 +281,34 @@ def purge_sessions_for(user_id: int) -> None:
         SESSIONS.pop(token, None)
 
 
+def create_session(user: dict[str, Any]) -> str:
+    token = os.urandom(24).hex()
+    SESSIONS[token] = user
+    return token
+
+
+def require_admin(user: dict[str, Any]) -> None:
+    if not user["isAdmin"]:
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+
+def ensure_admin_remains(connection: sqlite3.Connection) -> None:
+    admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
+    if admin_count <= 1:
+        raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
+
+
+def insert_user(connection: sqlite3.Connection, username: str, password: str, is_admin: bool) -> dict[str, Any]:
+    connection.execute("BEGIN IMMEDIATE")
+    user_id = next_available_user_id(connection)
+    with connection:
+        connection.execute(
+            "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
+            (user_id, username, hash_password(password), int(is_admin), now_iso()),
+        )
+    return {"id": user_id, "username": username, "isAdmin": bool(is_admin)}
+
+
 def get_sync_version(connection: sqlite3.Connection) -> int:
     row = connection.execute(
         "SELECT value FROM app_meta WHERE key = 'sync_version'"
@@ -1206,17 +1234,10 @@ def register(credentials: Credentials) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="密码至少需要6个字符")
     with database() as connection:
         try:
-            connection.execute("BEGIN IMMEDIATE")
-            user_id = next_available_user_id(connection)
-            with connection:
-                connection.execute(
-                    "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
-                    (user_id, username, hash_password(credentials.password), 0, now_iso()),
-                )
-                user = {"id": user_id, "username": username, "isAdmin": False}
+            user = insert_user(connection, username, credentials.password, False)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="账号已存在") from exc
-    token = os.urandom(24).hex(); SESSIONS[token] = user
+    token = create_session(user)
     return {"token": token, "user": user}
 
 @app.post("/api/auth/login")
@@ -1226,7 +1247,7 @@ def login(credentials: Credentials) -> dict[str, Any]:
     if not row:
         raise HTTPException(status_code=401, detail="账号或密码错误")
     user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])}
-    token = os.urandom(24).hex(); SESSIONS[token] = user
+    token = create_session(user)
     return {"token": token, "user": user}
 
 @app.get("/api/auth/me")
@@ -1241,40 +1262,31 @@ def logout(authorization: str | None = Header(default=None)) -> dict[str, str]:
 @app.get("/api/admin/users")
 def list_users(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
     user = current_user(authorization)
-    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    require_admin(user)
     with database() as connection:
         return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "createdAt": r["created_at"]} for r in connection.execute("SELECT id,username,is_admin,created_at FROM users ORDER BY created_at ASC, id ASC").fetchall()]
 
 @app.post("/api/admin/users")
 def create_user(payload: UserCreate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     admin = current_user(authorization)
-    if not admin["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    require_admin(admin)
     try:
         with database() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            user_id = next_available_user_id(connection)
-            with connection:
-                connection.execute(
-                    "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
-                    (user_id, payload.username.strip(), hash_password(payload.password), int(payload.isAdmin), now_iso()),
-                )
-                return {"id": user_id, "username": payload.username.strip(), "isAdmin": payload.isAdmin}
+            return insert_user(connection, payload.username.strip(), payload.password, payload.isAdmin)
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="账号已存在") from exc
 
 @app.delete("/api/admin/users/{user_id}")
 def delete_user(user_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
     user = current_user(authorization)
-    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    require_admin(user)
     if user_id == user["id"]: raise HTTPException(status_code=400, detail="不能删除当前管理员")
     with database() as connection:
         row = connection.execute("SELECT id, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="用户不存在")
         if row["is_admin"]:
-            admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
-            if admin_count <= 1:
-                raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
+            ensure_admin_remains(connection)
         with connection:
             connection.execute("DELETE FROM users WHERE id=?", (user_id,))
     purge_sessions_for(user_id)
@@ -1283,7 +1295,7 @@ def delete_user(user_id: int, authorization: str | None = Header(default=None)) 
 @app.patch("/api/admin/users/{user_id}")
 def set_user_admin(user_id: int, payload: UserAdminUpdate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = current_user(authorization)
-    if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
+    require_admin(user)
     with database() as connection:
         row = connection.execute("SELECT id, username, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
         if not row:
@@ -1291,9 +1303,7 @@ def set_user_admin(user_id: int, payload: UserAdminUpdate, authorization: str | 
         if row["id"] == user["id"]:
             raise HTTPException(status_code=400, detail="不能修改当前账户的管理员状态")
         if row["is_admin"] and not payload.isAdmin:
-            admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
-            if admin_count <= 1:
-                raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
+            ensure_admin_remains(connection)
         with connection:
             connection.execute("UPDATE users SET is_admin=? WHERE id=?", (int(payload.isAdmin), user_id))
     purge_sessions_for(user_id)

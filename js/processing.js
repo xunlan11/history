@@ -119,7 +119,7 @@ function drainProcessingLlmQueue(documentId) {
     const next = state.queue.shift();
     state.inFlight += 1;
     state.attempted += 1;
-    setStreamSubProgress(next.page.pageNumber, "大模型整理中", 65);
+    startLlmPageProgress(next.item, next.page.pageNumber);
     renderStreamProgress(next.item);
     finalizeProcessingPage(next.item, next.page).finally(() => {
       state.inFlight -= 1;
@@ -297,28 +297,6 @@ async function submitProcessingTask(item, file) {
     persist();
     renderAll();
   }
-}
-
-async function refreshProcessingTask() {
-  const item = getSelectedDocument();
-
-  if (!item || !canEditDocument(item)) {
-    return;
-  }
-
-  const taskId = item.processingTask?.remoteTaskId;
-  if (!taskId) {
-    if (item.fileUrl) {
-      await resumeMissingProcessingTask(item);
-      return;
-    }
-    if (streamStatus) {
-      streamStatus.textContent = "等待处理任务提交...";
-    }
-    return;
-  }
-
-  await refreshProcessingDocument(item);
 }
 
 async function refreshProcessingDocument(item, options = {}) {
@@ -596,14 +574,23 @@ function buildLlmMetadata(item) {
     publisher: item.publisher || "",
   };
 }
-// 单一逐页流式处理进度：主进度按已生成整理稿页数推进，
-// 子进度显示当前正在 OCR 或由大模型整理的页面。
+// 逐页流式处理进度：同一行内左侧为主进度条（识别 / 整理两条按页数叠加显示，
+// 识别必然领先于整理，所以两种颜色不会互相遮挡），右侧两个进度环分别表示
+// 识别服务与整理服务当前单页的处理进度。
 
 let streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
+let streamLlmRingPercent = 0;
+let streamLlmRingTimer = null;
+let streamLlmRingItem = null;
 let streamProgressMainFill;
 let streamProgressSubFill;
 let streamProgressOcrPages;
 let streamProgressLlmPages;
+let streamProgressTotalNodes;
+let streamOcrMarker;
+let streamLlmMarker;
+let streamOcrRingFill;
+let streamLlmRingFill;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
@@ -612,20 +599,49 @@ function setupCombinedProgress() {
   streamProgressSubFill = streamProgress.querySelector(".progress-fill-llm");
   streamProgressOcrPages = streamProgress.querySelector(".progress-ocr-pages");
   streamProgressLlmPages = streamProgress.querySelector(".progress-llm-pages");
+  streamProgressTotalNodes = streamProgress.querySelectorAll(".progress-total-pages");
+  streamOcrMarker = streamProgress.querySelector(".progress-marker-ocr");
+  streamLlmMarker = streamProgress.querySelector(".progress-marker-llm");
+  streamOcrRingFill = streamProgress.querySelector(".progress-ring-fill-ocr");
+  streamLlmRingFill = streamProgress.querySelector(".progress-ring-fill-llm");
 }
 
 setupCombinedProgress();
 
-function setStreamSubProgress(pageNumber, text, percent) {
+function stopLlmRingTimer() {
+  if (streamLlmRingTimer) {
+    window.clearInterval(streamLlmRingTimer);
+    streamLlmRingTimer = null;
+  }
+}
+
+// 整理接口是一次性返回、没有逐段进度，这里在单页处理期间用渐进逼近模拟实时进度，
+// 接口返回后由 clearStreamSubProgress() 直接置满。
+function startLlmPageProgress(item, pageNumber) {
   streamSubState = {
     pageNumber,
-    text,
-    percent: clampPercent(percent),
+    text: "大模型整理中",
+    percent: 8,
     active: true,
   };
+  streamLlmRingPercent = 8;
+  streamLlmRingItem = item;
+  stopLlmRingTimer();
+  streamLlmRingTimer = window.setInterval(() => {
+    if (!streamSubState.active) {
+      return;
+    }
+    streamLlmRingPercent = clampPercent(
+      streamLlmRingPercent + Math.max(1, (94 - streamLlmRingPercent) * 0.08),
+    );
+    streamSubState.percent = streamLlmRingPercent;
+    renderStreamProgress(streamLlmRingItem);
+  }, 450);
 }
 
 function clearStreamSubProgress() {
+  stopLlmRingTimer();
+  streamLlmRingPercent = streamLlmRingPercent > 0 ? 100 : 0;
   streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
 }
 
@@ -637,24 +653,36 @@ function clampPercent(value) {
   return Math.min(100, Math.max(0, number));
 }
 
-function setProgressRow(labelNode, fillNode, valueNode, label, percent, valueText) {
-  if (labelNode) {
-    labelNode.textContent = label;
+function setRingProgress(fillNode, percent) {
+  if (!fillNode) {
+    return;
   }
 
-  if (fillNode) {
-    fillNode.style.width = `${clampPercent(percent)}%`;
+  const length = typeof fillNode.getTotalLength === "function"
+    ? fillNode.getTotalLength()
+    : 97.39;
+  const clamped = clampPercent(percent);
+  fillNode.style.strokeDasharray = `${length}`;
+  fillNode.style.strokeDashoffset = `${length * (1 - clamped / 100)}`;
+}
+
+// 页数标签跟随对应进度条的推进位置，显示在进度条下方。
+function setMarkerPosition(node, percent) {
+  if (!node) {
+    return;
   }
 
-  if (valueNode) {
-    valueNode.textContent = valueText;
-  }
+  const clamped = Math.min(88, Math.max(4, clampPercent(percent)));
+  node.style.left = `${clamped}%`;
 }
 
 function renderStreamProgress(item) {
   const task = item?.processingTask;
 
   if (!item || !task) {
+    stopLlmRingTimer();
+    streamLlmRingPercent = 0;
+    streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
     streamProgress?.classList.add("hidden");
     return;
   }
@@ -663,41 +691,31 @@ function renderStreamProgress(item) {
   const finalized = countFinalizedPages(item);
   const ocrDone = Math.min(total, Number(task.completedPages) || 0);
   const finished = task.status === "已完成" || task.status === "已回填";
-  const failed = task.status === "处理失败" || task.status === "提交失败";
-  const mainPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
-  const sub = streamSubState.active
-    ? {
-        label: `第 ${streamSubState.pageNumber} 页`,
-        percent: streamSubState.percent,
-        text: streamSubState.text,
-      }
-    : {
-        label: `第 ${task.currentPage || streamSubState.pageNumber || 0} 页`,
-        percent: task.currentPageProgress || streamSubState.percent || 0,
-        text: task.currentPageStage || streamSubState.text || (finished ? "已完成" : failed ? "失败" : "等待"),
-      };
-
-  streamProgress?.classList.remove("hidden");
-  setProgressRow(
-    streamMainLabel,
-    streamMainFill,
-    streamMainValue,
-    "逐页整理进度",
-    mainPercent,
-    `${finalized} / ${total} 页`,
-  );
-  setProgressRow(
-    streamSubLabel,
-    streamSubFill,
-    streamSubValue,
-    sub.label,
-    sub.percent,
-    sub.text,
-  );
+  const ocrRunning = ["提交中", "排队中", "处理中", "准备中"].includes(task.status);
   const ocrPercent = total > 0 ? (ocrDone / total) * 100 : finished ? 100 : 0;
   const llmPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
-  if (streamProgressMainFill) streamProgressMainFill.style.width = `${ocrPercent}%`;
-  if (streamProgressSubFill) streamProgressSubFill.style.width = `${llmPercent}%`;
+
+  // 识别环：识别进行中时直接使用后端上报的单页进度，识别完成后置满。
+  const ocrRingPercent = finished
+    ? 100
+    : ocrRunning
+      ? Number(task.currentPageProgress) || 0
+      : ocrPercent;
+  // 整理环：正在整理的页面使用模拟进度，空闲时保留上一次结果。
+  const llmRingPercent = streamSubState.active
+    ? streamSubState.percent
+    : streamLlmRingPercent;
+
+  streamProgress?.classList.remove("hidden");
+  if (streamProgressMainFill) streamProgressMainFill.style.width = `${clampPercent(ocrPercent)}%`;
+  if (streamProgressSubFill) streamProgressSubFill.style.width = `${clampPercent(llmPercent)}%`;
   if (streamProgressOcrPages) streamProgressOcrPages.textContent = `${ocrDone}`;
   if (streamProgressLlmPages) streamProgressLlmPages.textContent = `${finalized}`;
+  streamProgressTotalNodes?.forEach((node) => {
+    node.textContent = `${total}`;
+  });
+  setMarkerPosition(streamLlmMarker, llmPercent);
+  setMarkerPosition(streamOcrMarker, ocrPercent);
+  setRingProgress(streamOcrRingFill, ocrRingPercent);
+  setRingProgress(streamLlmRingFill, llmRingPercent);
 }

@@ -37,22 +37,33 @@
                   <div class="progress-stack hidden" id="reader-stream-progress">
                     <div class="progress-header">
                       <span class="progress-title">处理进度</span>
-                      <button class="icon-button refresh-stream-button hidden" id="refresh-stream" type="button" aria-label="刷新处理结果" title="刷新处理结果">
-                        <svg aria-hidden="true" viewBox="0 0 24 24">
-                          <path d="M20 11a8.1 8.1 0 0 0-14.7-4L3 10"></path>
-                          <path d="M3 5v5h5"></path>
-                          <path d="M4 13a8.1 8.1 0 0 0 14.7 4L21 14"></path>
-                          <path d="M21 19v-5h-5"></path>
-                        </svg>
-                      </button>
+                      <div class="progress-header-tools">
+                        <div class="progress-ring">
+                          <svg viewBox="0 0 36 36" aria-hidden="true">
+                            <circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle>
+                            <circle class="progress-ring-fill progress-ring-fill-ocr" cx="18" cy="18" r="15.5"></circle>
+                          </svg>
+                          <span class="progress-ring-label">OCR</span>
+                        </div>
+                        <div class="progress-ring">
+                          <svg viewBox="0 0 36 36" aria-hidden="true">
+                            <circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle>
+                            <circle class="progress-ring-fill progress-ring-fill-llm" cx="18" cy="18" r="15.5"></circle>
+                          </svg>
+                          <span class="progress-ring-label">LLM</span>
+                        </div>
+                      </div>
                     </div>
-                    <div class="progress-combined-track">
-                      <div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-ocr"></div><div class="progress-fill progress-fill-llm"></div></div>
-                      <span class="progress-ocr-pages"></span>
-                    </div>
-                    <div class="progress-combined-track">
-                      <div class="progress-track progress-track-combined"><div class="progress-fill progress-fill-llm"></div><div class="progress-fill progress-fill-ocr"></div></div>
-                      <span class="progress-llm-pages"></span>
+                    <div class="progress-body">
+                      <div class="progress-track progress-track-main">
+                        <div class="progress-fill progress-fill-ocr"></div>
+                        <div class="progress-fill progress-fill-llm"></div>
+                      </div>
+                      <div class="progress-markers">
+                        <span class="progress-marker progress-marker-ocr"><b class="progress-ocr-pages">0</b></span>
+                        <span class="progress-marker progress-marker-llm"><b class="progress-llm-pages">0</b></span>
+                        <span class="progress-marker progress-marker-total"><b class="progress-total-pages">0</b></span>
+                      </div>
                     </div>
                   </div>
                 </div>

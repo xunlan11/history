@@ -231,7 +231,6 @@ const exportDocumentPdfButton = document.querySelector("#export-document-pdf");
 const editDocumentButton = document.querySelector("#edit-document");
 const editDocumentLabel = document.querySelector("#edit-document-label");
 const readerDetailNode = document.querySelector("#reader-document-detail");
-const readerRefreshButton = document.querySelector("#refresh-stream");
 const streamStatus = document.querySelector("#stream-status, #reader-stream-status");
 const streamProgress = document.querySelector("#stream-progress, #reader-stream-progress");
 const searchInput = document.querySelector("#search-input");
@@ -641,10 +640,17 @@ async function archiveDocumentSource(item, file) {
     item.fileHash = result.file.sha256;
     item.fileMimeType = result.file.mimeType;
     item.fileSize = result.file.size;
+    if (item.pages?.[0] && result.file.mimeType?.startsWith("image/")) {
+      item.pages[0].imageUrl = result.file.url;
+      item.pages[0].imageName = item.fileName || file.name;
+    }
     item.updatedAt = new Date().toISOString();
     syncCursor = String(result.syncCursor || syncCursor);
     localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
     persist();
+    if (typeof renderAll === "function") {
+      renderAll();
+    }
     return true;
   } catch (error) {
     return false;

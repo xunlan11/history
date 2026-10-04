@@ -143,4 +143,3 @@ If the tunnel is active but health checks fail:
 - `fetch-assets.py` downloads the remote OCR/Ollama assets when rebuilding the
   remote host.
 - `test-layout-parsing.py` and `test-llm.py` are optional smoke tests.
-- `scripts/check_ocr_upstream.py` is the data-host OCR connectivity check.

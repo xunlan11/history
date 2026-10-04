@@ -188,14 +188,21 @@ def switch_current_link(release_dir: Path) -> None:
     os.replace(temp_link, CURRENT_LINK)
 
 
+def unconfigured_status(message: str, last_error: str = "") -> dict[str, Any]:
+    status = {
+        "configured": False,
+        "updating": STATE["updating"],
+        "updateAvailable": False,
+        "message": message,
+    }
+    if last_error:
+        status["lastError"] = last_error
+    return status
+
+
 def build_status() -> dict[str, Any]:
     if not is_git_repo():
-        return {
-            "configured": False,
-            "updating": STATE["updating"],
-            "updateAvailable": False,
-            "message": "当前目录不是 Git 仓库",
-        }
+        return unconfigured_status("当前目录不是 Git 仓库")
 
     try:
         # 不联网：以服务器本地 git 仓库 HEAD 为最新代码（管理员已手动 git pull 同步）。
@@ -214,13 +221,7 @@ def build_status() -> dict[str, Any]:
             "lastError": STATE["lastError"],
         }
     except Exception as exc:  # noqa: BLE001
-        return {
-            "configured": False,
-            "updating": STATE["updating"],
-            "updateAvailable": False,
-            "message": str(exc),
-            "lastError": str(exc),
-        }
+        return unconfigured_status(str(exc), last_error=str(exc))
 
 
 def update_project() -> None:

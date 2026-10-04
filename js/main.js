@@ -106,6 +106,10 @@ form?.addEventListener("submit", async (event) => {
   }
 
   const firstPage = createPage(1);
+  if (file.type.startsWith("image/")) {
+    firstPage.imageDataUrl = URL.createObjectURL(file);
+    firstPage.imageName = file.name;
+  }
   const item = {
     id: newId(),
     title: textValue("title"),
@@ -138,12 +142,12 @@ form?.addEventListener("submit", async (event) => {
   form.reset();
   closeDocumentForm();
   renderAll();
+  setView("reader");
   await Promise.allSettled([
     archiveDocumentSource(item, file),
     detectDocumentCover(item, file),
     submitProcessingTask(item, file),
   ]);
-  setView("reader");
 });
 
 readerPrevPageButton?.addEventListener("click", () => {
@@ -194,7 +198,6 @@ editDocumentButton?.addEventListener("click", () => {
   setReaderEditing(true);
 });
 
-document.querySelector("#refresh-stream")?.addEventListener("click", refreshProcessingTask);
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
 const exportPdfButton = document.querySelector("#export-pdf");
 if (exportPdfButton) {

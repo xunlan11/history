@@ -720,14 +720,12 @@ function renderReaderSidebar() {
   readerDetailNode.innerHTML = "";
 
   if (!item) {
-    readerRefreshButton.classList.add("hidden");
     readerDetailNode.append(emptyState("请先在文献库打开一本文献"));
     renderStreamProgress(null);
     return;
   }
 
   const canEdit = canEditDocument(item);
-  readerRefreshButton.classList.toggle("hidden", !canEdit || !item.processingTask);
   const rows = [
     ["文献名", item.title || "未识别"],
     ["作者", item.author || "未录"],
