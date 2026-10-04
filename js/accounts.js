@@ -56,7 +56,10 @@
     const q = query.trim().toLowerCase();
     let result = list.slice();
     if (q) result = result.filter((u) => String(u.username).toLowerCase().includes(q));
-    return result.sort((a, b) => Number(a.id) - Number(b.id));
+    return result.sort((a, b) => {
+      const createdComparison = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      return createdComparison || Number(a.id) - Number(b.id);
+    });
   }
 
   function rowHtml(user) {

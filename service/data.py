@@ -80,6 +80,20 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def next_available_user_id(connection: sqlite3.Connection) -> int:
+    """Return the smallest positive user ID not currently assigned."""
+    rows = connection.execute("SELECT id FROM users ORDER BY id").fetchall()
+    candidate = 1
+    for row in rows:
+        user_id = int(row["id"])
+        if user_id < candidate:
+            continue
+        if user_id > candidate:
+            break
+        candidate += 1
+    return candidate
+
+
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
@@ -1192,9 +1206,14 @@ def register(credentials: Credentials) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="密码至少需要6个字符")
     with database() as connection:
         try:
+            connection.execute("BEGIN IMMEDIATE")
+            user_id = next_available_user_id(connection)
             with connection:
-                cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,0,?)", (username, hash_password(credentials.password), now_iso()))
-                user = {"id": cursor.lastrowid, "username": username, "isAdmin": False}
+                connection.execute(
+                    "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
+                    (user_id, username, hash_password(credentials.password), 0, now_iso()),
+                )
+                user = {"id": user_id, "username": username, "isAdmin": False}
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="账号已存在") from exc
     token = os.urandom(24).hex(); SESSIONS[token] = user
@@ -1224,7 +1243,7 @@ def list_users(authorization: str | None = Header(default=None)) -> list[dict[st
     user = current_user(authorization)
     if not user["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
     with database() as connection:
-        return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "createdAt": r["created_at"]} for r in connection.execute("SELECT id,username,is_admin,created_at FROM users ORDER BY id").fetchall()]
+        return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "createdAt": r["created_at"]} for r in connection.execute("SELECT id,username,is_admin,created_at FROM users ORDER BY created_at ASC, id ASC").fetchall()]
 
 @app.post("/api/admin/users")
 def create_user(payload: UserCreate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -1232,9 +1251,14 @@ def create_user(payload: UserCreate, authorization: str | None = Header(default=
     if not admin["isAdmin"]: raise HTTPException(status_code=403, detail="需要管理员权限")
     try:
         with database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            user_id = next_available_user_id(connection)
             with connection:
-                cursor = connection.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,?,?)", (payload.username.strip(), hash_password(payload.password), int(payload.isAdmin), now_iso()))
-                return {"id": cursor.lastrowid, "username": payload.username.strip(), "isAdmin": payload.isAdmin}
+                connection.execute(
+                    "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
+                    (user_id, payload.username.strip(), hash_password(payload.password), int(payload.isAdmin), now_iso()),
+                )
+                return {"id": user_id, "username": payload.username.strip(), "isAdmin": payload.isAdmin}
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="账号已存在") from exc
 

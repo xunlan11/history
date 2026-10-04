@@ -611,6 +611,10 @@ async function initializeApplication() {
 function resumePendingProcessingTasks() {
   documents.forEach((item) => {
     if (!canEditDocument(item)) return;
+    if (!item.processingTask?.remoteTaskId) {
+      resumeMissingProcessingTask(item);
+      return;
+    }
     if (isProcessingTaskPending(item)) {
       startProcessingPolling(item);
       return;

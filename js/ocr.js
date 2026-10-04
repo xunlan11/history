@@ -120,6 +120,7 @@ const PROCESSING_LLM_MAX_CONCURRENT = 1;
 const processingPollTimers = new Map();
 const processingLlmStates = new Map();
 const metadataAutoTriggered = new Set();
+const processingRecoveryInFlight = new Set();
 
 function isProcessingTaskPending(item) {
   const task = item?.processingTask;
@@ -135,6 +136,43 @@ function stopProcessingPolling(documentId) {
   if (timer) {
     window.clearInterval(timer);
     processingPollTimers.delete(documentId);
+  }
+}
+
+async function resumeMissingProcessingTask(item) {
+  const task = item?.processingTask;
+  if (
+    !canEditDocument(item) ||
+    !task ||
+    task.remoteTaskId ||
+    !["提交中", "提交逐页处理中"].includes(item.status || task.status) ||
+    !item.fileUrl ||
+    processingRecoveryInFlight.has(item.id)
+  ) {
+    return;
+  }
+
+  processingRecoveryInFlight.add(item.id);
+  try {
+    const response = await fetch(item.fileUrl, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`原始文献下载失败：${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const file = new File([blob], item.fileName || task.sourceFileName || "document", {
+      type: item.fileMimeType || blob.type || "application/octet-stream",
+    });
+    await submitProcessingTask(item, file);
+  } catch (error) {
+    task.status = "提交失败";
+    task.message = error?.message || "无法恢复逐页处理任务。";
+    item.status = "逐页处理提交失败";
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  } finally {
+    processingRecoveryInFlight.delete(item.id);
   }
 }
 
