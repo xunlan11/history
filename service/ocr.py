@@ -3,7 +3,7 @@
 数据端只做三件事：接收上传、拆页与任务编排、把结果落盘并回给前端。
 **不加载任何识别模型，也没有自研的图像预处理与版面分析**——版面结构、阅读顺序、
 表格与图片区域一律采用服务端（数据处理服务器）的返回结果。
-服务端契约与部署方式见 `docs/ocr-upstream.md`，调用实现见 `service/ocr_upstream.py`。
+服务端契约与部署方式见 `deploy/README.md`，调用实现见 `service/ocr_upstream.py`。
 
 对外接口（前端契约，Nginx 前缀由 `root/nginx/conf.d/*.conf` 剥离）：
 

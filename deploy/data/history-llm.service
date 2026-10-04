@@ -9,10 +9,7 @@ WorkingDirectory=/home/ubuntu/Codefield/history
 Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LLM_PROVIDER=ollama
 Environment=LLM_MODEL=qwen3:8b
-# 大模型只在服务端（Ollama 的 OpenAI 兼容面）；11435 = 服务端 11434 经反向隧道反绑到本机回环。
-# 数据端不跑任何本地模型服务（本地 ollama 已于 2026-09-16 清理），没有本地回退分支。
 Environment=LLM_API_BASE=http://127.0.0.1:11435/v1
-# 默认 180s：8B 模型在 CPU 上约 4.9 tok/s，一页动辄 60～110 s，长页必超时。
 Environment=LLM_TIMEOUT_SECONDS=600
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
 Restart=always

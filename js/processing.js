@@ -1,119 +1,3 @@
-// 识别能力由数据处理服务器（服务端）提供；这里把 503 detail 翻成人能看懂的提示。
-async function describeOcrFailure(response) {
-  let detail = null;
-  try {
-    const payload = await response.json();
-    detail = payload ? payload.detail : null;
-  } catch (error) {
-    detail = null;
-  }
-
-  if (detail && typeof detail === "object" && detail.message) {
-    return detail.message;
-  }
-  if (typeof detail === "string" && detail.trim()) {
-    return detail;
-  }
-  if (response.status === 503) {
-    return "识别能力尚未部署：请在数据处理服务器上部署 OCR 服务端后再试。";
-  }
-  return `识别服务返回 ${response.status}。`;
-}
-
-async function requestPageOcr(page) {
-  const imageBlob = await getPageImageBlob(page);
-  const body = new FormData();
-  body.append("image", imageBlob, page.imageName || `page-${page.pageNumber}.png`);
-  body.append("pageNumber", String(page.pageNumber));
-
-  const response = await fetch(OCR_SERVICE_URL, {
-    method: "POST",
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(await describeOcrFailure(response));
-  }
-
-  return response.json();
-}
-
-async function getPageImageBlob(page) {
-  if (page.imageDataUrl) {
-    return dataUrlToBlob(page.imageDataUrl);
-  }
-
-  if (!page.imageUrl) {
-    throw new Error("Page image is missing");
-  }
-
-  const response = await fetch(page.imageUrl, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Page image fetch failed: ${response.status}`);
-  }
-
-  return response.blob();
-}
-
-async function recognizeCurrentPage() {
-  const item = getSelectedDocument();
-  const page = getSelectedPage();
-
-  if (!item || !page) {
-    alert("请先打开一项文献和页码。");
-    return;
-  }
-
-  if (!canEditDocument(item)) {
-    alert("只有创建者可以修改这份文献。");
-    return;
-  }
-
-  if (!page.imageDataUrl && !page.imageUrl) {
-    alert("请先为本页选择原始资料图片。");
-    return;
-  }
-
-  recognizeStatus.textContent = "正在识别...";
-  startPageStage(page, "本页识别中", 30);
-  renderStreamProgress(item);
-
-  try {
-    const result = await requestPageOcr(page);
-    const recognizedText = result.text || "";
-
-    if (!recognizedText.trim()) {
-      recognizeStatus.textContent = "未识别到文字";
-      finishPageStage(page);
-      renderStreamProgress(item);
-      alert("本页没有识别出文字，请检查原图是否清晰。");
-      return;
-    }
-
-    page.ocrText = recognizedText.trim();
-    page.status = "已识别";
-    page.ocr = buildOcrSummary(result);
-    page.updatedAt = new Date().toISOString();
-    item.status = summarizeDocumentStatus(item);
-    item.updatedAt = new Date().toISOString();
-
-    persist();
-    renderAll();
-    recognizeStatus.textContent = "已识别";
-    startPageStage(page, "生成整理文本中", 65);
-    renderStreamProgress(item);
-    autoExtractDocumentMetadata(item, recognizedText, page, "ocr");
-    if (typeof generateFinalText === "function") {
-      await generateFinalText({ silent: true });
-    }
-  } catch (error) {
-    recognizeStatus.textContent = "识别服务未连接";
-    finishPageStage(page);
-    renderStreamProgress(item);
-    alert(error && error.message ? error.message : "暂时无法连接识别服务，请确认服务端识别能力已部署。");
-  }
-}
-
 const PROCESSING_POLL_INTERVAL_MS = 1500;
 // 仅大模型整理队列按页码顺序执行；OCR 在后端独立连续推进，不等待大模型。
 const PROCESSING_LLM_MAX_CONCURRENT = 1;
@@ -271,14 +155,12 @@ function refreshProcessingLlmProgress(item) {
   if (state && (state.inFlight > 0 || state.queue.length > 0)) {
     renderStreamProgress(item);
     if (streamStatus) streamStatus.textContent = getProcessingTaskLabel(item);
-    if (selectedStatus) selectedStatus.textContent = item.status;
     return;
   }
 
   clearStreamSubProgress();
   renderStreamProgress(item);
   if (streamStatus) streamStatus.textContent = getProcessingTaskLabel(item);
-  if (selectedStatus) selectedStatus.textContent = item.status;
   maybeFinishProcessingPipeline(item);
 }
 
@@ -494,14 +376,12 @@ async function refreshProcessingDocument(item, options = {}) {
       if (!isProcessingLlmComplete(item)) {
         renderStreamProgress(item);
         if (streamStatus) streamStatus.textContent = getProcessingTaskLabel(item);
-        if (selectedStatus) selectedStatus.textContent = item.status;
       }
       return;
     }
 
     renderStreamProgress(item);
     if (streamStatus) streamStatus.textContent = getProcessingTaskLabel(item);
-    if (selectedStatus) selectedStatus.textContent = item.status;
   } catch (error) {
     if (streamStatus) streamStatus.textContent = "刷新失败";
     if (!options.silent) {
@@ -518,4 +398,292 @@ function collectMetadataCandidateText(item) {
     .map((page) => page.ocrText || page.cleanText || page.punctuatedText || "")
     .filter(Boolean)
     .join("\n\n");
+}
+async function requestLlmTask(path, payload) {
+  const response = await fetch(`${LLM_SERVICE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`LLM request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function requestFinalTextForPage(item, page) {
+  const previousPages = item.pages
+    .filter((candidate) => candidate.pageNumber < page.pageNumber)
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .filter((candidate) => candidate.cleanText || candidate.punctuatedText)
+    .slice(-2)
+    .map((candidate) => ({
+      pageNumber: candidate.pageNumber,
+      text: candidate.punctuatedText || candidate.cleanText,
+    }));
+
+  return requestLlmTask("/finalize-page", {
+    documentId: item.id,
+    pageId: page.id,
+    pageNumber: page.pageNumber,
+    metadata: buildLlmMetadata(item),
+    ocrText: page.ocrText || "",
+    cleanText: page.cleanText || "",
+    punctuatedText: page.punctuatedText || "",
+    previousPages,
+  });
+}
+
+function applyFinalTextResult(item, page, result) {
+  if (result.cleanText) {
+    page.cleanText = result.cleanText.trim();
+  }
+
+  if (result.punctuatedText) {
+    page.punctuatedText = result.punctuatedText.trim();
+  }
+
+  page.status = "已生成整理稿";
+  page.updatedAt = new Date().toISOString();
+  item.status = summarizeDocumentStatus(item);
+  item.updatedAt = new Date().toISOString();
+}
+
+async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
+  if (!item || !canEditDocument(item) || !text || !needsMetadataAutoFill(item)) {
+    return;
+  }
+
+  item.metadataStatus = "正在自动识别";
+  item.updatedAt = new Date().toISOString();
+  persist();
+  renderAll();
+
+  try {
+    const result = await requestLlmTask("/extract-metadata", {
+      documentId: item.id,
+      pageId: page?.id || "",
+      pageNumber: page?.pageNumber || null,
+      metadata: buildLlmMetadata(item),
+      text: text.slice(0, 6000),
+      source,
+    });
+
+    if (!result.ready || !result.metadata) {
+      item.metadataStatus = "自动识别未连接";
+      item.updatedAt = new Date().toISOString();
+      persist();
+      renderAll();
+      return;
+    }
+
+    const changed = applyExtractedMetadata(item, result.metadata);
+    item.metadataStatus = changed ? "已自动识别" : "未识别到文献信息";
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  } catch (error) {
+    item.metadataStatus = "自动识别失败";
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  }
+}
+
+async function detectDocumentCover(item, file) {
+  if (!item || !canEditDocument(item) || !file || !file.name) {
+    return;
+  }
+
+  item.coverStatus = "正在识别封面";
+  item.updatedAt = new Date().toISOString();
+  persist();
+  renderAll();
+
+  try {
+    const candidate = await requestCoverCandidate(file);
+    if (!candidate.imageDataUrl) {
+      item.coverStatus = "未提取到候选封面";
+      item.updatedAt = new Date().toISOString();
+      persist();
+      renderAll();
+      return;
+    }
+
+    const result = await requestLlmTask("/detect-cover", {
+      imageDataUrl: candidate.imageDataUrl,
+      fileName: file.name,
+      metadata: buildLlmMetadata(item),
+    });
+
+    if (result.ready && result.hasCover) {
+      item.coverImageDataUrl = candidate.imageDataUrl;
+      item.coverStatus = "已使用上传封面";
+    } else if (result.ready) {
+      item.coverStatus = "未识别到封面";
+    } else {
+      item.coverStatus = "封面识别未连接";
+    }
+
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  } catch (error) {
+    item.coverStatus = "封面识别失败";
+    item.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+  }
+}
+
+async function requestCoverCandidate(file) {
+  const body = new FormData();
+  body.append("document", file, file.name);
+
+  const response = await fetch(OCR_COVER_SERVICE_URL, {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Cover candidate request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function needsMetadataAutoFill(item) {
+  return ["title", "author", "year", "publisher"].some((field) => {
+    return !String(item[field] || "").trim();
+  });
+}
+
+function applyExtractedMetadata(item, metadata) {
+  let changed = false;
+  ["title", "author", "year", "publisher"].forEach((field) => {
+    const value = String(metadata[field] || "").trim();
+    if (!String(item[field] || "").trim() && value) {
+      item[field] = value;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function buildLlmMetadata(item) {
+  return {
+    title: item.title || "",
+    author: item.author || "",
+    year: item.year || "",
+    publisher: item.publisher || "",
+  };
+}
+// 单一逐页流式处理进度：主进度按已生成整理稿页数推进，
+// 子进度显示当前正在 OCR 或由大模型整理的页面。
+
+let streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
+let streamProgressMainFill;
+let streamProgressSubFill;
+let streamProgressOcrPages;
+let streamProgressLlmPages;
+
+function setupCombinedProgress() {
+  if (!streamProgress) return;
+  streamStatus?.remove();
+  streamProgressMainFill = streamProgress.querySelector(".progress-fill-ocr");
+  streamProgressSubFill = streamProgress.querySelector(".progress-fill-llm");
+  streamProgressOcrPages = streamProgress.querySelector(".progress-ocr-pages");
+  streamProgressLlmPages = streamProgress.querySelector(".progress-llm-pages");
+}
+
+setupCombinedProgress();
+
+function setStreamSubProgress(pageNumber, text, percent) {
+  streamSubState = {
+    pageNumber,
+    text,
+    percent: clampPercent(percent),
+    active: true,
+  };
+}
+
+function clearStreamSubProgress() {
+  streamSubState = { pageNumber: null, text: "", percent: 0, active: false };
+}
+
+function clampPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, number));
+}
+
+function setProgressRow(labelNode, fillNode, valueNode, label, percent, valueText) {
+  if (labelNode) {
+    labelNode.textContent = label;
+  }
+
+  if (fillNode) {
+    fillNode.style.width = `${clampPercent(percent)}%`;
+  }
+
+  if (valueNode) {
+    valueNode.textContent = valueText;
+  }
+}
+
+function renderStreamProgress(item) {
+  const task = item?.processingTask;
+
+  if (!item || !task) {
+    streamProgress?.classList.add("hidden");
+    return;
+  }
+
+  const total = task.totalPages || item.pages.length || 0;
+  const finalized = countFinalizedPages(item);
+  const ocrDone = Math.min(total, Number(task.completedPages) || 0);
+  const finished = task.status === "已完成" || task.status === "已回填";
+  const failed = task.status === "处理失败" || task.status === "提交失败";
+  const mainPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
+  const sub = streamSubState.active
+    ? {
+        label: `第 ${streamSubState.pageNumber} 页`,
+        percent: streamSubState.percent,
+        text: streamSubState.text,
+      }
+    : {
+        label: `第 ${task.currentPage || streamSubState.pageNumber || 0} 页`,
+        percent: task.currentPageProgress || streamSubState.percent || 0,
+        text: task.currentPageStage || streamSubState.text || (finished ? "已完成" : failed ? "失败" : "等待"),
+      };
+
+  streamProgress?.classList.remove("hidden");
+  setProgressRow(
+    streamMainLabel,
+    streamMainFill,
+    streamMainValue,
+    "逐页整理进度",
+    mainPercent,
+    `${finalized} / ${total} 页`,
+  );
+  setProgressRow(
+    streamSubLabel,
+    streamSubFill,
+    streamSubValue,
+    sub.label,
+    sub.percent,
+    sub.text,
+  );
+  const ocrPercent = total > 0 ? (ocrDone / total) * 100 : finished ? 100 : 0;
+  const llmPercent = total > 0 ? (finalized / total) * 100 : finished ? 100 : 0;
+  if (streamProgressMainFill) streamProgressMainFill.style.width = `${ocrPercent}%`;
+  if (streamProgressSubFill) streamProgressSubFill.style.width = `${llmPercent}%`;
+  if (streamProgressOcrPages) streamProgressOcrPages.textContent = `${ocrDone}`;
+  if (streamProgressLlmPages) streamProgressLlmPages.textContent = `${finalized}`;
 }

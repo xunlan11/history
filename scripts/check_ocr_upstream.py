@@ -105,7 +105,7 @@ def main() -> int:
         print(f"失败：{exc.code} - {exc}")
         if isinstance(exc, ocr_upstream.OcrUpstreamHttpError) and exc.body:
             print(f"服务端响应摘要：{exc.body}")
-        print("排查：对照 docs/ocr-upstream.md 第 3 节契约与第 5 节错误码。")
+        print("排查：对照 deploy/README.md 中的 OCR 契约与隧道检查。")
         return 1
 
     blocks = result.get("blocks") or []

@@ -23,7 +23,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 # 思考型模型（Qwen3）默认关闭思考：同一句话 595 token → 7 token，CPU 上 150s → 1.4s。
-# 详见 docs/service-deploy.md 第 9.2 节；设为 1 可恢复思考模式。
+# 详见 deploy/README.md；设为 1 可恢复思考模式。
 LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 

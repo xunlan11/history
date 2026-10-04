@@ -64,20 +64,6 @@ button {
   display: block;
 }
 
-.workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
-.compare-workspace {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
 .reader-layout {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
@@ -192,15 +178,6 @@ label {
 .auth-card { width:min(360px, calc(100vw - 32px)); background:#fff; padding:24px; border-radius:8px; box-shadow:0 16px 48px rgba(15,23,42,.2); display:grid; gap:12px; }
 .auth-card input { padding:10px 12px; border:1px solid #cbd5e1; border-radius:4px; }
 .auth-card p { color:#b42318; min-height:20px; margin:0; }
-
-.workspace-grid {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.workspace-grid > .document-detail {
-  display: none;
-}
-
 
 .reader-sidebar-stack {
   display: grid;
@@ -453,33 +430,6 @@ button:focus-visible {
   color: var(--muted);
   line-height: 1.6;
   font-size: 13px;
-}
-
-.document-detail dl,
-#document-detail {
-  margin: 0;
-}
-
-#document-detail div {
-  display: grid;
-  grid-template-columns: 82px 1fr;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-  padding: 10px 0;
-}
-
-#document-detail .metadata-pair-row {
-  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
-  column-gap: 10px;
-}
-
-#document-detail dt {
-  color: var(--muted);
-  font-weight: 700;
-}
-
-#document-detail dd {
-  margin: 0;
 }
 
 .transcription-panel {
@@ -851,8 +801,6 @@ mark {
 
 @media (max-width: 900px) {
   .app-shell,
-  .workspace-grid,
-  .compare-workspace,
   .reader-layout,
   .reader-compare {
     grid-template-columns: 1fr;
@@ -909,8 +857,7 @@ body {
   padding: 34px 24px 56px;
 }
 
-.reader-topbar,
-.workspace-topbar {
+.reader-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -918,8 +865,7 @@ body {
   margin-bottom: 24px;
 }
 
-.reader-topbar h2,
-.workspace-topbar h2 {
+.reader-topbar h2 {
   margin: 4px 0 0;
   font-size: clamp(34px, 5vw, 58px);
   line-height: 1;
@@ -927,8 +873,7 @@ body {
   font-weight: 700;
 }
 
-.reader-topbar h2,
-.workspace-topbar h2 {
+.reader-topbar h2 {
   font-size: 34px;
   font-family: inherit;
 }
@@ -1814,8 +1759,6 @@ body {
     grid-template-columns: repeat(3, minmax(130px, 1fr));
   }
 
-  .workspace-grid,
-  .compare-workspace,
   .reader-layout,
   .reader-compare {
     grid-template-columns: 1fr;
@@ -1849,7 +1792,6 @@ body {
   }
 
   .reader-topbar,
-  .workspace-topbar,
   .page-item,
   .result-item,
   .action-row,
@@ -2841,8 +2783,7 @@ body {
   font-size: 46px;
 }
 
-#reader-view.active,
-#workspace-view.active {
+#reader-view.active {
   height: 100vh;
   padding: 28px;
   overflow: auto;

@@ -142,64 +142,6 @@ form?.addEventListener("submit", async (event) => {
   setView("reader");
 });
 
-document.querySelector("#add-page")?.addEventListener("click", () => {
-  const item = getSelectedDocument();
-  if (!item || !canEditDocument(item)) {
-    return;
-  }
-
-  const pageNumber = Math.max(1, Number(pageNumberInput.value) || nextPageNumber(item));
-  let page = item.pages.find((entry) => entry.pageNumber === pageNumber);
-
-  if (!page) {
-    page = createPage(pageNumber);
-    item.pages.push(page);
-    item.pages.sort((a, b) => a.pageNumber - b.pageNumber);
-  }
-
-  selectedPageId = page.id;
-  item.status = summarizeDocumentStatus(item);
-  item.updatedAt = new Date().toISOString();
-  persist();
-  renderAll();
-});
-
-document.querySelector("#save-ocr")?.addEventListener("click", () => {
-  if (saveCurrentPage()) {
-    renderAll();
-  }
-});
-
-document.querySelector("#copy-ocr-to-clean")?.addEventListener("click", () => {
-  cleanText.value = ocrRawText.value.trim();
-  cleanText.focus();
-});
-
-document.querySelector("#copy-clean-to-punctuated")?.addEventListener("click", () => {
-  punctuatedText.value = cleanText.value.trim();
-  punctuatedText.focus();
-});
-
-document.querySelector("#prev-page")?.addEventListener("click", () => {
-  saveCurrentPage();
-  moveToAdjacentPage(-1);
-});
-
-document.querySelector("#next-page")?.addEventListener("click", () => {
-  saveCurrentPage();
-  moveToAdjacentPage(1);
-});
-
-document.querySelector("#save-next")?.addEventListener("click", () => {
-  const item = getSelectedDocument();
-
-  if (!item || !saveCurrentPage()) {
-    return;
-  }
-
-  moveToAdjacentPage(1, { createIfMissing: true });
-});
-
 readerPrevPageButton?.addEventListener("click", () => {
   moveToAdjacentReaderPage(-1);
 });
@@ -248,31 +190,6 @@ editDocumentButton?.addEventListener("click", () => {
   setReaderEditing(true);
 });
 
-pageImageInput?.addEventListener("change", () => {
-  const item = getSelectedDocument();
-  const page = getSelectedPage();
-  const file = pageImageInput.files[0];
-
-  if (!item || !page || !file || !canEditDocument(item)) {
-    if (pageImageInput) pageImageInput.value = "";
-    return;
-  }
-
-  readImageFile(file, (image) => {
-    page.imageDataUrl = image.dataUrl;
-    page.imageName = file.name;
-    page.updatedAt = new Date().toISOString();
-    item.updatedAt = new Date().toISOString();
-    persist();
-    pageImageInput.value = "";
-    renderAll();
-  });
-});
-
-document.querySelector("#recognize-page")?.addEventListener("click", recognizeCurrentPage);
-document.querySelector("#generate-punctuated")?.addEventListener("click", generatePunctuatedText);
-document.querySelector("#generate-final-text")?.addEventListener("click", generateFinalText);
-generateDocumentTextButton?.addEventListener("click", generateDocumentFinalText);
 document.querySelector("#refresh-stream")?.addEventListener("click", refreshProcessingTask);
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
 const exportPdfButton = document.querySelector("#export-pdf");

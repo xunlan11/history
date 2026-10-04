@@ -8,7 +8,6 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/history-service
 Environment=PYTHONUNBUFFERED=1
-# 从百度 BOS 拉取官方模型（国内可达；默认值 huggingface 在本机网络下不可用）
 Environment=PADDLE_PDX_MODEL_SOURCE=bos
 Environment=OMP_NUM_THREADS=8
 ExecStart=%h/history-service/venv-ocr/bin/paddlex \

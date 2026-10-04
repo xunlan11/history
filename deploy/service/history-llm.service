@@ -6,10 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# 数据端经 SSH 反向隧道调用本机回环接口。
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=%h/history-service/models
-# 常驻显存/内存，避免每次请求重新加载 8B 模型（CPU 上加载一次约 30 秒）
 Environment=OLLAMA_KEEP_ALIVE=24h
 Environment=OLLAMA_MAX_LOADED_MODELS=1
 Environment=OLLAMA_NUM_PARALLEL=1

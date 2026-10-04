@@ -2,7 +2,7 @@
 
 分工：数据端只负责存储、拆页、任务编排与对外接口，**不加载任何 OCR 模型**；
 识别与版面理解全部由服务端（数据处理服务器）通过 HTTP 完成。
-接口契约见 `docs/ocr-upstream.md`；环境变量里的 `UPSTREAM` 即服务端。
+接口契约见 `deploy/README.md`；环境变量里的 `UPSTREAM` 即服务端。
 
 环境变量（systemd unit 里写 `Environment=`）：
 

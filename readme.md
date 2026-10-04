@@ -25,8 +25,8 @@ LLM_MODEL=qwen3:8b
 LLM_TIMEOUT_SECONDS=600
 ```
 
-这些变量已写进本机 systemd unit，unit 版本化在 `deploy/data/`（服务端侧是
-`deploy/service/`）；隧道怎么建、怎么排错见 [docs/service-deploy.md](./docs/service-deploy.md) 第 9.4/9.5 节。
+这些变量已写进本机 systemd unit，unit 和迁移说明统一见
+[deploy/README.md](./deploy/README.md)。
 同内网时可省掉隧道直连：`OCR_UPSTREAM_URL=http://10.134.194.183:8080`、
 `LLM_API_BASE=http://10.134.194.183:11434/v1`。
 
@@ -74,7 +74,5 @@ uv run python scripts/storage_admin.py restore storage/backups/history-backup-YY
 大模型有显卡就上 GPU（6 GB 显存实测 28～31 tok/s，纯 CPU 约 4.9 tok/s），
 **不落任何数据、不需要本仓库代码**，只需对数据端提供 HTTP 接口。
 
-**完整部署手册见 [docs/service-deploy.md](./docs/service-deploy.md)**：从零部署并逐条验证过的命令
-（Python/paddlepaddle 3.2.2 版本约束、模型与 Ollama 下载源、`systemctl --user` unit、
-性能实测 7.5 s/页、已知坑与「哪些改动要动服务端」的边界表）。接口契约见
-[docs/ocr-upstream.md](./docs/ocr-upstream.md)。
+迁移、部署、隧道和健康检查的最小必要说明见
+[deploy/README.md](./deploy/README.md)；完整可执行配置也都在该目录中。

@@ -1,3 +1,277 @@
+// —— 站点识别：按 URL 首段区分已发布子站（/history、/literature…）——
+// 同一份静态代码可同时服务多个子站；/history 下所有行为与旧版完全一致。
+const SITE_PATH_SEGMENT = (location.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
+const SITE_ID = SITE_PATH_SEGMENT && SITE_PATH_SEGMENT !== "html" ? SITE_PATH_SEGMENT : "history";
+const HISTORY_BASE = `/${SITE_ID}`;
+
+// 各子站品牌名（首页大标题 / 页面 <title> 后缀 / PDF 导出署名）
+const SITE_TITLES = {
+  history: "近代军史数智平台",
+  literature: "文献库",
+};
+const SITE_TITLE = SITE_TITLES[SITE_ID] || SITE_ID;
+
+// localStorage 按站点隔离（/history 沿用旧前缀，既有用户数据不变）
+const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `wenqu.${SITE_ID}`;
+
+const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
+const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
+const DATA_SCHEMA_VERSION = 6;
+
+function endpoint(proxiedPath) {
+  return `${HISTORY_BASE}/api${proxiedPath}`;
+}
+
+const OCR_SERVICE_URL = endpoint("/ocr/ocr");
+const OCR_COVER_SERVICE_URL = endpoint("/ocr/ocr/cover-candidate");
+const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
+const OCR_HEALTH_URL = endpoint("/ocr/health");
+const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
+const DATA_SYNC_URL = endpoint("/data/api/sync");
+const DATA_PUSH_URL = endpoint("/data/api/sync/push");
+const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
+const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
+const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
+const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
+const LLM_SERVICE_URL = endpoint("/llm/llm");
+const LLM_HEALTH_URL = endpoint("/llm/health");
+const VERSION_STATUS_URL = endpoint("/version/version");
+const VERSION_UPDATE_URL = endpoint("/version/update");
+
+// —— 运行时品牌（config.js 在各页 body 末尾最先加载，可安全访问上方 DOM）——
+// 首页“大标题”元素用 id="home-site-title" 标记，随站点显示对应名称；
+// 非 /history 子站的页面 <title> 中旧品牌名自动替换为当前站点名。
+const homeSiteTitle = document.getElementById("home-site-title");
+if (homeSiteTitle) {
+  homeSiteTitle.textContent = SITE_TITLE;
+}
+if (SITE_ID !== "history") {
+  let nextTitle = document.title.replace(/近代军史数智平台/g, SITE_TITLE);
+  if (nextTitle === `${SITE_TITLE} · ${SITE_TITLE}`) {
+    nextTitle = SITE_TITLE;
+  }
+  document.title = nextTitle;
+}
+
+// —— 平台更新广播：任一页面执行「更新」发布后，全平台已打开的页面一起强制刷新 ——
+// 机制：发布页写入 localStorage 信号，其它页通过 storage 事件立即刷新；标签页重新可见/
+// 获得焦点时再比对一次信号，避免后台标签页错过事件。sessionStorage 记录本页已处理的信号，
+// 防止刷新后循环触发。（信号按域名共享，故 /history 与 /literature 会同时刷新。）
+const PLATFORM_RELOAD_KEY = "wenqu.platform.reload";
+const PLATFORM_RELOAD_ACK_KEY = "wenqu.platform.reload.acked";
+
+function acknowledgedReloadSignal() {
+  try {
+    return sessionStorage.getItem(PLATFORM_RELOAD_ACK_KEY);
+  } catch (_) {
+    return null;
+  }
+}
+
+function acknowledgeReloadSignal(signal) {
+  try {
+    sessionStorage.setItem(PLATFORM_RELOAD_ACK_KEY, signal);
+  } catch (_) {
+    /* 隐私模式等存储不可用时忽略 */
+  }
+}
+
+function applyPlatformReloadSignal(force = false) {
+  let signal = null;
+  try {
+    signal = localStorage.getItem(PLATFORM_RELOAD_KEY);
+  } catch (_) {
+    return;
+  }
+  if (!signal) {
+    return;
+  }
+  if (!force && acknowledgedReloadSignal() === signal) {
+    return;
+  }
+  acknowledgeReloadSignal(signal);
+  window.location.reload();
+}
+
+// 发布完成后调用：标记本页已处理，并通知其它页面刷新
+function broadcastPlatformReload() {
+  const signal = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  acknowledgeReloadSignal(signal);
+  try {
+    localStorage.setItem(PLATFORM_RELOAD_KEY, signal);
+  } catch (_) {
+    /* 存储不可用时仅本页刷新 */
+  }
+  return signal;
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === PLATFORM_RELOAD_KEY) {
+    applyPlatformReloadSignal(true);
+  }
+});
+window.addEventListener("focus", () => applyPlatformReloadSignal());
+window.addEventListener("pageshow", () => applyPlatformReloadSignal());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    applyPlatformReloadSignal();
+  }
+});
+function newId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function formatDateTime(date) {
+  const parts = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ];
+  const time = [
+    String(date.getHours()).padStart(2, "0"),
+    String(date.getMinutes()).padStart(2, "0"),
+  ].join(":");
+
+  return `${parts.join("-")} ${time}`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => {
+    const map = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    };
+    return map[char];
+  });
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function emptyState(message) {
+  const node = document.createElement("div");
+  node.className = "empty-state";
+  node.textContent = message;
+  return node;
+}
+
+function renderResultState(container, message) {
+  container.innerHTML = "";
+  container.classList.add("empty-result-list");
+  const empty = emptyState(message);
+  empty.classList.add("result-empty");
+  container.append(empty);
+}
+
+function formatWarnings(warnings) {
+  const node = document.createElement("p");
+  node.className = "meta-line";
+  node.textContent = `提示：${warnings.join("；")}`;
+  return node;
+}
+
+function buildSnippet(text, query) {
+  const haystack = text || "";
+  const index = haystack.toLowerCase().indexOf(query.toLowerCase());
+  if (index === -1) {
+    return "";
+  }
+
+  const start = Math.max(0, index - 36);
+  const end = Math.min(haystack.length, index + query.length + 72);
+  return `${start > 0 ? "..." : ""}${haystack.slice(start, end)}${end < haystack.length ? "..." : ""}`;
+}
+
+function highlight(text, query) {
+  const escaped = escapeRegExp(query);
+  return escapeHtml(text).replace(new RegExp(escaped, "gi"), (match) => `<mark>${match}</mark>`);
+}
+
+function scoreTextRelevance(text, query) {
+  const terms = String(query || "")
+    .toLowerCase()
+    .split(/[\s,，、；;]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+  const normalizedText = String(text || "").toLowerCase();
+  return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 3 : 0), 1);
+}
+const form = document.querySelector("#document-form");
+const formSheet = document.querySelector("#document-form-sheet");
+const documentList = document.querySelector("#document-list");
+const documentCount = document.querySelector("#document-count");
+const allDocumentList = document.querySelector("#all-document-list");
+const allDocumentCount = document.querySelector("#all-document-count");
+const readerTitle = document.querySelector("#reader-title");
+const readerPageStatus = document.querySelector("#reader-page-status");
+const readerPageInput = document.querySelector("#reader-page-input");
+const readerPageTotal = document.querySelector("#reader-page-total");
+const readerCompare = document.querySelector("#reader-compare");
+const readerOriginalPanel = document.querySelector("#reader-original-panel");
+const readerOriginalPreview = document.querySelector("#reader-original-preview");
+const readerText = document.querySelector("#reader-text");
+const readerNotes = document.querySelector("#reader-notes");
+const readerAnnotationPanel = document.querySelector("#reader-annotation-panel");
+const readerAnnotation = document.querySelector("#reader-annotation");
+const readerAnnotationStatus = document.querySelector("#reader-annotation-status");
+const readerOriginalToggle = document.querySelector("#reader-original-toggle");
+const readerAnnotationToggle = document.querySelector("#reader-annotation-toggle");
+const readerPrevPageButton = document.querySelector("#reader-prev-page");
+const readerNextPageButton = document.querySelector("#reader-next-page");
+const readerBackButton = document.querySelector("#reader-back");
+const exportDocumentPdfButton = document.querySelector("#export-document-pdf");
+const editDocumentButton = document.querySelector("#edit-document");
+const editDocumentLabel = document.querySelector("#edit-document-label");
+const readerDetailNode = document.querySelector("#reader-document-detail");
+const readerRefreshButton = document.querySelector("#refresh-stream");
+const streamStatus = document.querySelector("#stream-status, #reader-stream-status");
+const streamProgress = document.querySelector("#stream-progress, #reader-stream-progress");
+const searchInput = document.querySelector("#search-input");
+const searchResults = document.querySelector("#search-results");
+const chronicleTopic = document.querySelector("#chronicle-topic");
+const chronicleResults = document.querySelector("#chronicle-results");
+const cardTemplate = document.querySelector("#document-card-template");
+const versionServiceStatus = document.querySelector("#version-service-status");
+const versionUpdateButton = document.querySelector("#version-update-button");
+const ocrServiceStatus = document.querySelector("#ocr-service-status");
+const llmServiceStatus = document.querySelector("#llm-service-status");
+const conversationList = document.querySelector("#conversation-list");
+const newConversationButton = document.querySelector("#new-conversation");
+const chatTitle = document.querySelector("#chat-title");
+const chatHint = document.querySelector("#chat-hint");
+const messageFeed = document.querySelector("#message-feed");
+const deleteConversationDialog = document.querySelector("#delete-conversation-dialog");
+const deleteConversationTitle = document.querySelector("#delete-conversation-title");
+const deleteConversationMessage = document.querySelector("#delete-conversation-message");
+const cancelDeleteConversation = document.querySelector("#cancel-delete-conversation");
+const confirmDeleteConversation = document.querySelector("#confirm-delete-conversation");
+const openReferenceDocumentsButton = document.querySelector("#open-reference-documents");
+const referenceDocumentCount = document.querySelector("#reference-document-count");
+const referenceDocumentChips = document.querySelector("#reference-document-chips");
+const referenceScopeStatus = document.querySelector("#reference-scope-status");
+const referenceDocumentDialog = document.querySelector("#reference-document-dialog");
+const referenceDocumentSearch = document.querySelector("#reference-document-search");
+const referenceDocumentList = document.querySelector("#reference-document-list");
+const referenceSelectionSummary = document.querySelector("#reference-selection-summary");
+const closeReferenceDocumentsButton = document.querySelector("#close-reference-documents");
+const cancelReferenceDocumentsButton = document.querySelector("#cancel-reference-documents");
+const confirmReferenceDocumentsButton = document.querySelector("#confirm-reference-documents");
+const uploadConversationFilesButton = document.querySelector("#upload-conversation-files");
+const conversationFileInput = document.querySelector("#conversation-file-input");
+const conversationAttachmentChips = document.querySelector("#conversation-attachment-chips");
+const conversationAttachmentStatus = document.querySelector("#conversation-attachment-status");
+const fontOptionButtons = document.querySelectorAll("[data-font-option]");
+const openSettingsButton = document.querySelector("#open-settings");
+const settingsDialog = document.querySelector("#settings-dialog");
+const closeSettingsButton = document.querySelector("#close-settings");
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
 const CONVERSATION_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.conversations.schema4`;
 const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
@@ -660,65 +934,6 @@ function ensureSelectedPage(item) {
   }
 }
 
-function nextPageNumber(item) {
-  return Math.max(0, ...item.pages.map((page) => page.pageNumber)) + 1;
-}
-
-function saveCurrentPage(statusOverride) {
-  const item = getSelectedDocument();
-  const page = getSelectedPage();
-  if (!item || !page || !canEditDocument(item)) {
-    return false;
-  }
-
-  page.ocrText = ocrRawText.value.trim();
-  page.cleanText = cleanText.value.trim();
-  page.punctuatedText = punctuatedText.value.trim();
-  page.notes = pageNotes.value.trim();
-  page.status = statusOverride || (hasPageText(page) ? "已保存文字" : "待整理");
-  page.updatedAt = new Date().toISOString();
-  item.status = summarizeDocumentStatus(item);
-  item.updatedAt = new Date().toISOString();
-  persist();
-  return true;
-}
-
-function moveToAdjacentPage(direction, options = {}) {
-  const item = getSelectedDocument();
-  if (!item) {
-    return;
-  }
-
-  ensureSelectedPage(item);
-  const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
-  const currentIndex = Math.max(0, pages.findIndex((page) => page.id === selectedPageId));
-  const nextIndex = currentIndex + direction;
-
-  if (pages[nextIndex]) {
-    selectedPageId = pages[nextIndex].id;
-    renderAll();
-    return;
-  }
-
-  if (direction > 0 && options.createIfMissing) {
-    if (!canEditDocument(item)) {
-      renderAll();
-      return;
-    }
-    const page = createPage(nextPageNumber(item));
-    item.pages.push(page);
-    item.pages.sort((a, b) => a.pageNumber - b.pageNumber);
-    selectedPageId = page.id;
-    item.status = summarizeDocumentStatus(item);
-    item.updatedAt = new Date().toISOString();
-    persist();
-    renderAll();
-    return;
-  }
-
-  renderAll();
-}
-
 function summarizeDocumentStatus(item) {
   if (item.pages.every((page) => !hasPageText(page))) {
     return "待整理";
@@ -832,10 +1047,6 @@ function getProcessingTaskLabel(item) {
 
 function countFinalizedPages(item) {
   return item.pages.filter((page) => page.cleanText || page.status === "已生成整理稿").length;
-}
-
-function getProcessingHelp() {
-  return "OCR 连续按页识别，大模型按页码顺序消费已有结果；OCR 无需等待大模型。";
 }
 
 function mergeProcessingPages(item, incomingPages) {

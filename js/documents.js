@@ -26,16 +26,16 @@ function setView(name) {
   }
 
   const url = new URL(route, window.location.href);
-  if ((name === "reader" || name === "workspace") && selectedDocumentId) {
+  if (name === "reader" && selectedDocumentId) {
     url.searchParams.set("document", selectedDocumentId);
   }
-  if ((name === "reader" || name === "workspace") && selectedPageId) {
+  if (name === "reader" && selectedPageId) {
     url.searchParams.set("page", selectedPageId);
   }
 
   const currentFrom = new URL(window.location.href).searchParams.get("from");
   const returnView = name === "reader" ? readerReturnView : currentFrom;
-  if ((name === "reader" || name === "workspace") && returnView === "documents") {
+  if (name === "reader" && returnView === "documents") {
     url.searchParams.set("from", "documents");
   }
 
@@ -63,7 +63,7 @@ function applyRouteSelection() {
 
 function syncSelectionToUrl() {
   const pageName = document.body.dataset.page;
-  if (!['reader', 'workspace'].includes(pageName) || !selectedDocumentId) {
+  if (pageName !== "reader" || !selectedDocumentId) {
     return;
   }
 
@@ -87,7 +87,6 @@ function renderAll() {
   renderDocumentList();
   renderReader();
   renderReaderSidebar();
-  renderDetail();
   renderSmartEmpty();
   if (typeof renderSmartModeButtons === "function") {
     renderSmartModeButtons();
@@ -830,150 +829,6 @@ function readerEmptyState(message) {
   const node = emptyState(message);
   node.classList.add("reader-empty-state");
   return node;
-}
-
-function renderDetail() {
-  if (!detailNode || !pageList) {
-    return;
-  }
-  const item = getSelectedDocument();
-  detailNode.innerHTML = "";
-  pageList.innerHTML = "";
-
-  if (!item) {
-    selectedStatus.textContent = "未选择";
-    selectedPageStatus.textContent = "未选择页";
-    originalPageStatus.textContent = "未选择页";
-    recognizeStatus.textContent = "等待原图";
-    streamActions.classList.add("hidden");
-    streamStatus.textContent = "等待处理";
-    pageCount.textContent = "0 页";
-    ocrRawText.value = "";
-    cleanText.value = "";
-    punctuatedText.value = "";
-    pageNotes.value = "";
-    renderOriginalPreview(null);
-    detailNode.append(emptyState("请先在文献库登记或打开一项文献"));
-    pageList.append(emptyState("尚无页目"));
-    renderStreamProgress(null);
-    return;
-  }
-
-  ensureSelectedPage(item);
-  const page = getSelectedPage();
-
-  selectedStatus.textContent = item.status;
-  streamActions.classList.toggle("hidden", !item.processingTask);
-  streamStatus.textContent = getProcessingTaskLabel(item);
-  selectedPageStatus.textContent = page ? `第 ${page.pageNumber} 页 · ${page.status}` : "未选择页";
-  originalPageStatus.textContent = page ? `第 ${page.pageNumber} 页` : "未选择页";
-  recognizeStatus.textContent = getRecognizeStatusText(page);
-  pageCount.textContent = `${item.pages.length} 页`;
-  pageNumberInput.value = page?.pageNumber || nextPageNumber(item);
-  ocrRawText.value = page?.ocrText || "";
-  cleanText.value = page?.cleanText || "";
-  punctuatedText.value = page?.punctuatedText || "";
-  pageNotes.value = page?.notes || "";
-  renderOriginalPreview(page);
-
-  const rows = [
-    ["文献名", item.title || "未识别"],
-    ["作者", item.author || "未录"],
-  ];
-
-  rows.forEach(([label, value]) => appendDocumentDetailRow(detailNode, [[label, value]]));
-  appendDocumentDetailRow(
-    detailNode,
-    [
-      ["年份", item.year || "未录"],
-      ["出版社", item.publisher || "未录"],
-    ],
-    "metadata-pair-row",
-  );
-
-  const extraRows = [
-    ["创建者", item.creator?.username || "创建者信息不可用"],
-    ["标签", item.tags || "未录"],
-    ["封面识别", item.coverStatus || "待识别封面"],
-    ["文件", item.fileName],
-    ["文件类型", item.fileType],
-    ["处理方式", "逐页流式处理"],
-    ["处理进度", getProcessingTaskLabel(item)],
-    ["处理说明", getProcessingHelp()],
-    ["信息识别", item.metadataStatus || "待自动识别"],
-    ["已建页目", `${item.pages.length} 页`],
-  ];
-  extraRows.forEach(([label, value]) => appendDocumentDetailRow(detailNode, [[label, value]]));
-
-  renderPageList(item);
-  renderStreamProgress(item);
-}
-
-function getRecognizeStatusText(page) {
-  if (!page || (!page.imageDataUrl && !page.imageUrl)) {
-    return "等待原图";
-  }
-
-  if (page.ocr?.recognizedAt) {
-    return "已识别";
-  }
-
-  return "可识别";
-}
-
-function renderOriginalPreview(page) {
-  originalPreview.innerHTML = "";
-
-  if (!page) {
-    originalPreview.append(emptyState("请先选择页码"));
-    return;
-  }
-
-  const imageSource = page.imageDataUrl || page.imageUrl;
-
-  if (!imageSource) {
-    originalPreview.append(emptyState("当前页尚未放入原始资料图片"));
-    return;
-  }
-
-  const image = document.createElement("img");
-  image.src = imageSource;
-  image.alt = page.imageName ? `第 ${page.pageNumber} 页原始资料：${page.imageName}` : `第 ${page.pageNumber} 页原始资料`;
-  originalPreview.append(image);
-}
-
-function renderPageList(item, target = pageList) {
-  if (!target) {
-    return;
-  }
-  if (!item.pages.length) {
-    target.append(emptyState("暂无页目录"));
-    return;
-  }
-  if (!item.pages.length) {
-    pageList.append(emptyState("尚无页目"));
-    return;
-  }
-
-  item.pages.forEach((page) => {
-    const node = document.createElement("article");
-    const label = document.createElement("div");
-    const button = document.createElement("button");
-
-    node.className = "page-item";
-    node.classList.toggle("active", page.id === selectedPageId);
-    label.innerHTML = `<strong>第 ${page.pageNumber} 页</strong><p class="meta-line">${page.status}</p>`;
-    button.className = "secondary-button";
-    button.type = "button";
-    button.textContent = "打开";
-    button.addEventListener("click", () => {
-      selectedPageId = page.id;
-      renderAll();
-    });
-
-    node.append(label, button);
-    target.append(node);
-  });
 }
 
 function renderSmartEmpty() {
