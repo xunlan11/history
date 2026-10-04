@@ -277,13 +277,17 @@ function createBookCard(item, index) {
   card.dataset.documentId = item.id;
   card.dataset.documentIndex = String(index);
   card.setAttribute("aria-grabbed", "false");
+  const uploadState = typeof getDocumentUploadState === "function" ? getDocumentUploadState(item.id) : null;
+  const uploadText = typeof describeDocumentUploadState === "function" ? describeDocumentUploadState(item.id) : "";
+  card.classList.toggle("is-uploading", Boolean(uploadState && uploadState.active));
+  card.classList.toggle("is-upload-failed", Boolean(uploadState && !uploadState.active && uploadState.error));
   if (!canEditDocument(item)) {
     card.classList.add("read-only");
     openButton.title = "公开文献，仅可查看";
   }
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
-  node.querySelector(".book-pages").textContent = `${item.pages.length} 页`;
+  node.querySelector(".book-pages").textContent = uploadText || `${item.pages.length} 页`;
   node.querySelector(".book-author").textContent = item.author || "著者未录";
   cover.setAttribute("aria-hidden", "true");
   const coverImageSource = item.coverImageUrl || item.coverImageDataUrl || "";
@@ -294,6 +298,14 @@ function createBookCard(item, index) {
 
   const openDocumentFromCard = () => {
     if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") {
+      return;
+    }
+
+    // 上传中的文献不许进入阅读页：整页跳转会 abort 在途上传（原件与逐页任务都提交不上去）。
+    if (typeof isDocumentUploadActive === "function" && isDocumentUploadActive(item.id)) {
+      if (typeof showUploadToast === "function") {
+        showUploadToast("原件正在上传，上传完成后会自动进入阅读页，请稍候。");
+      }
       return;
     }
 

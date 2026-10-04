@@ -23,14 +23,15 @@ function stopProcessingPolling(documentId) {
   }
 }
 
+// 逐页任务没提交成功时的恢复入口：
+//   1. 浏览器里还暂存着原件（上传被打断）→ 直接续传整条上传流水线；
+//   2. 原件已归档、只是逐页任务没提交上→ 从服务端取回原件重新提交；
+//   3. 两者都没有 → 明确提示「原件上传未完成，请重新导入」，不再静默卡住。
 async function resumeMissingProcessingTask(item) {
-  const task = item?.processingTask;
   if (
     !canEditDocument(item) ||
-    !task ||
-    task.remoteTaskId ||
-    !["提交中", "提交逐页处理中"].includes(item.status || task.status) ||
-    !item.fileUrl ||
+    item?.processingTask?.remoteTaskId ||
+    isDocumentUploadActive(item.id) ||
     processingRecoveryInFlight.has(item.id)
   ) {
     return;
@@ -38,26 +39,120 @@ async function resumeMissingProcessingTask(item) {
 
   processingRecoveryInFlight.add(item.id);
   try {
-    const response = await fetch(item.fileUrl, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`原始文献下载失败：${response.status}`);
+    const stashed = await readPendingUpload(item.id);
+    const file = stashed ? pendingUploadToFile(stashed) : await downloadArchivedSource(item);
+    if (!file) {
+      if (!item.processingTask || isDocumentUploadActive(item.id)) {
+        return;
+      }
+      updateDocumentUploadState(
+        item.id,
+        { active: false, error: "原件未上传完成，请重新导入" },
+        { force: true },
+      );
+      if (streamStatus) {
+        streamStatus.textContent = "原件上传未完成，请重新导入原件";
+      }
+      return;
     }
 
-    const blob = await response.blob();
-    const file = new File([blob], item.fileName || task.sourceFileName || "document", {
-      type: item.fileMimeType || blob.type || "application/octet-stream",
-    });
-    await submitProcessingTask(item, file);
+    await runDocumentUploadPipeline(item, file);
   } catch (error) {
-    task.status = "提交失败";
-    task.message = error?.message || "无法恢复逐页处理任务。";
-    item.status = "逐页处理提交失败";
-    item.updatedAt = new Date().toISOString();
+    const target = getLiveDocument(item.id) || item;
+    if (target.processingTask) {
+      target.processingTask.status = "提交失败";
+      target.processingTask.message = error?.message || "无法恢复逐页处理任务。";
+    }
+    target.status = "逐页处理提交失败";
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
   } finally {
     processingRecoveryInFlight.delete(item.id);
   }
+}
+
+async function downloadArchivedSource(item) {
+  if (!item?.fileUrl) {
+    return null;
+  }
+
+  const response = await fetch(item.fileUrl, { cache: "no-store" });
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  return new File([blob], item.fileName || item.processingTask?.sourceFileName || "document", {
+    type: item.fileMimeType || blob.type || "application/octet-stream",
+  });
+}
+
+// 上传流水线：原件归档 → 封面识别 → 逐页任务提交（三段均分 100%）。
+// 开始前先把原件暂存进 IndexedDB，三段全部成功才删除；任一环节失败/页面被刷新，
+// 下次打开页面时 resumeMissingProcessingTask() 会从暂存里接着传，不会丢原件。
+async function runDocumentUploadPipeline(item, file) {
+  if (!canEditDocument(item)) {
+    throw new Error("当前用户没有该文献的编辑权限，无法上传原件。请重新登录后重试。");
+  }
+  if (!file || !file.name) {
+    throw new Error("没有可上传的原件文件。");
+  }
+
+  const documentId = item.id;
+  // 服务端快照同步会整体替换 documents 数组，这里始终取数组里的当前实例。
+  const liveItem = () => documents.find((entry) => entry.id === documentId) || item;
+
+  if (!item.processingTask) {
+    item.processingTask = createProcessingTask(file);
+  }
+
+  beginDocumentUpload(item, file);
+  item.status = "提交逐页处理中";
+  item.updatedAt = new Date().toISOString();
+  persist();
+  renderAll();
+
+  try {
+    await stashPendingUpload(documentId, file);
+
+    setUploadStage(documentId, 0, "上传原件", 0);
+    await archiveDocumentSource(liveItem(), file, (fraction) => {
+      setUploadStage(documentId, 0, "上传原件", fraction);
+    });
+
+    setUploadStage(documentId, 1, "识别封面", 0);
+    await detectDocumentCover(liveItem(), file, (fraction) => {
+      setUploadStage(documentId, 1, "识别封面", fraction);
+    });
+
+    setUploadStage(documentId, 2, "提交逐页任务", 0);
+    await submitProcessingTask(liveItem(), file, (fraction) => {
+      setUploadStage(documentId, 2, "提交逐页任务", fraction);
+    });
+
+    await dropPendingUpload(documentId);
+    markDocumentUploadFinished(documentId);
+    return true;
+  } catch (error) {
+    // 4xx 是永久性拒绝（体积超限 / 无权限），不再保留暂存反复重试。
+    const status = Number(error?.status) || 0;
+    if (status >= 400 && status < 500) {
+      await dropPendingUpload(documentId);
+    }
+    markDocumentUploadFailed(documentId, error);
+    const current = liveItem();
+    current.status = summarizeDocumentStatus(current);
+    current.updatedAt = new Date().toISOString();
+    persist();
+    renderAll();
+    throw error;
+  }
+}
+
+function setUploadStage(documentId, stageIndex, stage, fraction) {
+  const percent = Math.min(100, Math.max(0, ((stageIndex + (Number(fraction) || 0)) / 3) * 100));
+  updateDocumentUploadState(documentId, { active: true, stageIndex, stage, percent });
 }
 
 function startProcessingPolling(item) {
@@ -134,19 +229,24 @@ function drainProcessingLlmQueue(documentId) {
 
 async function finalizeProcessingPage(item, page) {
   if (!canEditDocument(item)) return;
+  const livePage = () => {
+    const target = getLiveDocument(item.id) || item;
+    return target.pages.find((candidate) => candidate.id === page.id) || page;
+  };
   try {
     const result = await requestFinalTextForPage(item, page);
     if (result.ready) {
-      applyFinalTextResult(item, page, result);
+      applyFinalTextResult(getLiveDocument(item.id) || item, livePage(), result);
     } else {
-      page.status = "生成失败";
+      livePage().status = "生成失败";
     }
   } catch (error) {
-    page.status = "生成失败";
+    livePage().status = "生成失败";
   }
 
-  item.status = summarizeDocumentStatus(item);
-  item.updatedAt = new Date().toISOString();
+  const target = getLiveDocument(item.id) || item;
+  target.status = summarizeDocumentStatus(target);
+  target.updatedAt = new Date().toISOString();
   persist();
 }
 
@@ -229,7 +329,7 @@ function triggerProcessingMetadata(item) {
   autoExtractDocumentMetadata(item, candidate, item.pages[0], "ocr");
 }
 
-async function submitProcessingTask(item, file) {
+async function submitProcessingTask(item, file, onProgress) {
   if (!canEditDocument(item)) {
     throw new Error("当前用户没有该文献的编辑权限，无法提交处理任务。请重新登录后重试。");
   }
@@ -239,26 +339,25 @@ async function submitProcessingTask(item, file) {
     body.append("documentId", item.id);
     body.append("title", item.title || file.name);
 
-    const response = await fetch(OCR_STREAM_SERVICE_URL, {
-      method: "POST",
-      body,
-    });
+    const result = await postFormDataWithProgress(OCR_STREAM_SERVICE_URL, body, { onProgress });
 
-    if (!response.ok) {
-      throw new Error(await describeOcrFailure(response));
+    if (!result) {
+      throw new Error("处理服务返回空响应，文献未进入处理队列。");
     }
 
-    const result = await response.json();
     const remoteTaskId = result.taskId || result.id;
     if (!remoteTaskId) {
       throw new Error("处理服务未返回任务编号，文献未进入处理队列。");
     }
-    item.processingTask = {
-      ...item.processingTask,
+
+    // 上传/识别期间可能发生过服务端快照同步，必须写回数组里的当前实例。
+    const target = getLiveDocument(item.id) || item;
+    target.processingTask = {
+      ...target.processingTask,
       remoteTaskId,
       status: result.status || "处理中",
       submittedAt: new Date().toISOString(),
-      totalPages: Number(result.totalPages) || item.processingTask.totalPages || 0,
+      totalPages: Number(result.totalPages) || target.processingTask.totalPages || 0,
       completedPages: Number(result.completedPages) || 0,
       currentPage: Number(result.currentPage) || 0,
       currentPageStage: result.currentPageStage || "",
@@ -267,35 +366,37 @@ async function submitProcessingTask(item, file) {
     };
 
     if (Array.isArray(result.pages) && result.pages.length) {
-      mergeProcessingPages(item, result.pages);
-      item.processingTask.status = result.status || "已回填";
-      item.processingTask.finishedAt = result.finishedAt || new Date().toISOString();
-      triggerProcessingMetadata(item);
+      mergeProcessingPages(target, result.pages);
+      target.processingTask.status = result.status || "已回填";
+      target.processingTask.finishedAt = result.finishedAt || new Date().toISOString();
+      triggerProcessingMetadata(target);
     }
 
-    item.status = item.processingTask.status;
-    item.updatedAt = new Date().toISOString();
+    target.status = target.processingTask.status;
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
 
-    if (isProcessingTaskPending(item)) {
-      startProcessingPolling(item);
-    } else if (["已完成", "已回填"].includes(item.processingTask.status)) {
-      enqueueNewProcessingPages(item);
-      maybeFinishProcessingPipeline(item);
+    if (isProcessingTaskPending(target)) {
+      startProcessingPolling(target);
+    } else if (["已完成", "已回填"].includes(target.processingTask.status)) {
+      enqueueNewProcessingPages(target);
+      maybeFinishProcessingPipeline(target);
     }
   } catch (error) {
-    item.processingTask = {
-      ...item.processingTask,
+    const target = getLiveDocument(item.id) || item;
+    target.processingTask = {
+      ...target.processingTask,
       status: "提交失败",
       message: error && error.message
         ? error.message
         : "无法连接逐页处理服务，请确认服务端识别能力已部署后重新导入。",
     };
-    item.status = "逐页处理提交失败";
-    item.updatedAt = new Date().toISOString();
+    target.status = "逐页处理提交失败";
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
+    throw error instanceof Error ? error : new Error("逐页处理任务提交失败。");
   }
 }
 
@@ -450,8 +551,9 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
     return;
   }
 
-  item.metadataStatus = "正在自动识别";
-  item.updatedAt = new Date().toISOString();
+  const startTarget = getLiveDocument(item.id) || item;
+  startTarget.metadataStatus = "正在自动识别";
+  startTarget.updatedAt = new Date().toISOString();
   persist();
   renderAll();
 
@@ -465,42 +567,46 @@ async function autoExtractDocumentMetadata(item, text, page, source = "ocr") {
       source,
     });
 
+    const target = getLiveDocument(item.id) || item;
     if (!result.ready || !result.metadata) {
-      item.metadataStatus = "自动识别未连接";
-      item.updatedAt = new Date().toISOString();
+      target.metadataStatus = "自动识别未连接";
+      target.updatedAt = new Date().toISOString();
       persist();
       renderAll();
       return;
     }
 
-    const changed = applyExtractedMetadata(item, result.metadata);
-    item.metadataStatus = changed ? "已自动识别" : "未识别到文献信息";
-    item.updatedAt = new Date().toISOString();
+    const changed = applyExtractedMetadata(target, result.metadata);
+    target.metadataStatus = changed ? "已自动识别" : "未识别到文献信息";
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
   } catch (error) {
-    item.metadataStatus = "自动识别失败";
-    item.updatedAt = new Date().toISOString();
+    const target = getLiveDocument(item.id) || item;
+    target.metadataStatus = "自动识别失败";
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
   }
 }
 
-async function detectDocumentCover(item, file) {
+async function detectDocumentCover(item, file, onProgress) {
   if (!item || !canEditDocument(item) || !file || !file.name) {
     return;
   }
 
-  item.coverStatus = "正在识别封面";
-  item.updatedAt = new Date().toISOString();
+  const initialTarget = getLiveDocument(item.id) || item;
+  initialTarget.coverStatus = "正在识别封面";
+  initialTarget.updatedAt = new Date().toISOString();
   persist();
   renderAll();
 
   try {
-    const candidate = await requestCoverCandidate(file);
+    const candidate = await requestCoverCandidate(file, onProgress);
     if (!candidate.imageDataUrl) {
-      item.coverStatus = "未提取到候选封面";
-      item.updatedAt = new Date().toISOString();
+      const target = getLiveDocument(item.id) || item;
+      target.coverStatus = "未提取到候选封面";
+      target.updatedAt = new Date().toISOString();
       persist();
       renderAll();
       return;
@@ -512,40 +618,33 @@ async function detectDocumentCover(item, file) {
       metadata: buildLlmMetadata(item),
     });
 
+    const target = getLiveDocument(item.id) || item;
     if (result.ready && result.hasCover) {
-      item.coverImageDataUrl = candidate.imageDataUrl;
-      item.coverStatus = "已使用上传封面";
+      target.coverImageDataUrl = candidate.imageDataUrl;
+      target.coverStatus = "已使用上传封面";
     } else if (result.ready) {
-      item.coverStatus = "未识别到封面";
+      target.coverStatus = "未识别到封面";
     } else {
-      item.coverStatus = "封面识别未连接";
+      target.coverStatus = "封面识别未连接";
     }
 
-    item.updatedAt = new Date().toISOString();
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
   } catch (error) {
-    item.coverStatus = "封面识别失败";
-    item.updatedAt = new Date().toISOString();
+    const target = getLiveDocument(item.id) || item;
+    target.coverStatus = "封面识别失败";
+    target.updatedAt = new Date().toISOString();
     persist();
     renderAll();
   }
 }
 
-async function requestCoverCandidate(file) {
+async function requestCoverCandidate(file, onProgress) {
   const body = new FormData();
   body.append("document", file, file.name);
 
-  const response = await fetch(OCR_COVER_SERVICE_URL, {
-    method: "POST",
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Cover candidate request failed: ${response.status}`);
-  }
-
-  return response.json();
+  return postFormDataWithProgress(OCR_COVER_SERVICE_URL, body, { onProgress, retries: 1 });
 }
 
 function needsMetadataAutoFill(item) {

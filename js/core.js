@@ -636,6 +636,8 @@ async function pushServerSnapshot() {
 
 // 立即把本地改动推送到服务端并等待完成（取消防抖）。
 // 用于跳转前确保数据已落服务端，避免下一页拉取快照时覆盖本地未同步内容。
+// 注意：pushServerSnapshot() 在有在途请求时会直接返回那个请求（它带的可能是旧快照），
+// 所以这里要循环推到「确实没有新改动」为止，否则刚落库的任务号/原件地址会被旧快照覆盖。
 async function flushPendingSync() {
   window.clearTimeout(syncPushTimer);
   syncPushTimer = null;
@@ -644,10 +646,18 @@ async function flushPendingSync() {
     return false;
   }
 
-  return pushServerSnapshot();
+  let pushed = false;
+  for (let attempt = 0; attempt < 5 && syncDirty; attempt += 1) {
+    window.clearTimeout(syncPushTimer);
+    syncPushTimer = null;
+    pushed = (await pushServerSnapshot()) || pushed;
+  }
+  return pushed;
 }
 
-async function archiveDocumentSource(item, file) {
+// 归档原件。onProgress(0~1) 可选，用于界面上报上传进度。
+// 上传走 XHR + 重试（幂等接口），失败时抛错，由调用方（上传流水线）决定如何提示与续传。
+async function archiveDocumentSource(item, file, onProgress) {
   if (!item?.id || !canEditDocument(item) || !file?.name) {
     return false;
   }
@@ -658,31 +668,26 @@ async function archiveDocumentSource(item, file) {
     body.append("documentId", item.id);
     body.append("role", "source");
 
-    const response = await fetch(DATA_FILE_UPLOAD_URL, {
-      method: "POST",
-      body,
+    const result = await postFormDataWithProgress(DATA_FILE_UPLOAD_URL, body, {
+      onProgress,
+      retries: 2,
     });
-
-    if (!response.ok) {
-      throw new Error(`File upload failed: ${response.status}`);
+    if (!result || !result.file) {
+      throw new Error("原件上传未完成：服务端未返回文件记录。");
     }
 
-    const result = await response.json();
-    if (!result.file) {
-      return false;
+    const target = getLiveDocument(item.id) || item;
+    target.sourceFile = result.file;
+    target.filePath = result.file.path;
+    target.fileUrl = result.file.url;
+    target.fileHash = result.file.sha256;
+    target.fileMimeType = result.file.mimeType;
+    target.fileSize = result.file.size;
+    if (target.pages?.[0] && result.file.mimeType?.startsWith("image/")) {
+      target.pages[0].imageUrl = result.file.url;
+      target.pages[0].imageName = target.fileName || file.name;
     }
-
-    item.sourceFile = result.file;
-    item.filePath = result.file.path;
-    item.fileUrl = result.file.url;
-    item.fileHash = result.file.sha256;
-    item.fileMimeType = result.file.mimeType;
-    item.fileSize = result.file.size;
-    if (item.pages?.[0] && result.file.mimeType?.startsWith("image/")) {
-      item.pages[0].imageUrl = result.file.url;
-      item.pages[0].imageName = item.fileName || file.name;
-    }
-    item.updatedAt = new Date().toISOString();
+    target.updatedAt = new Date().toISOString();
     syncCursor = String(result.syncCursor || syncCursor);
     localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
     persist();
@@ -691,7 +696,7 @@ async function archiveDocumentSource(item, file) {
     }
     return true;
   } catch (error) {
-    return false;
+    throw error instanceof Error ? error : new Error("原件上传失败。");
   }
 }
 
@@ -945,6 +950,12 @@ function createPage(pageNumber) {
 }
 function getSelectedDocument() {
   return documents.find((item) => item.id === selectedDocumentId) || null;
+}
+
+// 服务端快照同步（applyServerState）会整体替换 documents 里的对象，
+// 所以任何 await 之后要写回文献时必须用 id 重新取当前实例，否则改动会落到已被丢弃的旧对象上。
+function getLiveDocument(documentId) {
+  return documents.find((item) => item.id === documentId) || null;
 }
 
 function canEditDocument(item) {

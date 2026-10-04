@@ -143,14 +143,22 @@ form?.addEventListener("submit", async (event) => {
   closeDocumentForm();
   renderAll();
 
-  // 先完成原件归档、封面识别与逐页任务提交，并把本地快照推送到服务端，再进入阅读页。
+  // 上传流水线：原件归档 → 封面识别 → 逐页任务提交（进度显示在文献卡上）。
+  // 三段全部成功才进阅读页；中途失败会保留浏览器暂存并明确提示，稍后打开该文献会自动续传。
+  try {
+    await runDocumentUploadPipeline(item, file);
+  } catch (error) {
+    await flushPendingSync();
+    renderAll();
+    window.alert(
+      `原件上传未完成：${error && error.message ? error.message : "网络中断"}。\n` +
+        "文件已暂存在本浏览器，稍后打开这篇文献会自动继续上传。",
+    );
+    return;
+  }
+
   // 阅读页加载时会拉取服务端快照；若此时新文献尚未同步，本地缓存会被空快照覆盖，
   // 表现为“未选择文献”。因此跳转前必须等待推送完成。
-  await Promise.allSettled([
-    archiveDocumentSource(item, file),
-    detectDocumentCover(item, file),
-    submitProcessingTask(item, file),
-  ]);
   await flushPendingSync();
 
   setView("reader");

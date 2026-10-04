@@ -262,7 +262,7 @@ label {
 
 #reader-document-detail > div {
   display: grid;
-  grid-template-columns: 62px 1fr;
+  grid-template-columns: 62px minmax(0, 1fr);
   gap: 8px;
   border-bottom: 1px solid var(--line);
   padding: 8px 0;
@@ -274,13 +274,15 @@ label {
 }
 
 #reader-document-detail .metadata-pair-row {
-  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  grid-template-columns: 62px minmax(0, 1fr) 62px minmax(0, 1fr);
   column-gap: 8px;
 }
 
 #reader-document-detail dt {
   color: var(--muted);
   font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
 }
 
 #reader-document-detail dd {
@@ -1395,6 +1397,42 @@ body {
 .book-pages {
   flex: 0 0 auto;
   text-align: right;
+}
+
+/* 上传中的文献卡：显示「上传原件 42%」并禁止进入阅读页（整页跳转会中断上传） */
+.book-card.is-uploading {
+  cursor: progress;
+}
+
+.book-card.is-uploading .book-cover {
+  opacity: 0.72;
+}
+
+.book-card.is-uploading .book-pages {
+  color: var(--primary);
+}
+
+.book-card.is-upload-failed .book-pages {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.upload-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 1200;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .book-meta {
