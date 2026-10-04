@@ -113,6 +113,13 @@ If the upstream is missing or unreachable, OCR reports `ready: false` or HTTP
 503. The LLM service uses the OpenAI-compatible `/v1` API and requires the
 `qwen3:8b` model.
 
+The OCR orchestration service accepts a task immediately and returns its task
+ID before processing begins. Tasks are processed one at a time; later tasks
+remain in `排队中` and the browser polls the task endpoint until processing
+starts, then continuously updates the reader progress display. Do not start a
+second data or OCR service manually on the same port; use the corresponding
+systemd unit.
+
 ## Tunnel requirements
 
 The remote host must be able to SSH to the data host using the dedicated key

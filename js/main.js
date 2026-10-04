@@ -94,6 +94,10 @@ document.querySelector("#jump-documents")?.addEventListener("click", () => {
 
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!currentUser?.id) {
+    window.alert("当前未登录或登录状态已失效，请重新登录后再登记文献。");
+    return;
+  }
   const formData = new FormData(form);
   const file = formData.get("file");
 

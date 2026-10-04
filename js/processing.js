@@ -230,7 +230,9 @@ function triggerProcessingMetadata(item) {
 }
 
 async function submitProcessingTask(item, file) {
-  if (!canEditDocument(item)) return;
+  if (!canEditDocument(item)) {
+    throw new Error("当前用户没有该文献的编辑权限，无法提交处理任务。请重新登录后重试。");
+  }
   try {
     const body = new FormData();
     body.append("document", file, file.name);
@@ -247,9 +249,13 @@ async function submitProcessingTask(item, file) {
     }
 
     const result = await response.json();
+    const remoteTaskId = result.taskId || result.id;
+    if (!remoteTaskId) {
+      throw new Error("处理服务未返回任务编号，文献未进入处理队列。");
+    }
     item.processingTask = {
       ...item.processingTask,
-      remoteTaskId: result.taskId || result.id || item.processingTask.id,
+      remoteTaskId,
       status: result.status || "处理中",
       submittedAt: new Date().toISOString(),
       totalPages: Number(result.totalPages) || item.processingTask.totalPages || 0,
@@ -302,7 +308,13 @@ async function refreshProcessingTask() {
 
   const taskId = item.processingTask?.remoteTaskId;
   if (!taskId) {
-    alert("当前文献还没有处理任务编号。请确认导入时逐页处理服务与服务端识别能力均可用。");
+    if (item.fileUrl) {
+      await resumeMissingProcessingTask(item);
+      return;
+    }
+    if (streamStatus) {
+      streamStatus.textContent = "等待处理任务提交...";
+    }
     return;
   }
 
@@ -313,8 +325,10 @@ async function refreshProcessingDocument(item, options = {}) {
   if (!canEditDocument(item)) return;
   const taskId = item.processingTask?.remoteTaskId;
   if (!taskId) {
-    if (!options.silent) {
-      alert("当前文献还没有处理任务编号。请确认导入时逐页处理服务与服务端识别能力均可用。");
+    if (item.fileUrl) {
+      await resumeMissingProcessingTask(item);
+    } else if (!options.silent && streamStatus) {
+      streamStatus.textContent = "等待处理任务提交...";
     }
     return;
   }

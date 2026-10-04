@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -55,6 +56,7 @@ app.add_middleware(
 )
 
 TASKS: dict[str, dict[str, Any]] = {}
+PROCESSING_SLOT = threading.Semaphore(1)
 
 # 不进入正文的版面角色（按服务端标签判定，不含任何本地版面推断）：
 # 页眉、页脚、页码，以及不含文字内容的图片 / 图表 / 印章区域。
@@ -162,6 +164,23 @@ def get_stream(task_id: str):
     return JSONResponse(public_task(task))
 
 
+@app.on_event("startup")
+def recover_pending_tasks() -> None:
+    """Resume tasks that were queued when the OCR service was restarted."""
+    for task_path in TASKS_DIR.glob("task-*/task.json"):
+        task = load_task(task_path.parent.name)
+        if not task or task.get("status") not in {"排队中", "处理中", "准备中"}:
+            continue
+        task["status"] = "排队中"
+        task["message"] = "服务已恢复，任务等待处理。"
+        save_task(task)
+        threading.Thread(
+            target=process_stream_task,
+            args=(task["taskId"],),
+            daemon=True,
+        ).start()
+
+
 async def save_upload(upload: UploadFile, prefix: str | None = None) -> Path:
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
     name = f"{prefix or uuid.uuid4().hex}{suffix}"
@@ -183,42 +202,49 @@ def process_stream_task(task_id: str) -> None:
     if not task:
         return
 
-    quick_read = bool(task.get("quickRead"))
-    task["status"] = "处理中"
-    task["message"] = "正在快速拆页并提交服务端识别。" if quick_read else "正在拆页并提交服务端识别，请稍后刷新。"
-    task["totalPages"] = 0
-    task["completedPages"] = 0
-    task["currentPage"] = 0
-    task["currentPageStage"] = "准备中"
-    task["currentPageProgress"] = 0
-    save_task(task)
-
+    PROCESSING_SLOT.acquire()
     try:
-        pages, total_pages = process_document(
-            Path(task["sourcePath"]),
-            task_id,
-            quick_read=quick_read,
-        )
-        task["pages"] = pages
-        task["totalPages"] = total_pages
-        task["completedPages"] = total_pages
-        task["currentPage"] = total_pages
-        task["currentPageStage"] = "已完成"
-        task["currentPageProgress"] = 100
-        task["status"] = "已完成"
-        task["message"] = (
-            "临时文件已快速读取。"
-            if quick_read
-            else "逐页处理完成，请回到平台查看结果。"
-        )
-    except ocr_upstream.OcrUpstreamError as exc:
-        task["status"] = "处理失败"
-        task["message"] = f"识别服务端不可用：{exc}"
-    except Exception as exc:  # noqa: BLE001
-        task["status"] = "处理失败"
-        task["message"] = f"处理失败：{exc}"
+        task = load_task(task_id)
+        if not task:
+            return
+        quick_read = bool(task.get("quickRead"))
+        task["status"] = "处理中"
+        task["message"] = "正在快速拆页并提交服务端识别。" if quick_read else "正在拆页并提交服务端识别，请稍后刷新。"
+        task["totalPages"] = 0
+        task["completedPages"] = 0
+        task["currentPage"] = 0
+        task["currentPageStage"] = "准备中"
+        task["currentPageProgress"] = 0
+        save_task(task)
 
-    save_task(task)
+        try:
+            pages, total_pages = process_document(
+                Path(task["sourcePath"]),
+                task_id,
+                quick_read=quick_read,
+            )
+            task["pages"] = pages
+            task["totalPages"] = total_pages
+            task["completedPages"] = total_pages
+            task["currentPage"] = total_pages
+            task["currentPageStage"] = "已完成"
+            task["currentPageProgress"] = 100
+            task["status"] = "已完成"
+            task["message"] = (
+                "临时文件已快速读取。"
+                if quick_read
+                else "逐页处理完成，请回到平台查看结果。"
+            )
+        except ocr_upstream.OcrUpstreamError as exc:
+            task["status"] = "处理失败"
+            task["message"] = f"识别服务端不可用：{exc}"
+        except Exception as exc:  # noqa: BLE001
+            task["status"] = "处理失败"
+            task["message"] = f"处理失败：{exc}"
+
+        save_task(task)
+    finally:
+        PROCESSING_SLOT.release()
 
 
 def process_document(
