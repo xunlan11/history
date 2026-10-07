@@ -166,4 +166,86 @@ Expected results:
 - Keep the five data-host units and three remote-host units.
 - `fetch-assets.py` downloads the remote OCR/Ollama assets when rebuilding the
   remote host.
-- `test-layout-parsing.py` and `test-llm.py` are optional smoke tests.
+
+## Backend document scheduling
+
+The data API owns a durable SQLite queue (`processing_jobs`) shared by all users
+of that data site. No extra model, broker, dependency or standalone scheduler
+service is needed. The scheduler starts with `service.data:app`; a process-lifetime
+OS lock beside the database allows only one active worker, with automatic
+lock takeover if the worker process exits. The queue remains in SQLite.
+
+Source upload now requires a saved, owned document record. Archiving the source
+and reserving its FIFO queue sequence happen in the same database transaction:
+closing the browser immediately after the upload does not stop registration.
+Repeated submission returns the same real task and cannot change its mode or
+replace its source. A missing source never creates a placeholder backend task.
+
+Registration preparation (cover + first-page metadata) has priority over body
+work. The scheduler stops dispatching new body operations and drains any
+in-flight page calls before preparing new registrations. Saved body progress is
+retained; after registration is saved, its body waits behind earlier documents.
+An earlier document waiting for registration/service recovery also retains its
+reserved order; later registrations may be prepared but cannot start body ahead
+of it. A permanently failed document releases the queue until explicitly retried.
+
+Both registration forms default to **serial**; users can choose **parallel**.
+The archived submission freezes that choice. Serial performs OCR + LLM for one
+page before advancing. Parallel uses independent OCR/LLM lanes, so OCR may lead
+LLM by any number of pages. Both use the existing `/llm/finalize-page` contract,
+prompt and the two most recent successful preceding pages as context. The next
+document starts only after OCR, LLM and result persistence have all finished.
+The browser only uploads, submits and reads states; it runs no body LLM queue.
+
+Checkpoint state, page images, OCR output, finalized text and registration
+results are durable. OCR page images are archived before recognition, so failed
+OCR pages can still be reviewed. The LLM API now reports `errorKind`:
+`unavailable` waits/retries automatically without consuming a failure budget;
+`processing` is an ordinary error with a maximum of three attempts. OCR's typed
+upstream error codes are similarly classified: protocol/bad-file errors are not
+mistaken for service outages. Page failures are marked for human review and
+later pages continue. Registration/whole-source failures stop that document
+instead of waiting indefinitely for service recovery. Removing a marked failed
+page requires confirmation and never deletes its archived source.
+
+### Deploy on the data host, not a code-only workstation
+
+Deploy the frontend and `service/data.py`, `service/scheduler.py`,
+`service/ocr.py` and `service/llm.py` together. Restart the data APIs as well as
+the existing OCR/LLM orchestration APIs on the data host. The remote model host
+needs no code/model changes. The new queue table is created additively on data
+API startup; do not clear documents, databases or assets. Restoring a full ZIP
+backup retains the queue/checkpoints and relative asset paths. JSON document
+exports are not scheduler backups; use the full SQLite + files backup for
+process recovery and migration.
+
+The updated data-host unit files set the correct OCR API for each isolated site:
+
+| Unit | OCR API | LLM API |
+| --- | --- | --- |
+| `history-data` | `http://127.0.0.1:8765` | `http://127.0.0.1:8865` |
+| `literature` | `http://127.0.0.1:18765` | `http://127.0.0.1:8865` |
+
+Optional environment settings on the data API:
+
+```ini
+PROCESSING_SCHEDULER_ENABLED=true
+PROCESSING_RETRY_SECONDS=10
+PROCESSING_HTTP_TIMEOUT_SECONDS=1000
+```
+
+`PROCESSING_OCR_URL` and `PROCESSING_LLM_URL` point to orchestration APIs on
+the data host, **not** directly to PaddleX/Ollama. Server-to-server timeout must
+allow three registration OCR calls (currently 300 seconds each) and LLM inference
+(currently 600 seconds). The browser no longer holds long recognition requests
+open. Missing models/configuration, HTTP 429/502/503/504 and network outages are
+retryable; ordinary bad results have bounded retries. Each site's queue is
+isolated by its configured database, as before; this is not a cross-site queue.
+
+### Production acceptance
+
+Before production acceptance, exercise two users uploading concurrently, close the
+browser during registration/body processing, interrupt OCR and LLM independently,
+restart the data API, then restore services. Confirm saved stages are reused and
+subsequent bodies never overtake the waiting head. This deployment verification
+has not been performed on the code-only workstation.

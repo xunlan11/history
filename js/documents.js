@@ -287,7 +287,7 @@ function createBookCard(item, index) {
   }
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
-  node.querySelector(".book-pages").textContent = uploadText || `${item.pages.length} 页`;
+  node.querySelector(".book-pages").textContent = uploadText || (item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item)) ? item.status : `${item.pages.length} 页`);
   node.querySelector(".book-author").textContent = item.author || "著者未录";
   cover.setAttribute("aria-hidden", "true");
   const coverImageSource = item.coverImageUrl || item.coverImageDataUrl || "";
@@ -296,21 +296,28 @@ function createBookCard(item, index) {
     cover.style.setProperty("--cover-image", `url("${coverImageSource}")`);
   }
 
-  const openDocumentFromCard = () => {
+  const openDocumentFromCard = async () => {
     if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") {
       return;
     }
 
-    // 上传中的文献不许进入阅读页：整页跳转会 abort 在途上传（原件与逐页任务都提交不上去）。
+    // 登记中的文献不许进入阅览器，避免中断识别或上传。
     if (typeof isDocumentUploadActive === "function" && isDocumentUploadActive(item.id)) {
       if (typeof showUploadToast === "function") {
-        showUploadToast("原件正在上传，上传完成后会自动进入阅读页，请稍候。");
+        showUploadToast("文献正在登记，封面和信息识别结束后才能进入阅览器，请稍候。");
       }
       return;
     }
 
-    selectedDocumentId = item.id;
-    ensureSelectedPage(item);
+    const current = getLiveDocument(item.id) || item;
+    if (canEditDocument(current) && isDocumentRegistrationPending(current)) {
+      const completed = await resumeMissingProcessingTask(current, { interactive: true });
+      if (!completed) return;
+    }
+    const ready = getLiveDocument(item.id);
+    if (!ready) return;
+    selectedDocumentId = ready.id;
+    ensureSelectedPage(ready);
     setReaderReturnView(document.body.dataset.page === "documents" ? "documents" : "library");
     setView("reader");
   };

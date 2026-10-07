@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from service.extract import FileExtractionError, extract_file_content
+from service import scheduler as processing_scheduler
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -96,7 +97,7 @@ def next_available_user_id(connection: sqlite3.Connection) -> int:
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA foreign_keys=ON")
@@ -226,6 +227,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
+    processing_scheduler.ensure_schema(connection)
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
@@ -781,7 +783,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
         if existing and existing["owner_id"] != user["id"]:
             continue
 
-        stored_document = dict(document)
+        stored_document = processing_scheduler.preserve_server_fields(connection, dict(document))
         stored_document.pop("creator", None)
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
@@ -946,6 +948,7 @@ def soft_delete_entities(
             continue
 
         if table == "documents":
+            connection.execute("UPDATE processing_jobs SET status='cancelled',updated_at=? WHERE document_id=?", (timestamp, entity_id))
             connection.execute(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE document_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
@@ -1070,6 +1073,168 @@ def vacuum_storage() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"数据库压缩失败：{exc}") from exc
 
 
+class ProcessingSubmission(BaseModel):
+    mode: Literal["serial", "parallel"] = "serial"
+
+
+def enqueue_document(connection, document_id: str, mode: str | None = None):
+    existing = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+    row = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="文献不存在")
+    document = json_load(row["payload"])
+    if existing:
+        return document
+    source = connection.execute("SELECT * FROM document_files WHERE document_id=? AND role='source' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", (document_id,)).fetchone()
+    if not source:
+        raise HTTPException(status_code=409, detail="原件尚未归档")
+    selected = mode or document.get("processingMode") or "serial"
+    if not isinstance(selected, str) or selected not in {"serial", "parallel"}:
+        raise HTTPException(status_code=422, detail="处理方式必须是串行或并行")
+    source_path = (FILE_STORAGE_DIR / source["storage_path"]).resolve()
+    if not source_path.is_relative_to(FILE_STORAGE_DIR) or not source_path.is_file():
+        raise HTTPException(status_code=409, detail="归档原件不存在或路径无效")
+    stamp = now_iso()
+    result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,source_path,checkpoint,created_at,updated_at)
+        VALUES(?,?,?,?,?,?)""", (document_id, selected, source["storage_path"], json_dump({"registrationStep": "cover_candidate"}), stamp, stamp))
+    document["processingMode"] = selected
+    document["registration"] = {"status": "running", "stage": "cover", "cover": "pending", "metadata": "pending", "error": "", "completedAt": ""}
+    apply_asset_to_document(document, public_asset(source))
+    document["processingTask"] = {**(document.get("processingTask") or {}), "backendManaged": True,
+        "remoteTaskId": f"document-{result.lastrowid}", "status": "登记中", "mode": selected,
+        "queueSequence": result.lastrowid, "revision": 1, "metadataSnapshot": processing_scheduler.metadata(document), "activeStages": {}, "submittedAt": stamp, "finishedAt": "", "message": "原件已归档，后端准备登记",
+        "totalPages": 0, "completedPages": 0, "finalizedPages": 0, "failedPages": []}
+    document.update(status="登记中", updatedAt=stamp)
+    connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(document), stamp, document_id))
+    return document
+
+
+def require_owned_document(connection, document_id: str, user):
+    row = connection.execute("SELECT owner_id FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="文献不存在")
+    if row["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="只有创建者可以修改文献")
+
+
+def public_processing_document(connection, document_id, user):
+    # Use the same visibility/asset projection as bootstrap.
+    return next(doc for doc in active_payloads(connection, "documents", user) if doc["id"] == document_id)
+
+
+@app.post("/api/documents/{document_id}/processing")
+def submit_document_processing(document_id: str, payload: ProcessingSubmission, authorization: str | None = Header(default=None)):
+    user = current_user(authorization)
+    with database() as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_owned_document(connection, document_id, user)
+        enqueue_document(connection, document_id, payload.mode)
+        bump_sync_version(connection)
+        return {"document": public_processing_document(connection, document_id, user)}
+
+
+@app.delete("/api/documents/{document_id}/processing/failed-pages/{page_number}")
+def remove_failed_processing_page(document_id: str, page_number: int, authorization: str | None = Header(default=None)):
+    user = current_user(authorization)
+    with database() as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_owned_document(connection, document_id, user)
+        row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=409, detail="文献没有后端任务")
+        document = json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"])
+        page = next((p for p in document.get("pages", []) if p.get("pageNumber") == page_number), None)
+        if not page or not page.get("failureStage"):
+            raise HTTPException(status_code=409, detail="只能删除已标注的失败页")
+        document["pages"] = [p for p in document["pages"] if p["pageNumber"] != page_number]
+        task = document["processingTask"]
+        task["failedPages"] = [p for p in task.get("failedPages", []) if p["pageNumber"] != page_number]
+        checkpoint = json_load(row["checkpoint"])
+        omitted = checkpoint.setdefault("omittedPages", [])
+        if page_number not in omitted:
+            omitted.append(page_number)
+        # This transaction cannot race a page result commit. Only failed,
+        # terminal page stages can be removed; the archived source is untouched.
+        import sys
+        processing_scheduler.save_job_state(sys.modules[__name__], connection, dict(row), document, checkpoint)
+        return {"document": public_processing_document(connection, document_id, user)}
+
+
+@app.delete("/api/documents/{document_id}/processing")
+def cancel_document_processing(document_id: str, authorization: str | None = Header(default=None)):
+    user = current_user(authorization)
+    with database() as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT owner_id,payload,deleted_at FROM documents WHERE id=?", (document_id,)).fetchone()
+        if not row:
+            return {"status": "ok"}
+        if row["owner_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有创建者可以停止文献任务")
+        connection.execute("UPDATE processing_jobs SET status='cancelled',updated_at=? WHERE document_id=?", (now_iso(), document_id))
+        if row["deleted_at"] is None:
+            doc = json_load(row["payload"])
+            task = doc.get("processingTask") or {}
+            task.update(status="已取消", activeStages={}, finishedAt=now_iso(), revision=int(task.get("revision") or 0) + 1)
+            doc.update(status="已取消", processingTask=task)
+            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(doc), now_iso(), document_id))
+            bump_sync_version(connection)
+        return {"status": "ok"}
+
+
+@app.get("/api/documents/{document_id}/processing")
+def document_processing_status(document_id: str, authorization: str | None = Header(default=None)):
+    user = current_user(authorization)
+    with database() as connection:
+        row = connection.execute("SELECT owner_id,visibility FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
+        if not row or (row["owner_id"] != user["id"] and row["visibility"] != "public"):
+            raise HTTPException(status_code=404, detail="文献不存在")
+        return {"document": public_processing_document(connection, document_id, user)}
+
+
+@app.post("/api/documents/{document_id}/processing/retry")
+def retry_document_processing(document_id: str, authorization: str | None = Header(default=None)):
+    user = current_user(authorization)
+    with database() as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_owned_document(connection, document_id, user)
+        row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=409, detail="原件尚未提交后端调度")
+        if row["status"] == "failed":
+            cp = json_load(row["checkpoint"])
+            cp.update(attempts={}, retries={}, waiting={}, errors={})
+            stamp = now_iso()
+            connection.execute("UPDATE processing_jobs SET status='queued',retry_at=0,checkpoint=?,updated_at=? WHERE document_id=?", (json_dump(cp), stamp, document_id))
+            document = json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"])
+            document["processingTask"].update(status="登记中" if row["phase"] == "registration" else "排队中", finishedAt="", message="已申请重试失败阶段")
+            if row["phase"] == "registration":
+                document["registration"].update(status="running", error="")
+            document.update(status=document["processingTask"]["status"], updatedAt=stamp)
+            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(document), stamp, document_id))
+            bump_sync_version(connection)
+        return {"document": public_processing_document(connection, document_id, user)}
+
+
+_scheduler_worker = None
+
+
+@app.on_event("startup")
+def start_document_scheduler():
+    global _scheduler_worker
+    import sys
+    if os.getenv("PROCESSING_SCHEDULER_ENABLED", "true").lower() not in {"0", "false", "no"}:
+        with database():
+            pass
+        _scheduler_worker = processing_scheduler.Scheduler(sys.modules[__name__])
+        _scheduler_worker.start()
+
+
+@app.on_event("shutdown")
+def stop_document_scheduler():
+    if _scheduler_worker:
+        _scheduler_worker.stop()
+
+
 @app.post("/api/files/upload")
 async def upload_file(
     document: UploadFile = File(...),
@@ -1093,11 +1258,24 @@ async def upload_file(
             "SELECT owner_id FROM documents WHERE id = ?",
             (document_id,),
         ).fetchone()
-    if existing and existing["owner_id"] != user["id"]:
+    if not existing:
+        raise HTTPException(status_code=409, detail="请先保存文献记录再上传原件")
+    if existing["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="只有创建者可以修改文献")
 
     mime_type = document.content_type or mimetypes.guess_type(document.filename or "")[0] or "application/octet-stream"
     timestamp = now_iso()
+    # Reject replacement before writing a new orphan asset. Re-uploading the
+    # same content is idempotent; changing a submitted source is not allowed.
+    with database() as connection:
+        submitted = connection.execute("SELECT source_path FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
+    if submitted:
+        existing_path = Path(submitted["source_path"]).as_posix()
+        expected_digest = hashlib.sha256(content).hexdigest()
+        expected_path = relative_storage_path(document_id, normalized_role, expected_digest, mime_type, document.filename or "").as_posix()
+        if existing_path != expected_path:
+            raise HTTPException(status_code=409, detail="已提交的文献不能替换原件，请另行登记")
+
     asset = write_asset_file(
         content,
         document_id=document_id,
@@ -1110,6 +1288,8 @@ async def upload_file(
     try:
         with database() as connection:
             with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                require_owned_document(connection, document_id, user)
                 file_record = upsert_file_record(
                     connection,
                     document_id=document_id,
@@ -1118,8 +1298,12 @@ async def upload_file(
                     asset=asset,
                     timestamp=timestamp,
                 )
+                archived_document = None
+                if normalized_role == "source":
+                    enqueue_document(connection, document_id)
+                    archived_document = public_processing_document(connection, document_id, user)
                 cursor = bump_sync_version(connection)
-        return {"status": "ok", "file": file_record, "syncCursor": str(cursor)}
+        return {"status": "ok", "file": file_record, "document": archived_document, "syncCursor": str(cursor)}
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"文件记录保存失败：{exc}") from exc
 
@@ -1415,6 +1599,7 @@ def push(payload: SyncPayload, authorization: str | None = Header(default=None))
     try:
         with database() as connection:
             with connection:
+                connection.execute("BEGIN IMMEDIATE")
                 upsert_documents(connection, payload.documents, timestamp, user)
                 upsert_conversations(connection, payload.conversations, timestamp)
                 soft_delete_entities(

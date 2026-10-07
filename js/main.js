@@ -117,6 +117,7 @@ form?.addEventListener("submit", async (event) => {
     creator: currentUser?.username ? { username: currentUser.username } : null,
     ownerId: currentUser?.id ?? null,
     canEdit: true,
+    registration: createRegistrationState(),
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
     coverVariant: getNextDocumentCoverVariant(),
@@ -125,6 +126,7 @@ form?.addEventListener("submit", async (event) => {
     fileType: file.type || "unknown",
     fileSize: file.size,
     processingTask: createProcessingTask(file),
+    processingMode: formData.get("processingMode") === "parallel" ? "parallel" : "serial",
     createdAt: new Date().toISOString(),
     status: "待整理",
     pages: [firstPage],
@@ -139,23 +141,28 @@ form?.addEventListener("submit", async (event) => {
   closeDocumentForm();
   renderAll();
 
-  // 上传流水线：原件归档 → 封面识别 → 逐页任务提交（进度显示在文献卡上）。
-  // 三段全部成功才进阅读页；中途失败会保留浏览器暂存并明确提示，稍后打开该文献会自动续传。
+  // 原件归档成功后，后端自动准备登记，再按队列处理正文。
   try {
     await runDocumentUploadPipeline(item, file);
   } catch (error) {
     await flushPendingSync();
     renderAll();
-    window.alert(
-      `原件上传未完成：${error && error.message ? error.message : "网络中断"}。\n` +
-        "文件已暂存在本浏览器，稍后打开这篇文献会自动继续上传。",
-    );
+    if (!error.registrationPaused && !error.registrationCancelled) {
+      window.alert(
+        `文献登记未完成：${error && error.message ? error.message : "网络中断"}。\n` +
+          "原件和已完成阶段已保留，稍后点击这篇文献可继续登记。",
+      );
+    }
     return;
   }
 
   // 阅读页加载时会拉取服务端快照；若此时新文献尚未同步，本地缓存会被空快照覆盖，
   // 表现为“未选择文献”。因此跳转前必须等待推送完成。
   await flushPendingSync();
+  if (syncDirty) {
+    window.alert("登记结果尚未同步到服务端，请稍后点击文献重试。");
+    return;
+  }
 
   setView("reader");
 });
@@ -546,6 +553,13 @@ async function initializeApplication() {
   }
   await initializeServerData();
   applyRouteSelection();
+  const selected = getSelectedDocument();
+  if (document.body.dataset.page === "reader" && canEditDocument(selected) &&
+      isDocumentRegistrationPending(selected)) {
+    // 未完成登记的直达链接也不能先进入阅览器，回文献库恢复登记。
+    setView("documents");
+    return;
+  }
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
   renderAll();
   renderSmartModeButtons();
@@ -562,26 +576,13 @@ async function initializeApplication() {
 
 function resumePendingProcessingTasks() {
   documents.forEach((item) => {
-    if (!canEditDocument(item)) return;
-    if (!item.processingTask?.remoteTaskId) {
-      // 登记没跑完（原件或逐页任务没提交上）：先续传，成功后再补做封面识别。
-      resumeMissingProcessingTask(item).then(() => resumePendingRecognition(item));
+    if (item.processingTask?.backendManaged) {
+      dropPendingUpload(item.id);
+      if (isProcessingTaskPending(item)) startProcessingPolling(item);
       return;
     }
-
-    // 登记已完成：封面识别（要跑大模型）在后台补做，不阻塞页面。
-    resumePendingRecognition(item);
-
-    if (isProcessingTaskPending(item)) {
-      startProcessingPolling(item);
-      return;
-    }
-
-    const task = item.processingTask;
-    if (task && ["已完成", "已回填"].includes(task.status)) {
-      // OCR 已完成但大模型整理未完成时，恢复逐页流水线。
-      enqueueNewProcessingPages(item);
-      maybeFinishProcessingPipeline(item);
+    if (canEditDocument(item) && isDocumentRegistrationPending(item)) {
+      resumeMissingProcessingTask(item);
     }
   });
 }

@@ -11,6 +11,8 @@ Environment=DATA_DB_PATH=/home/ubuntu/Codefield/literature/app.db
 Environment=DATA_STORAGE_DIR=/home/ubuntu/Codefield/literature
 Environment=DATA_FILE_STORAGE_DIR=/home/ubuntu/Codefield/literature/files
 Environment=DATA_PUBLIC_BASE_URL=/literature/api/data
+Environment=PROCESSING_OCR_URL=http://127.0.0.1:18765
+Environment=PROCESSING_LLM_URL=http://127.0.0.1:8865
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 18665
 Restart=always
 RestartSec=5

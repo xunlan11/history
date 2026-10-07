@@ -22,8 +22,12 @@ function endpoint(proxiedPath) {
   return `${HISTORY_BASE}/api${proxiedPath}`;
 }
 
+const DATA_PROCESSING_URL = endpoint("/data/api/documents");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
 const OCR_COVER_SERVICE_URL = endpoint("/ocr/ocr/cover-candidate");
+const OCR_METADATA_SERVICE_URL = endpoint("/ocr/ocr/metadata-candidate");
+// Conversation attachments retain the independent OCR stream API; document正文
+// processing no longer uses it.
 const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
@@ -283,7 +287,7 @@ const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
 const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema4`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
 const DELETED_CONVERSATION_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedConversations.schema4`;
-// 待向 OCR 服务确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
+// 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
 const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema4`;
 const SYNC_INTERVAL_MS = 30000;
 
@@ -313,6 +317,27 @@ function loadCachedDocuments() {
   }
 }
 
+function createRegistrationState() {
+  return { status: "pending", stage: "archive", cover: "pending", metadata: "pending", error: "", completedAt: "" };
+}
+
+function normalizeRegistration(value) {
+  if (!value || typeof value !== "object") return null;
+  const state = createRegistrationState();
+  if (["pending", "running", "waiting", "paused", "failed", "completed"].includes(value.status)) state.status = value.status;
+  if (["archive", "cover", "metadata", "submit", "completed"].includes(value.stage)) state.stage = value.stage;
+  for (const key of ["cover", "metadata"]) {
+    if (["pending", "completed", "skipped"].includes(value[key])) state[key] = value[key];
+  }
+  state.error = typeof value.error === "string" ? value.error : "";
+  state.completedAt = typeof value.completedAt === "string" ? value.completedAt : "";
+  return state;
+}
+
+function isDocumentRegistrationPending(item) {
+  return Boolean(item?.registration && item.registration.status !== "completed");
+}
+
 function normalizeDocuments(items) {
   return items
     .filter((item) => item?.id && Array.isArray(item.pages))
@@ -336,6 +361,8 @@ function normalizeDocuments(items) {
         fileHash: item.fileHash || "",
         fileMimeType: item.fileMimeType || "",
         sourceFile: item.sourceFile || null,
+        registration: normalizeRegistration(item.registration),
+        processingMode: item.processingMode === "parallel" ? "parallel" : "serial",
         metadataStatus: item.metadataStatus || "待自动识别",
         coverImageDataUrl: item.coverImageDataUrl || "",
         coverImageUrl: item.coverImageUrl || "",
@@ -364,6 +391,11 @@ function normalizeDocuments(items) {
             imageMimeType: page.imageMimeType || "",
             imageSize: Number(page.imageSize) || 0,
             ocr: normalizeStoredOcr(page.ocr),
+            processingRevision: Number(page.processingRevision) || 0,
+            ocrDone: page.ocrDone === true,
+            llmDone: page.llmDone === true,
+            failureStage: page.failureStage || "",
+            failureMessage: page.failureMessage || "",
             updatedAt: page.updatedAt || "",
           }))
           .sort((a, b) => a.pageNumber - b.pageNumber),
@@ -690,6 +722,7 @@ async function archiveDocumentSource(item, file, onProgress) {
       target.pages[0].imageUrl = result.file.url;
       target.pages[0].imageName = target.fileName || file.name;
     }
+    if (result.document) Object.assign(target, normalizeDocuments([result.document])[0]);
     target.updatedAt = new Date().toISOString();
     syncCursor = String(result.syncCursor || syncCursor);
     localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
@@ -949,7 +982,7 @@ function savePendingProcessingCancels(ids) {
 async function flushProcessingCancel(documentId) {
   try {
     const response = await fetch(
-      `${OCR_STREAM_SERVICE_URL}?documentId=${encodeURIComponent(documentId)}`,
+      `${DATA_PROCESSING_URL}/${encodeURIComponent(documentId)}/processing`,
       { method: "DELETE", keepalive: true },
     );
     if (!response.ok) {
@@ -1053,6 +1086,12 @@ function ensureSelectedPage(item) {
 }
 
 function summarizeDocumentStatus(item) {
+  if (item?.processingTask?.backendManaged) return item.processingTask.status || item.status || "排队中";
+  if (isDocumentRegistrationPending(item)) {
+    if (item.registration.status === "paused") return "登记已暂停";
+    if (item.registration.status === "failed") return "登记未完成";
+    return "登记中";
+  }
   if (item.pages.every((page) => !hasPageText(page))) {
     return "待整理";
   }
@@ -1127,8 +1166,8 @@ function createProcessingTask(file) {
     currentPageStage: "",
     currentPageProgress: 0,
     sourceFileName: file.name,
-    serviceUrl: OCR_STREAM_SERVICE_URL,
-    message: "正在提交逐页流式处理任务",
+    serviceUrl: DATA_PROCESSING_URL,
+    message: "正在归档原件，随后由后端调度登记和正文",
   };
 }
 
@@ -1139,6 +1178,15 @@ function normalizeProcessingTask(task) {
 
   return {
     id: task.id,
+    backendManaged: task.backendManaged === true,
+    mode: task.mode === "parallel" ? "parallel" : "serial",
+    revision: Number(task.revision) || 0,
+    metadataSnapshot: task.metadataSnapshot || null,
+    activeStages: task.activeStages || {},
+    finalizedPages: Number(task.finalizedPages) || 0,
+    failedPages: Array.isArray(task.failedPages) ? task.failedPages : [],
+    queueSequence: Number(task.queueSequence) || 0,
+    pausedForRegistration: task.pausedForRegistration === true,
     status: task.status || "提交中",
     createdAt: task.createdAt || "",
     submittedAt: task.submittedAt || "",
@@ -1150,7 +1198,7 @@ function normalizeProcessingTask(task) {
     currentPageStage: task.currentPageStage || "",
     currentPageProgress: Number(task.currentPageProgress) || 0,
     sourceFileName: task.sourceFileName || "",
-    serviceUrl: task.serviceUrl || OCR_STREAM_SERVICE_URL,
+    serviceUrl: task.serviceUrl || DATA_PROCESSING_URL,
     message: task.message || "",
   };
 }
@@ -1161,9 +1209,10 @@ function getProcessingTaskLabel(item) {
     return "等待处理";
   }
 
+  if (task.pausedForRegistration) return "登记准备优先，正文暂缓调度";
   const total = task.totalPages || 0;
   const ocrDone = task.completedPages || 0;
-  const finalized = countFinalizedPages(item);
+  const finalized = task.backendManaged ? task.finalizedPages || 0 : countFinalizedPages(item);
 
   if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {
     return `${task.status} 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;

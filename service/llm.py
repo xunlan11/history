@@ -111,26 +111,40 @@ class LlmServiceError(RuntimeError):
     pass
 
 
+class LlmServiceUnavailable(LlmServiceError):
+    """无法建立连接或探测超时；区别于服务已响应但未就绪。"""
+
+
 def provider_configured() -> bool:
     return bool(LLM_PROVIDER and LLM_MODEL and LLM_API_BASE)
 
 
-def probe_provider() -> tuple[bool, str]:
+def probe_provider_health() -> tuple[bool, str, str]:
     if not provider_configured():
-        return False, "尚未配置大模型服务（服务端地址 / 模型名）。"
+        return False, "尚未配置大模型服务（服务端地址 / 模型名）。", "not_ready"
 
     try:
         result = request_json("GET", f"{LLM_API_BASE.rstrip('/')}/models", timeout=3)
+        if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+            return False, "大模型服务已响应，但模型列表格式异常。", "not_ready"
         model_names = [
             item.get("id", "")
-            for item in result.get("data", [])
+            for item in result["data"]
             if isinstance(item, dict)
         ]
-        if model_names and LLM_MODEL not in model_names:
-            return False, f"大模型服务已连接，但未找到模型 {LLM_MODEL}。"
-        return True, f"大模型服务已连接，当前模型 {LLM_MODEL}。"
-    except LlmServiceError as exc:
-        return False, str(exc)
+        if LLM_MODEL not in model_names:
+            return False, f"大模型服务已连接，但未找到模型 {LLM_MODEL}。", "not_ready"
+        return True, f"大模型服务已连接，当前模型 {LLM_MODEL}。", "connected"
+    except LlmServiceUnavailable as exc:
+        return False, str(exc), "unreachable"
+    except (LlmServiceError, ValueError) as exc:
+        return False, str(exc), "not_ready"
+
+
+def probe_provider() -> tuple[bool, str]:
+    # 保留原内部调用契约，健康接口额外提供机器可读的状态分类。
+    ready, message, _state = probe_provider_health()
+    return ready, message
 
 
 def base_response(task: str, ready: bool | None = None, message: str = "") -> dict[str, Any]:
@@ -148,11 +162,24 @@ def base_response(task: str, ready: bool | None = None, message: str = "") -> di
     }
 
 
+def failure_response(task: str, exc: LlmServiceError) -> dict[str, Any]:
+    response = base_response(task, ready=False, message=str(exc))
+    if isinstance(exc, LlmServiceUnavailable) or not provider_configured():
+        unavailable = True
+    else:
+        # A ready model producing invalid JSON is an ordinary processing error.
+        # Missing models/configuration and offline providers wait for recovery.
+        unavailable = not probe_provider_health()[0]
+    response["errorKind"] = "unavailable" if unavailable else "processing"
+    return response
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
-    ready, message = probe_provider()
+    ready, message, state = probe_provider_health()
     return {
         "status": "ok",
+        "healthState": state,
         "ready": ready,
         "provider": LLM_PROVIDER,
         "model": LLM_MODEL,
@@ -203,7 +230,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
         punctuated_text = ""
         uncertain_items = []
         warnings = [str(exc)]
-        response = base_response("punctuate", ready=False, message=str(exc))
+        response = failure_response("punctuate", exc)
 
     response.update(
         {
@@ -279,7 +306,7 @@ OCR 原始录文：
         clean_text = ""
         punctuated_text = ""
         warnings = [str(exc)]
-        response = base_response("finalize-page", ready=False, message=str(exc))
+        response = failure_response("finalize-page", exc)
 
     response.update(
         {
@@ -341,7 +368,7 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
             "publisher": "",
         }
         warnings = [str(exc)]
-        response = base_response("extract-metadata", ready=False, message=str(exc))
+        response = failure_response("extract-metadata", exc)
 
     response.update(
         {
@@ -390,7 +417,7 @@ def detect_cover(payload: DetectCoverRequest) -> dict[str, Any]:
         has_cover = False
         confidence = 0.0
         reason = str(exc)
-        response = base_response("detect-cover", ready=False, message=str(exc))
+        response = failure_response("detect-cover", exc)
 
     response.update(
         {
@@ -472,7 +499,7 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     except LlmServiceError as exc:
         entries = []
         warnings = [str(exc)]
-        response = base_response("chronicle", ready=False, message=str(exc))
+        response = failure_response("chronicle", exc)
 
     response.update(
         {
@@ -532,7 +559,7 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
     except LlmServiceError as exc:
         entries = []
         warnings = [str(exc)]
-        response = base_response("chronicle-supplement", ready=False, message=str(exc))
+        response = failure_response("chronicle-supplement", exc)
 
     response.update(
         {
@@ -609,7 +636,7 @@ documents：
         matches = []
         expanded_terms = []
         warnings = [str(exc)]
-        response = base_response("search", ready=False, message=str(exc))
+        response = failure_response("search", exc)
 
     response.update(
         {
@@ -656,7 +683,7 @@ def chat(payload: ChatRequest) -> dict[str, Any]:
         response = base_response("chat", ready=True)
     except LlmServiceError as exc:
         answer = ""
-        response = base_response("chat", ready=False, message=str(exc))
+        response = failure_response("chat", exc)
 
     response.update(
         {
@@ -824,11 +851,16 @@ def request_json(
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise LlmServiceError(f"大模型接口请求失败：HTTP {exc.code} {detail}") from exc
+        cls = LlmServiceUnavailable if exc.code in {429, 502, 503, 504} else LlmServiceError
+        raise cls(f"大模型接口请求失败：HTTP {exc.code} {detail}") from exc
     except urllib.error.URLError as exc:
-        raise LlmServiceError(f"无法连接大模型服务：{exc.reason}") from exc
+        raise LlmServiceUnavailable(f"无法连接大模型服务：{exc.reason}") from exc
     except (TimeoutError, socket.timeout) as exc:
-        raise LlmServiceError("大模型请求超时。") from exc
+        raise LlmServiceUnavailable("大模型请求超时。") from exc
+    except OSError as exc:
+        raise LlmServiceUnavailable(f"无法连接大模型服务：{exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise LlmServiceError("大模型接口返回的文字编码异常。") from exc
 
     try:
         return json.loads(body)

@@ -5,7 +5,7 @@
 // 进度永远停在 0/1。这里保证「要么传完，要么下次接着传」：
 //   1. 上传中点开其它文献会被拦住，刷新/关页会弹浏览器确认；
 //   2. 用 XHR 上报上传进度，界面显示「上传原件 42%」；
-//   3. 原件先存进 IndexedDB，三个阶段（原件归档 / 封面识别 / 逐页任务）全部成功才删除；
+//   3. 原件先存进 IndexedDB，四个登记阶段完成并同步后才删除；
 //      中途失败或页面被刷新后，下一次打开任意页面会自动从暂存续传。
 //
 // 说明：请求走 XHR 是为了拿到 upload.onprogress（fetch 拿不到上传进度），
@@ -50,12 +50,13 @@ function postFormDataWithProgress(url, formData, options = {}) {
     const xhr = new XMLHttpRequest();
     let watchdog = 0;
     let stalled = false;
+    let uploadFinished = false;
     const armWatchdog = () => {
       window.clearTimeout(watchdog);
       watchdog = window.setTimeout(() => {
         stalled = true;
         xhr.abort();
-      }, UPLOAD_STALL_TIMEOUT_MS);
+      }, uploadFinished ? (Number(options.responseTimeoutMs) || UPLOAD_STALL_TIMEOUT_MS) : UPLOAD_STALL_TIMEOUT_MS);
     };
 
     xhr.open("POST", url);
@@ -71,6 +72,12 @@ function postFormDataWithProgress(url, formData, options = {}) {
         if (event.lengthComputable && event.total > 0) {
           onProgress(event.loaded / event.total);
         }
+      };
+    }
+    if (xhr.upload) {
+      xhr.upload.onload = () => {
+        uploadFinished = true;
+        armWatchdog();
       };
     }
     xhr.onload = () => {
@@ -152,13 +159,17 @@ function hasActiveDocumentUpload() {
 function describeDocumentUploadState(documentId) {
   const state = documentUploadStates.get(documentId);
   if (!state) {
+    const item = getLiveDocument(documentId);
+    if (isDocumentRegistrationPending(item)) {
+      return item.registration.status === "paused" ? "登记已暂停，点击继续" : "登记未完成，点击继续";
+    }
     return "";
   }
   if (state.active) {
     return `${state.stage || "上传中"} ${Math.round(Number(state.percent) || 0)}%`;
   }
   if (state.error) {
-    return "上传未完成";
+    return state.permanent ? "登记失败，请重新导入" : "登记未完成，点击继续";
   }
   return "";
 }
@@ -221,9 +232,9 @@ function markDocumentUploadFinished(documentId) {
 }
 
 function markDocumentUploadFailed(documentId, error) {
-  const message = error && error.message ? error.message : "原件未上传完成";
+  const message = error && error.message ? error.message : "文献登记未完成";
   const status = Number(error && error.status) || 0;
-  const permanent = status >= 400 && status < 500;
+  const permanent = status >= 400 && status < 500 && getLiveDocument(documentId)?.registration?.stage === "archive";
   updateDocumentUploadState(
     documentId,
     { active: false, percent: 0, error: message, permanent },
@@ -231,8 +242,8 @@ function markDocumentUploadFailed(documentId, error) {
   );
   showUploadToast(
     permanent
-      ? `原件上传失败：${message}`
-      : `原件上传未完成：${message}（已暂存，可稍后重试）`,
+      ? `文献登记失败：${message}`
+      : `文献登记未完成：${message}（已保留，可点击文献继续）`,
     6000,
   );
 }
@@ -286,7 +297,7 @@ window.addEventListener("beforeunload", (event) => {
     return;
   }
   event.preventDefault();
-  event.returnValue = "文献原件正在上传，离开会中断上传。";
+  event.returnValue = "文献正在登记，离开会中断登记。";
   return event.returnValue;
 });
 

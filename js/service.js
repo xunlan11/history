@@ -22,39 +22,34 @@ async function fetchServiceJson(url, errorMessage, options = {}) {
   return response.json();
 }
 
-async function refreshOcrServiceStatus() {
-  if (!ocrServiceStatus) {
-    return;
+// 状态由数据端分类；未连接仅用于浏览器无法正常取得健康检查结果。
+function renderModelServiceStatus(node, result) {
+  if (!result || typeof result.ready !== "boolean") {
+    throw new Error("Invalid service health response");
   }
+  const upstream = result.upstream || {};
+  // 兼容前后端滚动发布：旧 OCR 响应可依据明确的 reachable=false 判断不可达。
+  const state = result.ready ? "connected" : (result.healthState ||
+    (upstream.configured && upstream.reachable === false ? "unreachable" : "not_ready"));
+  const label = result.ready ? "已连接" : state === "unreachable" ? "不可达" : "未就绪";
+  setServiceStatus(node, label, result.ready ? "service-ok" : "service-warn");
+}
 
+async function refreshOcrServiceStatus() {
+  if (!ocrServiceStatus) return;
   try {
     const result = await fetchServiceJson(OCR_HEALTH_URL, "OCR health check failed");
-    const upstream = result.upstream || {};
-    if (result.ready) {
-      setServiceStatus(ocrServiceStatus, "已连接", "service-ok");
-    } else if (!upstream.configured) {
-      // 数据端不再加载识别模型，识别能力在数据处理服务器上
-      setServiceStatus(ocrServiceStatus, "识别未部署", "service-warn");
-    } else {
-      setServiceStatus(ocrServiceStatus, "服务端不可达", "service-warn");
-    }
+    renderModelServiceStatus(ocrServiceStatus, result);
   } catch (error) {
     setServiceStatus(ocrServiceStatus, "未连接", "service-warn");
   }
 }
 
 async function refreshLlmServiceStatus() {
-  if (!llmServiceStatus) {
-    return;
-  }
-
+  if (!llmServiceStatus) return;
   try {
     const result = await fetchServiceJson(LLM_HEALTH_URL, "LLM health check failed");
-    setServiceStatus(
-      llmServiceStatus,
-      result.ready ? "已连接" : "待配置",
-      result.ready ? "service-ok" : "service-warn",
-    );
+    renderModelServiceStatus(llmServiceStatus, result);
   } catch (error) {
     setServiceStatus(llmServiceStatus, "未连接", "service-warn");
   }

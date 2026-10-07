@@ -187,7 +187,7 @@ def health(force: bool = False) -> dict[str, Any]:
         return cached
 
     summary = describe()
-    result: dict[str, Any] = {**summary, "reachable": None, "latencyMs": None, "detail": ""}
+    result: dict[str, Any] = {**summary, "reachable": None, "ready": False, "latencyMs": None, "detail": ""}
     if not summary["configured"]:
         result["detail"] = "未设置 OCR_UPSTREAM_URL，识别能力未部署。"
         _health_cache.update({"at": now, "value": result})
@@ -202,16 +202,22 @@ def health(force: bool = False) -> dict[str, Any]:
     url = f"{summary['url']}{path}"
     started = time.perf_counter()
     try:
-        status, _body = _request_json(url, None, timeout=health_timeout(), method="GET")
+        status, body = _request_json(url, None, timeout=health_timeout(), method="GET")
     except OcrUpstreamHttpError as exc:
-        # 有 HTTP 响应即说明主机与端口可达：404/405/501 多半只是没实现该探活路径。
-        result["reachable"] = exc.status < 500 or exc.status == 501
+        # 收到 HTTP 错误仍表示可达，但认证、探活路径或服务自身存在异常。
+        result["reachable"] = True
         result["detail"] = f"HTTP {exc.status}"
-    except OcrUpstreamError as exc:
+    except OcrUpstreamUnavailable as exc:
         result["reachable"] = False
+        result["detail"] = str(exc)
+    except OcrUpstreamProtocolError as exc:
+        result["reachable"] = True
+        result["detail"] = str(exc)
+    except (OcrUpstreamError, ValueError) as exc:
         result["detail"] = str(exc)
     else:
         result["reachable"] = True
+        result["ready"] = 200 <= status < 300 and body.get("ready") is not False
         result["detail"] = f"HTTP {status}"
     result["latencyMs"] = int((time.perf_counter() - started) * 1000)
 

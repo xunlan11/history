@@ -7,6 +7,8 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/Codefield/history
 Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PROCESSING_OCR_URL=http://127.0.0.1:8765
+Environment=PROCESSING_LLM_URL=http://127.0.0.1:8865
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
 Restart=always
 RestartSec=5

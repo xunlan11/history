@@ -10,6 +10,7 @@
 - `GET  /health`                     健康检查（含服务端可达性）
 - `POST /ocr`                        单页识别（image / pageNumber / quickRead）
 - `POST /ocr/cover-candidate`        封面候选图提取（数据端拆页，不经服务端）
+- `POST /ocr/metadata-candidate`     登记元数据候选文字（最多前三页，不创建正文任务）
 - `POST /ocr/stream`                 整本逐页识别任务提交
 - `GET  /ocr/stream/{task_id}`       任务进度与逐页结果
 """
@@ -25,12 +26,14 @@ import time
 import uuid
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from PIL import Image
 
 try:  # `uvicorn service.ocr:app` 时是包内导入；直接跑脚本时退化为平级导入
@@ -59,6 +62,7 @@ app.add_middleware(
 
 TASKS: dict[str, dict[str, Any]] = {}
 PROCESSING_SLOT = threading.Semaphore(1)
+REGISTRATION_METADATA_PAGE_LIMIT = 3
 
 # 取消标记：**存在任务目录之外**（cancelled/<task_id>），因为取消时要立刻删掉任务目录
 # （原件 + 逐页图，动辄几十 MB），标记如果跟着被删，正在跑的循环就发现不了、会继续跑完。
@@ -198,12 +202,15 @@ def call_upstream(func: Any, *args: Any, **kwargs: Any) -> Any:
 @app.get("/health")
 def health():
     upstream = ocr_upstream.health()
+    ready = bool(upstream.get("configured") and upstream.get("ready"))
+    state = "connected" if ready else "unreachable" if upstream.get("reachable") is False else "not_ready"
     return {
         "status": "ok",
         "service": "ocr",
         "storage": str(STORAGE_DIR),
         "upstream": upstream,
-        "ready": bool(upstream.get("configured") and upstream.get("reachable")),
+        "ready": ready,
+        "healthState": state,
     }
 
 
@@ -214,22 +221,40 @@ async def recognize_page(
     quick_read: str = Form("false", alias="quickRead"),
 ):
     page_path = await save_upload(image)
-    result = call_upstream(
-        recognize_image,
-        page_path,
-        quick_read=quick_read.lower() == "true",
-    )
-    result["pageNumber"] = int(pageNumber or 1)
-    return JSONResponse(result)
+    try:
+        result = await run_in_threadpool(call_upstream, recognize_image, page_path,
+                                        quick_read=quick_read.lower() == "true")
+        result["pageNumber"] = int(pageNumber or 1)
+        return JSONResponse(result)
+    finally:
+        page_path.unlink(missing_ok=True)
 
 
 @app.post("/ocr/cover-candidate")
 async def extract_cover_candidate(document: UploadFile = File(...)):
     """封面候选图：数据端拆页 + 缩图，不依赖服务端识别能力。"""
     source_path = await save_upload(document, prefix=f"cover-{uuid.uuid4().hex[:8]}")
-    candidate = build_cover_candidate(source_path)
-    candidate["sourceFileName"] = document.filename
-    return JSONResponse(candidate)
+    try:
+        candidate = await run_in_threadpool(build_cover_candidate, source_path)
+        candidate["sourceFileName"] = document.filename
+        return JSONResponse(candidate)
+    finally:
+        source_path.unlink(missing_ok=True)
+        if source_path.suffix.lower() == ".pdf":
+            (STORAGE_DIR / "temp" / f"{source_path.stem}-cover.png").unlink(missing_ok=True)
+
+
+@app.post("/ocr/metadata-candidate")
+async def extract_metadata_candidate(document: UploadFile = File(...)):
+    """登记候选文字：有限拆页/OCR，不创建整本任务，不计入正文处理进度。"""
+    source_path = await save_upload(document, prefix=f"metadata-{uuid.uuid4().hex[:12]}")
+    try:
+        candidate = await run_in_threadpool(call_upstream, build_metadata_candidate, source_path)
+        candidate["sourceFileName"] = document.filename
+        return JSONResponse(candidate)
+    finally:
+        # 这里只清理本次请求创建的临时上传；不接触归档原件或正文任务文件。
+        source_path.unlink(missing_ok=True)
 
 
 @app.post("/ocr/stream")
@@ -504,6 +529,39 @@ def process_pdf(
         doc.close()
 
     return pages, total_pages
+
+
+def build_metadata_candidate(path: Path) -> dict[str, Any]:
+    """最多读取前三页；有文字层时直接提取，扫描页才调用现有远端 OCR。"""
+    if path.suffix.lower() != ".pdf":
+        result = recognize_image(path, page_number=1, quick_read=True)
+        return {"text": str(result.get("text") or ""), "pagesRead": 1, "totalPages": 1}
+
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("未安装 PDF 拆页组件 PyMuPDF") from exc
+
+    temp_dir = STORAGE_DIR / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    texts: list[str] = []
+    with fitz.open(path) as doc:
+        if doc.page_count < 1:
+            raise HTTPException(status_code=422, detail="PDF 没有可读取的页面")
+        page_limit = min(REGISTRATION_METADATA_PAGE_LIMIT, doc.page_count)
+        with TemporaryDirectory(prefix="metadata-pages-", dir=temp_dir) as output_dir:
+            for index in range(page_limit):
+                page = doc.load_page(index)
+                text = page.get_text().strip()
+                if not text:
+                    image_path = Path(output_dir) / f"page-{index + 1}.png"
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    pix.save(image_path)
+                    result = recognize_image(image_path, page_number=index + 1, quick_read=True)
+                    text = str(result.get("text") or "").strip()
+                if text:
+                    texts.append(f"[第 {index + 1} 页]\n{text}")
+        return {"text": "\n\n".join(texts), "pagesRead": page_limit, "totalPages": doc.page_count}
 
 
 def build_cover_candidate(path: Path) -> dict[str, Any]:

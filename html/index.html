@@ -198,7 +198,14 @@
           标签
           <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
         </label>
-        <p class="form-help">登记后 OCR 连续逐页识别，大模型按页码顺序跟进整理，两者流水推进。</p>
+        <label>
+          正文处理方式
+          <select name="processingMode" id="processing-mode-input">
+            <option value="serial" selected>串行（每页识别后整理，再处理下一页）</option>
+            <option value="parallel">并行（识别和整理同时推进）</option>
+          </select>
+        </label>
+        <p class="form-help">方式提交后固定。归档后由后端优先准备登记，再按文献顺序处理正文；关闭浏览器不影响后续处理。</p>
         <button class="primary-button" type="submit">登记</button>
       </form>
     </div>
@@ -229,6 +236,7 @@
     
     <script src="../js/documents.js"></script>
     <script src="../js/processing.js"></script>
+    <script src="../js/registration.js"></script>
     <script src="../js/service.js"></script>
     
     
