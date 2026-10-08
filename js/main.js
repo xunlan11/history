@@ -554,8 +554,8 @@ async function initializeApplication() {
   applyRouteSelection();
   const selected = getSelectedDocument();
   if (document.body.dataset.page === "reader" && canEditDocument(selected) &&
-      isDocumentRegistrationPending(selected)) {
-    // 未完成登记的直达链接也不能先进入阅览器，回文献库恢复登记。
+      isDocumentRegistrationPending(selected) && !selected?.processingTask?.backendManaged) {
+    // 未归档完的直达链接也不能先进入阅览器，回文献库恢复登记。
     setView("documents");
     resumePendingProcessingTasks();
     flushPendingProcessingCancels();

@@ -172,6 +172,12 @@ function shortenDocumentCardStatus(text) {
     label = "上传中";
   } else if (/已交给后端准备登记|登记中/.test(base)) {
     label = "登记中";
+  } else if (/等待后端登记/.test(base)) {
+    label = "等待登记";
+  } else if (/读取登记候选页/.test(base)) {
+    label = "读候选页";
+  } else if (/识别文献信息/.test(base)) {
+    label = "识别信息";
   } else if (/登记已暂停/.test(base)) {
     label = "已暂停";
   } else if (/登记未完成/.test(base)) {
@@ -192,13 +198,32 @@ function shortenDocumentCardStatus(text) {
   }
   return percent ? `${label} ${percent}` : label;
 }
+// 后端登记只剩元数据识别：沿用客户端 4 段进度（归档上传占 0~25%），后两步按后端阶段推进。
+const BACKEND_REGISTRATION_STAGES = {
+  "": { label: "等待后端登记", percent: 25 },
+  metadata_candidate: { label: "读取登记候选页", percent: 40 },
+  metadata: { label: "识别文献信息", percent: 75 },
+};
+
+function describeBackendRegistration(item) {
+  const registration = item.registration || {};
+  if (registration.status === "failed") {
+    return "登记失败，点击继续";
+  }
+  const stage = BACKEND_REGISTRATION_STAGES[item.processingTask?.currentPageStage || ""] || BACKEND_REGISTRATION_STAGES[""];
+  if (registration.status === "waiting") {
+    return `等候中 ${stage.percent}%`;
+  }
+  return `${stage.label} ${stage.percent}%`;
+}
+
 function describeDocumentUploadState(documentId) {
   const state = documentUploadStates.get(documentId);
   if (!state) {
     const item = getLiveDocument(documentId);
     if (isDocumentRegistrationPending(item)) {
       if (item.processingTask?.backendManaged) {
-        return "";
+        return describeBackendRegistration(item);
       }
       return item.registration.status === "paused" ? "登记已暂停，点击继续" : "登记未完成，点击继续";
     }

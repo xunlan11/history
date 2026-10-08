@@ -310,18 +310,23 @@ function createBookCard(item, index) {
       return;
     }
 
-    // 登记中的文献不许进入阅览器，避免中断识别或上传。
+    // 本地还在归档/上传时不许进入阅览器，整页跳转会中断上传。
     if (typeof isDocumentUploadActive === "function" && isDocumentUploadActive(item.id)) {
       if (typeof showUploadToast === "function") {
-        showUploadToast("文献正在登记，信息识别结束后才能进入阅览器，请稍候。");
+        showUploadToast("文献正在归档原件，上传结束后才能进入阅览器，请稍候。");
       }
       return;
     }
 
     const current = getLiveDocument(item.id) || item;
     if (canEditDocument(current) && isDocumentRegistrationPending(current)) {
-      const completed = await resumeMissingProcessingTask(current, { interactive: true });
-      if (!completed) return;
+      if (current.processingTask?.backendManaged) {
+        // 原件已归档并交给后端，登记（元数据识别）在后台继续，不再阻塞阅览器。
+        if (typeof startProcessingPolling === "function") startProcessingPolling(current);
+      } else {
+        const completed = await resumeMissingProcessingTask(current, { interactive: true });
+        if (!completed) return;
+      }
     }
     const ready = getLiveDocument(item.id);
     if (!ready) return;

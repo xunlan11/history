@@ -1210,6 +1210,11 @@ function getProcessingTaskLabel(item) {
   const ocrDone = task.completedPages || 0;
   const finalized = task.backendManaged ? task.finalizedPages || 0 : countFinalizedPages(item);
 
+  // 登记阶段（后端元数据识别）也计入同一条进度显示。
+  if (total === 0 && isDocumentRegistrationPending(item)) {
+    return describeDocumentUploadState(item.id) || task.status || "等待处理";
+  }
+
   if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {
     return `${task.status} 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
   }
