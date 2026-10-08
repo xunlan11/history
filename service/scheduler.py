@@ -175,7 +175,7 @@ class HttpServices:
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
                 "cleanText": page.get("cleanText", ""), "punctuatedText": page.get("punctuatedText", ""),
-                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p["cleanText"] for p in previous]})
+                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("cleanText", "")} for p in previous]})
             if page.get("ocrText", "").strip() and not (result.get("cleanText") or result.get("punctuatedText")):
                 raise ProcessingFailure("整理服务没有返回正文")
             return result
