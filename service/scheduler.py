@@ -95,7 +95,7 @@ class HttpServices:
             if kind == "processing":
                 raise ProcessingFailure(result.get("message") or "识别结果无效")
             if kind == "unavailable":
-                raise ServiceUnavailable(result.get("message") or "等待服务恢复")
+                raise ServiceUnavailable(result.get("message") or "等候中")
             # Rolling deployment: old services lack errorKind. A live, ready
             # provider returning malformed content must not wait indefinitely.
             health = self._request(f"{self.llm_url}/health", timeout=5)
@@ -382,7 +382,7 @@ class Scheduler:
         job["retry_at"] = min(retry_times, default=0)
         if waiting:
             job["status"] = "waiting"
-            task["status"] = doc["status"] = "等待服务恢复"
+            task["status"] = doc["status"] = "等候中"
             if job["phase"] == "registration":
                 doc["registration"].update(status="waiting", error=task.get("message", ""))
             return

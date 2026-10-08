@@ -156,11 +156,50 @@ function hasActiveDocumentUpload() {
   return false;
 }
 
+function shortenDocumentCardStatus(text) {
+  const value = String(text || "").trim();
+  if (!value) {
+    return "";
+  }
+  const percent = value.match(/\d+(?:\.\d+)?%/)?.[0] || "";
+  const base = value.replace(/\d+(?:\.\d+)?%/, "").trim();
+  let label = base;
+  if (/准备上传/.test(base)) {
+    label = "准备中";
+  } else if (/保存文献记录/.test(base)) {
+    label = "保存中";
+  } else if (/上传原件/.test(base)) {
+    label = "上传中";
+  } else if (/已交给后端准备登记|登记中/.test(base)) {
+    label = "登记中";
+  } else if (/登记已暂停/.test(base)) {
+    label = "已暂停";
+  } else if (/登记未完成/.test(base)) {
+    label = "未完成";
+  } else if (/登记失败|处理失败/.test(base)) {
+    label = "处理失败";
+  } else if (/等待服务恢复|等候中/.test(base)) {
+    label = "等候中";
+  } else if (/排队中/.test(base)) {
+    label = "排队中";
+  } else if (/处理中/.test(base)) {
+    label = "处理中";
+  } else if (/已完成/.test(base)) {
+    label = "已完成";
+  }
+  if (label.length > 4) {
+    label = label.slice(0, 4);
+  }
+  return percent ? `${label} ${percent}` : label;
+}
 function describeDocumentUploadState(documentId) {
   const state = documentUploadStates.get(documentId);
   if (!state) {
     const item = getLiveDocument(documentId);
     if (isDocumentRegistrationPending(item)) {
+      if (item.processingTask?.backendManaged) {
+        return "";
+      }
       return item.registration.status === "paused" ? "登记已暂停，点击继续" : "登记未完成，点击继续";
     }
     return "";
@@ -260,8 +299,14 @@ function refreshDocumentUploadIndicators(documentId) {
     card.classList.toggle("is-uploading", Boolean(state && state.active));
     card.classList.toggle("is-upload-failed", Boolean(state && !state.active && state.error));
     const pages = card.querySelector(".book-pages");
-    if (pages && text) {
-      pages.textContent = text;
+    if (pages) {
+      pages.classList.toggle("is-status", Boolean(text));
+      if (text) {
+        pages.textContent = shortenDocumentCardStatus(text);
+        pages.title = text;
+      } else {
+        pages.removeAttribute("title");
+      }
     }
   });
 

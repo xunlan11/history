@@ -279,6 +279,8 @@ function createBookCard(item, index) {
   card.setAttribute("aria-grabbed", "false");
   const uploadState = typeof getDocumentUploadState === "function" ? getDocumentUploadState(item.id) : null;
   const uploadText = typeof describeDocumentUploadState === "function" ? describeDocumentUploadState(item.id) : "";
+  const backendStatusPending = item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item));
+  const statusText = uploadText || (backendStatusPending ? item.status : "");
   card.classList.toggle("is-uploading", Boolean(uploadState && uploadState.active));
   card.classList.toggle("is-upload-failed", Boolean(uploadState && !uploadState.active && uploadState.error));
   if (!canEditDocument(item)) {
@@ -287,7 +289,14 @@ function createBookCard(item, index) {
   }
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
-  node.querySelector(".book-pages").textContent = uploadText || (item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item)) ? item.status : `${item.pages.length} 页`);
+  const pagesNode = node.querySelector(".book-pages");
+  pagesNode.textContent = statusText ? shortenDocumentCardStatus(statusText) : `${item.pages.length} 页`;
+  pagesNode.classList.toggle("is-status", Boolean(statusText));
+  if (statusText) {
+    pagesNode.title = statusText;
+  } else {
+    pagesNode.removeAttribute("title");
+  }
   node.querySelector(".book-author").textContent = item.author || "著者未录";
   cover.setAttribute("aria-hidden", "true");
   const coverImageSource = item.coverImageUrl || item.coverImageDataUrl || "";

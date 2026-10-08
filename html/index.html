@@ -111,16 +111,7 @@
       </main>
     </div>
 
-    <div class="confirm-dialog hidden" id="delete-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-conversation-title">
-      <div class="confirm-card">
-        <h2 id="delete-conversation-title">删除内容</h2>
-        <p id="delete-conversation-message">确定删除吗？</p>
-        <div class="confirm-actions">
-          <button class="secondary-button" id="cancel-delete-conversation" type="button">取消</button>
-          <button class="danger-button" id="confirm-delete-conversation" type="button">删除</button>
-        </div>
-      </div>
-    </div>
+    <div id="delete-fragment-slot" data-title="删除内容"></div>
 
     <div class="settings-dialog hidden" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <section class="settings-card">
@@ -160,88 +151,9 @@
       </section>
     </div>
 
-    <div class="form-sheet hidden" id="document-form-sheet" role="dialog" aria-modal="true" aria-labelledby="add-document-title">
-      <form class="panel form-panel" id="document-form">
-        <div class="section-heading">
-          <h3 id="add-document-title">新增文献</h3>
-          <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
-        </div>
-        <label class="file-picker-row">
-          <span class="sr-only">选择 PDF 或图片文件</span>
-          <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
-        </label>
-        <section class="info-field" aria-labelledby="document-info-title">
-          <div class="info-field-heading">
-            <span id="document-info-title">信息</span>
-            <span>可留空，会自动识别</span>
-          </div>
-          <label>
-            文献名
-            <input id="title-input" name="title" type="text" />
-          </label>
-          <div class="field-grid metadata-grid">
-            <label>
-              著者
-              <input id="author-input" name="author" type="text" />
-            </label>
-            <label>
-              出版社
-              <input id="publisher-input" name="publisher" type="text" />
-            </label>
-            <label>
-              出版时间
-              <input id="year-input" name="year" type="text" placeholder="如 1936 ／ 1936年10月" />
-            </label>
-          </div>
-        </section>
-        <label>
-          标签
-          <input id="tags-input" name="tags" type="text" placeholder="以逗号分隔" />
-        </label>
-        <label>
-          正文处理方式
-          <select name="processingMode" id="processing-mode-input">
-            <option value="serial" selected>串行（每页识别后整理，再处理下一页）</option>
-            <option value="parallel">并行（识别和整理同时推进）</option>
-          </select>
-        </label>
-        <p class="form-help">方式提交后固定。归档后由后端优先准备登记，再按文献顺序处理正文；关闭浏览器不影响后续处理。</p>
-        <button class="primary-button" type="submit">登记</button>
-      </form>
-    </div>
+    <div id="registration-fragment-slot"></div>
+    <div id="card-fragment-slot"></div>
 
-    <template id="document-card-template">
-      <article class="book-card">
-        <button class="book-open select-document" type="button">
-          <span class="book-cover">
-            <span class="book-title"></span>
-            <span class="book-facts">
-              <span class="book-year"></span>
-              <span class="book-pages"></span>
-            </span>
-            <span class="book-author"></span>
-          </span>
-        </button>
-      </article>
-    </template>
-
-    <script src="../js/core.js"></script>
-    
-    <script src="../js/auth.js"></script>
-    <script src="../js/upload-guard.js"></script>
-    <script src="../js/accounts.js"></script>
-    
-    
-    <script src="../js/conversations.js"></script>
-    
-    <script src="../js/documents.js"></script>
-    <script src="../js/processing.js"></script>
-    <script src="../js/registration.js"></script>
-    <script src="../js/service.js"></script>
-    
-    
-    
-    
-    <script src="../js/main.js"></script>
+    <script src="../js/bootstrap.js"></script>
   </body>
 </html>

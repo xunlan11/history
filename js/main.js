@@ -558,6 +558,9 @@ async function initializeApplication() {
       isDocumentRegistrationPending(selected)) {
     // 未完成登记的直达链接也不能先进入阅览器，回文献库恢复登记。
     setView("documents");
+    resumePendingProcessingTasks();
+    flushPendingProcessingCancels();
+    startPeriodicSync();
     return;
   }
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
@@ -578,11 +581,14 @@ function resumePendingProcessingTasks() {
   documents.forEach((item) => {
     if (item.processingTask?.backendManaged) {
       dropPendingUpload(item.id);
-      if (isProcessingTaskPending(item)) startProcessingPolling(item);
+      if (isProcessingTaskPending(item)) {
+        startProcessingPolling(item);
+        refreshProcessingDocument(item, { silent: true }).finally(() => renderAll());
+      }
       return;
     }
     if (canEditDocument(item) && isDocumentRegistrationPending(item)) {
-      resumeMissingProcessingTask(item);
+      resumeMissingProcessingTask(item).finally(() => renderAll());
     }
   });
 }

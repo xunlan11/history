@@ -385,6 +385,73 @@ textarea {
   font-weight: 400;
 }
 
+.processing-mode-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.processing-mode-field legend {
+  padding: 0;
+}
+
+.processing-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.processing-mode-option {
+  position: relative;
+  display: block;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.processing-mode-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.processing-mode-option span {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfdfc;
+  text-align: center;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.processing-mode-option:hover span {
+  border-color: var(--primary);
+}
+
+.processing-mode-option input:checked + span {
+  border-color: var(--primary);
+  background: var(--surface-2);
+  color: var(--primary-dark);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.processing-mode-option input:focus-visible + span {
+  outline: 3px solid rgba(209, 154, 56, 0.28);
+  outline-offset: 2px;
+}
+
 textarea {
   resize: vertical;
   min-height: 360px;
@@ -3234,3 +3301,20 @@ body {
 .processing-failed-page { padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; background: transparent; cursor: pointer; font-size: 12px; }
 .processing-failed-page.is-ocr { color: var(--primary); }
 .processing-failed-page.is-llm { color: var(--accent); }
+
+.startup-error {
+  position: fixed;
+  inset: 20px;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+  font-weight: 700;
+  text-align: center;
+}

@@ -115,7 +115,7 @@ async function resumeMissingProcessingTask(item, options = {}) {
     if (current && isProcessingTaskPending(current)) startProcessingPolling(current);
     if (isDocumentRegistrationPending(current)) {
       if (options.interactive && typeof showUploadToast === "function") {
-        showUploadToast(current?.status === "等待服务恢复" ? "原件已归档，后端等待服务恢复；无需保持浏览器打开。" : "后端正在准备登记，完成后正文按队列处理。");
+        showUploadToast(current?.status === "等候中" ? "原件已归档，当前等候中；无需保持浏览器打开。" : "后端正在准备登记，完成后正文按队列处理。");
       }
       return false;
     }
@@ -271,7 +271,7 @@ function renderStreamProgress(item) {
   setRingProgress(streamLlmRingFill, finished ? 100 : task.activeStages?.llm ? 5 : llmPercent);
   if (backendProgressStatus) {
     const mode = task.mode === "parallel" ? "并行" : "串行";
-    backendProgressStatus.textContent = `${mode} · ${getProcessingTaskLabel(item)}${task.status === "等待服务恢复" ? "（后端自动续跑，无需保持浏览器打开）" : ""}`;
+    backendProgressStatus.textContent = `${mode} · ${getProcessingTaskLabel(item)}${task.status === "等候中" ? "（后端自动续跑，无需保持浏览器打开）" : ""}`;
   }
   renderFailedProcessingPages(item);
 }
