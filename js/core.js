@@ -24,7 +24,6 @@ function endpoint(proxiedPath) {
 
 const DATA_PROCESSING_URL = endpoint("/data/api/documents");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
-const OCR_COVER_SERVICE_URL = endpoint("/ocr/ocr/cover-candidate");
 const OCR_METADATA_SERVICE_URL = endpoint("/ocr/ocr/metadata-candidate");
 // Conversation attachments retain the independent OCR stream API; document正文
 // processing no longer uses it.
@@ -318,17 +317,15 @@ function loadCachedDocuments() {
 }
 
 function createRegistrationState() {
-  return { status: "pending", stage: "archive", cover: "pending", metadata: "pending", error: "", completedAt: "" };
+  return { status: "pending", stage: "archive", metadata: "pending", error: "", completedAt: "" };
 }
 
 function normalizeRegistration(value) {
   if (!value || typeof value !== "object") return null;
   const state = createRegistrationState();
   if (["pending", "running", "waiting", "paused", "failed", "completed"].includes(value.status)) state.status = value.status;
-  if (["archive", "cover", "metadata", "submit", "completed"].includes(value.stage)) state.stage = value.stage;
-  for (const key of ["cover", "metadata"]) {
-    if (["pending", "completed", "skipped"].includes(value[key])) state[key] = value[key];
-  }
+  if (["archive", "metadata", "submit", "completed"].includes(value.stage)) state.stage = value.stage;
+  if (["pending", "completed", "skipped"].includes(value.metadata)) state.metadata = value.metadata;
   state.error = typeof value.error === "string" ? value.error : "";
   state.completedAt = typeof value.completedAt === "string" ? value.completedAt : "";
   return state;
@@ -368,7 +365,6 @@ function normalizeDocuments(items) {
         coverImageUrl: item.coverImageUrl || "",
         coverImageFile: item.coverImageFile || null,
         coverVariant: normalizeCoverVariant(item.coverVariant, index),
-        coverStatus: item.coverStatus || "待识别封面",
         processingTask: normalizeProcessingTask(item.processingTask),
         createdAt: item.createdAt || "",
         updatedAt: item.updatedAt || "",

@@ -121,7 +121,6 @@ form?.addEventListener("submit", async (event) => {
     metadataStatus: "待自动识别",
     coverImageDataUrl: "",
     coverVariant: getNextDocumentCoverVariant(),
-    coverStatus: "待识别封面",
     fileName: file.name,
     fileType: file.type || "unknown",
     fileSize: file.size,

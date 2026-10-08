@@ -1,4 +1,4 @@
-﻿// 浏览器只负责归档和提交。封面、元数据、正文 OCR/LLM 均由后端推进。
+﻿// 浏览器只负责归档和提交。元数据、正文 OCR/LLM 均由后端推进。
 async function runDocumentUploadPipeline(item, file) {
   if (!canEditDocument(item)) throw new Error("当前用户没有该文献的编辑权限，请重新登录后重试。");
   if (!file?.name) throw new Error("没有可上传的原件文件。");

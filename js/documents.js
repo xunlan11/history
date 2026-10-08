@@ -313,7 +313,7 @@ function createBookCard(item, index) {
     // 登记中的文献不许进入阅览器，避免中断识别或上传。
     if (typeof isDocumentUploadActive === "function" && isDocumentUploadActive(item.id)) {
       if (typeof showUploadToast === "function") {
-        showUploadToast("文献正在登记，封面和信息识别结束后才能进入阅览器，请稍候。");
+        showUploadToast("文献正在登记，信息识别结束后才能进入阅览器，请稍候。");
       }
       return;
     }

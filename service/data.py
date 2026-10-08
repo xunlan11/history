@@ -1096,9 +1096,9 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
         raise HTTPException(status_code=409, detail="归档原件不存在或路径无效")
     stamp = now_iso()
     result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,source_path,checkpoint,created_at,updated_at)
-        VALUES(?,?,?,?,?,?)""", (document_id, selected, source["storage_path"], json_dump({"registrationStep": "cover_candidate"}), stamp, stamp))
+        VALUES(?,?,?,?,?,?)""", (document_id, selected, source["storage_path"], json_dump({"registrationStep": "metadata_candidate"}), stamp, stamp))
     document["processingMode"] = selected
-    document["registration"] = {"status": "running", "stage": "cover", "cover": "pending", "metadata": "pending", "error": "", "completedAt": ""}
+    document["registration"] = {"status": "running", "stage": "metadata", "metadata": "pending", "error": "", "completedAt": ""}
     apply_asset_to_document(document, public_asset(source))
     document["processingTask"] = {**(document.get("processingTask") or {}), "backendManaged": True,
         "remoteTaskId": f"document-{result.lastrowid}", "status": "登记中", "mode": selected,

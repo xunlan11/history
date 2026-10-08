@@ -58,6 +58,15 @@ def metadata(document):
     return {key: str(document.get(key) or "") for key in ("title", "author", "year", "publisher")}
 
 
+def upgrade_checkpoint(checkpoint):
+    """登记阶段只剩元数据识别：旧任务的封面步骤检查点直接前进到下一步。"""
+    if checkpoint.get("registrationStep") in {"cover_candidate", "cover"}:
+        checkpoint["registrationStep"] = "metadata_candidate"
+    for key in ("coverCandidate", "cover"):
+        checkpoint.pop(key, None)
+    return checkpoint
+
+
 class HttpServices:
     """Small stdlib adapter; server-to-server URLs never come from clients."""
     def __init__(self):
@@ -119,18 +128,6 @@ class HttpServices:
 
     def execute(self, operation, job, document, checkpoint, page_number=0):
         source = Path(job["source_path"])
-        if operation == "cover_candidate":
-            result = self._form("/ocr/cover-candidate", "document", source)
-            if not result.get("imageDataUrl"):
-                raise ProcessingFailure("封面候选图缺失")
-            return result
-        if operation == "cover":
-            result = self._llm("detect-cover", {
-                "imageDataUrl": checkpoint["coverCandidate"]["imageDataUrl"],
-                "fileName": document.get("fileName", source.name), "metadata": metadata(document)})
-            if not isinstance(result.get("hasCover"), bool):
-                raise ProcessingFailure("封面判断结果无效")
-            return result
         if operation == "metadata_candidate":
             return self._form("/ocr/metadata-candidate", "document", source)
         if operation == "metadata":
@@ -196,7 +193,7 @@ def preserve_server_fields(connection, document):
         for key in ("title", "author", "year", "publisher"):
             if key not in baseline or document.get(key, "") == baseline[key]:
                 document[key] = stored.get(key, "")
-    for key in ("processingTask", "registration", "status", "coverStatus", "metadataStatus",
+    for key in ("processingTask", "registration", "status", "metadataStatus",
                 "coverImageDataUrl", "coverImageUrl", "coverImageFile", "sourceFile", "fileUrl", "filePath",
                 "fileHash", "fileMimeType", "fileSize", "fileName"):
         if key in stored:
@@ -259,7 +256,7 @@ class Scheduler:
         document = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
         if not row or not document or row["status"] in TERMINAL:
             return None
-        return dict(row), json.loads(document["payload"]), json.loads(row["checkpoint"])
+        return dict(row), json.loads(document["payload"]), upgrade_checkpoint(json.loads(row["checkpoint"]))
 
     @staticmethod
     def _page(doc, number):
@@ -321,17 +318,7 @@ class Scheduler:
             else:
                 for field in ("waiting", "retries", "errors", "attempts"):
                     cp.get(field, {}).pop(key, None)
-                if operation == "cover_candidate":
-                    cp["coverCandidate"] = result
-                    cp["registrationStep"] = "cover"
-                elif operation == "cover":
-                    if result["hasCover"]:
-                        doc["coverImageDataUrl"] = cp["coverCandidate"]["imageDataUrl"]
-                    doc["coverStatus"] = "已使用上传封面" if result["hasCover"] else "未识别到封面"
-                    doc["registration"]["cover"] = "completed"
-                    cp.pop("coverCandidate", None)
-                    cp["registrationStep"] = "metadata_candidate"
-                elif operation == "metadata_candidate":
+                if operation == "metadata_candidate":
                     cp["metadataCandidate"] = result
                     cp["registrationStep"] = "metadata"
                 elif operation == "metadata":
@@ -413,7 +400,7 @@ class Scheduler:
             task.update(currentPage=number, currentPageStage=operation, currentPageProgress=0,
                         message="正在准备登记" if job["phase"] == "registration" else "正在处理正文")
             if job["phase"] == "registration":
-                doc["registration"]["stage"] = "cover" if operation.startswith("cover") else "metadata"
+                doc["registration"]["stage"] = "metadata"
             self._update_status(job, doc, cp)
             self._save(connection, job, doc, cp)
         job["asset_root"] = str(self.data.FILE_STORAGE_DIR)
@@ -460,7 +447,7 @@ class Scheduler:
                     loaded = self._load(connection, job["document_id"])
                 if loaded:
                     job, doc, cp = loaded
-                    self._launch("registration", job, doc, cp, cp.get("registrationStep", "cover_candidate"))
+                    self._launch("registration", job, doc, cp, cp.get("registrationStep", "metadata_candidate"))
             return
         if "registration" in self.running:
             return

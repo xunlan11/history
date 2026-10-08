@@ -9,7 +9,6 @@
 
 - `GET  /health`                     健康检查（含服务端可达性）
 - `POST /ocr`                        单页识别（image / pageNumber / quickRead）
-- `POST /ocr/cover-candidate`        封面候选图提取（数据端拆页，不经服务端）
 - `POST /ocr/metadata-candidate`     登记元数据候选文字（最多前三页，不创建正文任务）
 - `POST /ocr/stream`                 整本逐页识别任务提交
 - `GET  /ocr/stream/{task_id}`       任务进度与逐页结果
@@ -24,7 +23,6 @@ import shutil
 import threading
 import time
 import uuid
-from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -67,7 +65,7 @@ REGISTRATION_METADATA_PAGE_LIMIT = 3
 # 取消标记：**存在任务目录之外**（cancelled/<task_id>），因为取消时要立刻删掉任务目录
 # （原件 + 逐页图，动辄几十 MB），标记如果跟着被删，正在跑的循环就发现不了、会继续跑完。
 CANCEL_DIR = STORAGE_DIR / "cancelled"
-# temp/ 下临时文件（封面候选图、单页识别残留）的保留时长
+# temp/ 下临时文件（单页识别残留）的保留时长
 TEMP_MAX_AGE_SECONDS = 24 * 3600
 # 没有 task.json 的空壳任务目录的保留时长
 ORPHAN_TASK_MAX_AGE_SECONDS = 3600
@@ -228,20 +226,6 @@ async def recognize_page(
         return JSONResponse(result)
     finally:
         page_path.unlink(missing_ok=True)
-
-
-@app.post("/ocr/cover-candidate")
-async def extract_cover_candidate(document: UploadFile = File(...)):
-    """封面候选图：数据端拆页 + 缩图，不依赖服务端识别能力。"""
-    source_path = await save_upload(document, prefix=f"cover-{uuid.uuid4().hex[:8]}")
-    try:
-        candidate = await run_in_threadpool(build_cover_candidate, source_path)
-        candidate["sourceFileName"] = document.filename
-        return JSONResponse(candidate)
-    finally:
-        source_path.unlink(missing_ok=True)
-        if source_path.suffix.lower() == ".pdf":
-            (STORAGE_DIR / "temp" / f"{source_path.stem}-cover.png").unlink(missing_ok=True)
 
 
 @app.post("/ocr/metadata-candidate")
@@ -564,46 +548,6 @@ def build_metadata_candidate(path: Path) -> dict[str, Any]:
         return {"text": "\n\n".join(texts), "pagesRead": page_limit, "totalPages": doc.page_count}
 
 
-def build_cover_candidate(path: Path) -> dict[str, Any]:
-    if path.suffix.lower() == ".pdf":
-        image_path = render_pdf_first_page(path)
-        return {
-            "imageDataUrl": image_to_cover_data_url(image_path),
-            "imageName": image_path.name,
-            "source": "pdf-first-page",
-        }
-
-    ensure_image_readable(path)
-    return {
-        "imageDataUrl": image_to_cover_data_url(path),
-        "imageName": path.name,
-        "source": "uploaded-image",
-    }
-
-
-def render_pdf_first_page(path: Path) -> Path:
-    try:
-        import fitz
-    except ImportError as exc:
-        raise RuntimeError("未安装 PDF 拆页组件 PyMuPDF") from exc
-
-    output_dir = STORAGE_DIR / "temp"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    image_path = output_dir / f"{path.stem}-cover.png"
-
-    doc = fitz.open(path)
-    try:
-        if doc.page_count < 1:
-            raise RuntimeError("PDF 没有可提取的页面")
-        page = doc.load_page(0)
-        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-        pix.save(image_path)
-    finally:
-        doc.close()
-
-    return image_path
-
-
 def copy_image_to_page(path: Path, task_id: str, page_number: int) -> Path:
     output_dir = TASKS_DIR / task_id / "pages"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -712,15 +656,6 @@ def image_to_data_url(path: Path) -> str:
         mime = "image/jpeg"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
-
-
-def image_to_cover_data_url(path: Path) -> str:
-    with Image.open(path) as image:
-        image.thumbnail((900, 1200))
-        output = BytesIO()
-        image.convert("RGB").save(output, format="JPEG", quality=86, optimize=True)
-    encoded = base64.b64encode(output.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
 
 
 def build_file_url(path: Path) -> str:
