@@ -102,9 +102,7 @@
                 <h2>文献库 <span class="sidebar-count" id="document-count">0 项在库</span></h2>
                 <button class="ghost-link" id="jump-documents" type="button">全部 ›</button>
               </div>
-              <section class="shelf-stage" aria-label="书架">
-                <div class="document-list" id="document-list"></div>
-              </section>
+              <div id="document-shelf-slot" data-list-id="document-list" data-stage-class="shelf-stage"></div>
             </aside>
           </div>
         </section>
@@ -152,8 +150,6 @@
     </div>
 
     <div id="registration-fragment-slot"></div>
-    <div id="card-fragment-slot"></div>
-
     <script src="../js/bootstrap.js"></script>
   </body>
 </html>

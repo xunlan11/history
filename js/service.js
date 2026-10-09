@@ -28,7 +28,7 @@ function renderModelServiceStatus(node, result) {
     throw new Error("Invalid service health response");
   }
   const upstream = result.upstream || {};
-  // 兼容前后端滚动发布：旧 OCR 响应可依据明确的 reachable=false 判断不可达。
+  // 只有明确报告 reachable=false 时，才将已配置但暂时无法访问的服务标为不可达。
   const state = result.ready ? "connected" : (result.healthState ||
     (upstream.configured && upstream.reachable === false ? "unreachable" : "not_ready"));
   const label = result.ready ? "已连接" : state === "unreachable" ? "不可达" : "未就绪";

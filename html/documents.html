@@ -20,9 +20,7 @@
             <span class="documents-count" id="all-document-count">0 项在库</span>
           </header>
 
-          <section class="shelf-stage documents-stage" aria-label="书架">
-            <div class="document-list" id="all-document-list"></div>
-          </section>
+          <div id="document-shelf-slot" data-list-id="all-document-list" data-stage-class="shelf-stage documents-stage"></div>
 
           <footer class="documents-bottombar" aria-label="文献库操作栏">
             <p class="documents-hint">长按文献可换序或删除</p>
@@ -33,8 +31,6 @@
 
     <div id="delete-fragment-slot" data-title="删除文献"></div>
     <div id="registration-fragment-slot"></div>
-    <div id="card-fragment-slot"></div>
-
     <script src="../js/bootstrap.js"></script>
   </body>
 </html>

@@ -105,8 +105,6 @@ class HttpServices:
                 raise ProcessingFailure(result.get("message") or "识别结果无效")
             if kind == "unavailable":
                 raise ServiceUnavailable(result.get("message") or "等候中")
-            # Rolling deployment: old services lack errorKind. A live, ready
-            # provider returning malformed content must not wait indefinitely.
             health = self._request(f"{self.llm_url}/health", timeout=5)
             cls = ServiceUnavailable if not health.get("ready") else ProcessingFailure
             raise cls(result.get("message") or "识别结果无效")

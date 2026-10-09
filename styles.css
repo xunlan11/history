@@ -228,7 +228,7 @@ label {
   min-height: 0;
 }
 
-/* 中栏不再是卡片，由内部进度框自带边框，因此不会有额外上下留白 */
+/* 中栏由内部进度框提供边框，避免额外上下留白 */
 .reader-progress-panel {
   min-height: 0;
   padding: 0;
@@ -513,7 +513,7 @@ button:focus-visible {
   border-color: var(--focus);
 }
 
-/* 首页底栏输入框本身无边框，聚焦时不再显示黄色焦点框。 */
+/* 首页底栏输入框无边框，避免聚焦时出现额外焦点框。 */
 .smart-input-box textarea:focus,
 .smart-input-box textarea:focus-visible {
   outline: none;
@@ -836,7 +836,7 @@ button:focus-visible {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
-/* 标题栏已脱离内容栏，与内容栏的间距交给网格行间距 */
+/* 标题栏与内容栏之间的间距由网格行间距控制 */
 .reader-compare > .section-heading {
   margin-bottom: 0;
 }
@@ -1040,7 +1040,6 @@ mark {
   }
 }
 
-/* Bookshelf home redesign */
 :root {
   --bg: #f6f7f4;
   --surface: #ffffff;
@@ -2300,7 +2299,6 @@ a.citation:hover {
   }
 }
 
-/* Full-screen chat-library home */
 html,
 body {
   height: 100%;
@@ -2798,7 +2796,6 @@ body {
   min-height: 0;
   overflow: hidden;
 }
-
 
 .center-stack {
   display: grid;

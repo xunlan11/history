@@ -171,7 +171,6 @@ def normalize_chronicle_entry(
         return value, warnings
 
     if not structured_year:
-        # 走到这里说明 ganzhi_original 为空（非空时上一个分支已返回）。
         mark_unresolved(value, era_label, "", original or "日期待核", "公历待核")
         return value, warnings
 

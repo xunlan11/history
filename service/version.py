@@ -74,9 +74,7 @@ def current_branch() -> str:
 
 
 def source_ref() -> str:
-    # 唯一代码源 = 服务器本地 git 仓库 HEAD。
-    # 不再 fetch GitHub remote：新代码由管理员在服务器上手动 `git pull`
-    # 拉入本地仓库后，网页「更新」才把本地最新提交发布为当前版本（点按钮才生效）。
+    # 发布源是服务器本地 Git 仓库的 HEAD；管理员先同步代码，再由“更新”操作发布。
     return "HEAD"
 
 
@@ -205,7 +203,6 @@ def build_status() -> dict[str, Any]:
         return unconfigured_status("当前目录不是 Git 仓库")
 
     try:
-        # 不联网：以服务器本地 git 仓库 HEAD 为最新代码（管理员已手动 git pull 同步）。
         source_commit = commit_for(source_ref())
         current_commit = deployed_commit()
         update_available = source_commit != current_commit or not current_link_ready()
@@ -231,7 +228,6 @@ def update_project() -> None:
         STATE.update({"updating": True, "message": "正在读取服务器本地代码", "lastError": ""})
 
     try:
-        # 只发布服务器本地已同步到的最新提交，绝不联网拉取 GitHub。
         source_commit = commit_for(source_ref())
         current_commit = deployed_commit()
 

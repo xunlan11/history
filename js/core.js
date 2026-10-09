@@ -1,5 +1,4 @@
 // —— 站点识别：按 URL 首段区分已发布子站（/history、/literature…）——
-// 同一份静态代码可同时服务多个子站；/history 下所有行为与旧版完全一致。
 const SITE_PATH_SEGMENT = (location.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
 const SITE_ID = SITE_PATH_SEGMENT && SITE_PATH_SEGMENT !== "html" ? SITE_PATH_SEGMENT : "history";
 const HISTORY_BASE = `/${SITE_ID}`;
@@ -25,8 +24,6 @@ function endpoint(proxiedPath) {
 const DATA_PROCESSING_URL = endpoint("/data/api/documents");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
 const OCR_METADATA_SERVICE_URL = endpoint("/ocr/ocr/metadata-candidate");
-// Conversation attachments retain the independent OCR stream API; document正文
-// processing no longer uses it.
 const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
@@ -1271,8 +1268,7 @@ function mergeProcessingPages(item, incomingPages) {
   return added;
 }
 
-// 早期版本在 page.ocr 里存过 layout（自研版面分析）与 preprocessing（自研图像预处理），
-// 这里读取时顺带瘦身，只保留摘要字段，避免历史数据继续占用 localStorage。
+// 只保留 OCR 摘要字段，避免大型版面坐标数据占用 localStorage。
 function normalizeStoredOcr(ocr) {
   if (!ocr) {
     return null;

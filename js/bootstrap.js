@@ -2,13 +2,12 @@
   const fragmentDefinitions = [
     { slot: "#delete-fragment-slot", path: "partials/delete.html" },
     { slot: "#registration-fragment-slot", path: "partials/registration.html" },
-    { slot: "#card-fragment-slot", path: "partials/card.html" },
+    { slot: "#document-shelf-slot", path: "partials/shelf.html" },
   ];
 
   const commonScripts = [
     "../js/core.js",
     "../js/auth.js",
-    "../js/upload-guard.js",
   ];
   const documentScripts = [
     "../js/documents.js",
@@ -46,6 +45,19 @@
     });
   }
 
+  function configureDocumentShelf() {
+    const slot = document.querySelector("#document-shelf-slot");
+    const stage = slot?.querySelector("[data-shelf-stage]");
+    const list = slot?.querySelector("[data-shelf-list]");
+    if (!slot || !stage || !list) {
+      throw new Error("书架片段缺少容器或列表元素");
+    }
+
+    stage.className = slot.dataset.stageClass || "shelf-stage";
+    list.id = slot.dataset.listId || "document-list";
+    slot.replaceWith(stage);
+  }
+
   function setDeleteDialogTitle() {
     const slot = document.querySelector("#delete-fragment-slot");
     const title = slot?.dataset.title || "删除内容";
@@ -66,6 +78,7 @@
 
   async function startApplication() {
     await Promise.all(fragmentDefinitions.map(loadFragment));
+    configureDocumentShelf();
     setDeleteDialogTitle();
 
     const scripts = [...commonScripts];

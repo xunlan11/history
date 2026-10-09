@@ -1,25 +1,12 @@
 #!/usr/bin/env python3
-"""服务端资产预取：PaddleX 官方模型 + Ollama 二进制 + Qwen3-8B 权重。
+"""预取 PaddleX 模型、Ollama 二进制和 Qwen3-8B 权重。
 
-为什么用这些源（2026-10-03 在本机 zhs22 实测，出口带宽上限约 1.2 MB/s）：
+下载支持断点续传、完整文件跳过和代理回退；低速连接会自动中断并重试。
 
-    资产             快源                        实测速度       慢源 / 速度
-    PaddleX 模型     ModelScope CDN              1.2 MB/s      百度 BOS 0.19 MB/s
-    Qwen3-8B 权重    ModelScope GGUF(Q4_K_M)     1.2 MB/s      Ollama registry 0.09 MB/s
-    Ollama 二进制    GitHub releases             ~1.1 MB/s     （间歇性不通，见下）
-
-本机带宽是硬上限（清华源同样只有 1.24 MB/s），所以"提速"只能靠换源：相比手册里的
-BOS + registry 组合，PaddleX 模型快约 6 倍、8B 权重快约 14 倍。
-
-GitHub 直连会间歇性抽风（实测同一小时内既有 1.1 MB/s 也有完全不通），因此
-  * 每个传输都加了 `--speed-limit/--speed-time`：低速超过 45s 自动断开，避免永久挂死；
-  * Ollama 二进制配了多条备用路径（GitHub 直连 → ghproxy → 本机 Clash 代理）。
-全部支持断点续传，中断后重跑即可；已完整的文件按大小跳过。
-
-用法（默认串行：本机出口带宽约 1.2 MB/s，并行不会更快，只会互相抢带宽）：
-    python3 fetch-assets.py               # 全量下载（可反复重跑）
-    python3 fetch-assets.py --only gguf   # 只下某一个（名字见 TASKS）
-    python3 fetch-assets.py --verify      # 只做 sha256 校验，不下载
+用法：
+    python3 fetch-assets.py               # 下载全部资产
+    python3 fetch-assets.py --only gguf   # 只下载指定资产
+    python3 fetch-assets.py --verify      # 只校验 sha256
 """
 
 from __future__ import annotations

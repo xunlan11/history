@@ -1,11 +1,8 @@
-// —— 账户管理弹窗 ——
-// 用户管理（列表 / 搜索 / 分页 / 角色切换 / 删除），以弹窗形式展示，替代独立 accounts.html 页面。
 (function () {
   const PAGE_SIZE = 15;
   let users = [];
   let query = "";
   let page = 1;
-
   let dialog = null;
   let tbody = null;
   let paginationEl = null;

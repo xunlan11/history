@@ -321,7 +321,7 @@ function createBookCard(item, index) {
     const current = getLiveDocument(item.id) || item;
     if (canEditDocument(current) && isDocumentRegistrationPending(current)) {
       if (current.processingTask?.backendManaged) {
-        // 原件已归档并交给后端，登记（元数据识别）在后台继续，不再阻塞阅览器。
+        // 原件归档后，登记（元数据识别）在后台继续，阅览器可以直接打开。
         if (typeof startProcessingPolling === "function") startProcessingPolling(current);
       } else {
         const completed = await resumeMissingProcessingTask(current, { interactive: true });

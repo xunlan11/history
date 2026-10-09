@@ -566,8 +566,8 @@ def recognize_image(
 ) -> dict[str, Any]:
     """单页图片 → 服务端识别 → 组对外响应。
 
-    本函数不再做灰度/矫正/倾斜/栏位等任何本地图像或版面处理；`blocks`、
-    `lines`、阅读顺序、表格与图片区域全部来自服务端。
+    本函数只负责提交图片并整理服务端返回的 `blocks`、`lines`、阅读顺序、
+    表格与图片区域。
     """
     ensure_image_readable(path)
     mode = "quick" if quick_read else "formal"

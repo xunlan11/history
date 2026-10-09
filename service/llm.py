@@ -15,14 +15,11 @@ from pydantic import BaseModel, Field
 from service.chronology import normalize_chronicle_entries
 
 
-# 修改默认大模型配置时，请同步更新 readme.md。
-# 数据端不跑任何本地模型：默认地址是服务端 Ollama（OpenAI 兼容面）经反向隧道反绑到本机
-# 回环的 11435 端口；本机没有 11434 这一路（本地 ollama 已于 2026-09-16 清理）。
+# 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
-# 思考型模型（Qwen3）默认关闭思考：同一句话 595 token → 7 token，CPU 上 150s → 1.4s。
 # 详见 deploy/README.md；设为 1 可恢复思考模式。
 LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -135,7 +132,7 @@ def probe_provider_health() -> tuple[bool, str, str]:
 
 
 def probe_provider() -> tuple[bool, str]:
-    # 保留原内部调用契约，健康接口额外提供机器可读的状态分类。
+    # 内部调用返回 ready/message；健康接口额外提供机器可读的状态分类。
     ready, message, _state = probe_provider_health()
     return ready, message
 

@@ -769,7 +769,6 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     return [rehydrate_conversation_files(connection, payload) for payload in payloads]
 
 
-
 def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
     for sort_order, document in enumerate(documents):
         document_id = str(document.get("id") or "").strip()

@@ -121,9 +121,6 @@ class OcrUpstreamProtocolError(OcrUpstreamError):
     code = "ocr_upstream_protocol_error"
 
 
-# —— 配置 ——
-
-
 def upstream_url() -> str:
     return os.getenv("OCR_UPSTREAM_URL", "").strip().rstrip("/")
 
@@ -164,7 +161,7 @@ def geometry_fix_enabled() -> bool:
 
 def not_configured_error() -> OcrUpstreamNotConfigured:
     return OcrUpstreamNotConfigured(
-        "OCR 识别能力未部署：数据端不再加载识别模型，请设置 OCR_UPSTREAM_URL 指向数据处理服务器。",
+        "OCR 识别能力未部署：请设置 OCR_UPSTREAM_URL 指向数据处理服务器。",
     )
 
 
@@ -225,9 +222,6 @@ def health(force: bool = False) -> dict[str, Any]:
     return result
 
 
-# —— 对外主入口 ——
-
-
 def recognize_page_image(path: Path, page_number: int | None = None, mode: str = "formal") -> dict[str, Any]:
     """把单页图片交给服务端识别，返回统一结构。"""
     base = upstream_url()
@@ -274,9 +268,6 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
     raise OcrUpstreamUnavailable(
         f"服务端 {base} 既不是 PaddleX 版面解析接口，也不符合 native 契约：{last_error}",
     )
-
-
-# —— 服务端调用 ——
 
 
 def _call_paddlex(
@@ -371,9 +362,6 @@ def _request_json(
     if not isinstance(parsed, dict):
         raise OcrUpstreamProtocolError(f"服务端 {url} 返回的 JSON 顶层不是对象")
     return status, parsed
-
-
-# —— 响应归一化：PaddleX ——
 
 
 def _normalize_paddlex(payload: dict[str, Any]) -> dict[str, Any]:
@@ -522,9 +510,6 @@ def _first_text(pruned: dict[str, Any], first: dict[str, Any]) -> str:
     return markdown or ""
 
 
-# —— 响应归一化：native ——
-
-
 def _normalize_native(payload: dict[str, Any]) -> dict[str, Any]:
     container = payload.get("result")
     if isinstance(container, dict) and "blocks" not in payload and "lines" not in payload:
@@ -590,9 +575,6 @@ def _normalize_line(item: Any) -> dict[str, Any] | None:
         "polygon": polygon,
         "bbox": _coerce_bbox(item.get("bbox")) or _bbox_from_polygon(polygon),
     }
-
-
-# —— 归一化工具 ——
 
 
 def _block_type(label: str) -> str:

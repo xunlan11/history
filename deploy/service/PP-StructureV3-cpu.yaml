@@ -1,4 +1,3 @@
-
 pipeline_name: PP-StructureV3
 
 batch_size: 8
@@ -126,7 +125,6 @@ SubPipelines:
         model_dir: null
         batch_size: 8
         score_thresh: 0.0
- 
 
   TableRecognition:
     pipeline_name: table_recognition_v2
