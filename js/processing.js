@@ -34,13 +34,13 @@ function startProcessingPolling(item) {
 function applyBackendProcessingDocument(documentId, payload) {
   if (!payload?.document || payload.document.id !== documentId) throw new Error("后端未返回有效的文献状态。");
   const index = documents.findIndex((entry) => entry.id === documentId);
-  // Ignore responses for documents removed while the request was in flight.
+  // 忽略请求执行期间已被删除文献的响应。
   if (index < 0) return null;
   const previous = documents[index];
   const incoming = normalizeDocuments([payload.document])[0];
   if ((previous.processingTask?.revision || 0) > (incoming.processingTask?.revision || 0)) return previous;
-  // Preserve unsynced local notes/text/metadata edits; the server also fences
-  // stale processing snapshots. Never mark a polling response as a local edit.
+  // 保留尚未同步的本地备注、文本和元数据编辑；服务端也会拦截过期的处理快照。
+  // 轮询响应绝不能标记为本地编辑。
   if (typeof syncDirty !== "undefined" && syncDirty) {
     for (const key of ["title", "author", "year", "publisher", "tags", "visibility"]) {
       const baseline = previous.processingTask?.metadataSnapshot;
@@ -94,7 +94,7 @@ async function refreshProcessingDocument(item, options = {}) {
     if (!isProcessingTaskPending(current)) stopProcessingPolling(current.id);
     if (typeof renderAll === "function") renderAll();
   } catch (error) {
-    // Browser/network errors do not mutate server-owned job states.
+    // 浏览器或网络错误不能修改服务端负责的任务状态。
     if ([401, 403, 404].includes(error.status)) stopProcessingPolling(item.id);
     if (!options.silent && typeof showUploadToast === "function") showUploadToast(error.message);
   } finally {
@@ -123,8 +123,8 @@ async function resumeMissingProcessingTask(item, options = {}) {
   }
   processingRecoveryInFlight.add(item.id);
   try {
-    // An archived source can be handed back to the backend without download,
-    // rerunning OCR or creating a second task. Only interrupted uploads need a file.
+    // 已归档原件可以直接交回后端，无需下载、重新执行 OCR 或创建第二个任务。
+    // 只有中断的上传需要文件。
     if (item.fileUrl) {
       await saveRegistrationCheckpoint(item.id);
       const current = await submitBackendDocument(getRegistrationDocument(item.id));
@@ -165,10 +165,6 @@ async function requestLlmTask(path, payload, options = {}) {
   } finally {
     window.clearTimeout(timer);
   }
-}
-
-function buildLlmMetadata(item) {
-  return { title: item.title || "", author: item.author || "", year: item.year || "", publisher: item.publisher || "" };
 }
 
 let streamProgressMainFill, streamProgressSubFill, streamProgressOcrPages, streamProgressLlmPages;
@@ -266,7 +262,7 @@ function renderStreamProgress(item) {
   streamProgressTotalNodes?.forEach((node) => { node.textContent = `${total}`; });
   setMarkerPosition(streamLlmMarker, llmPercent);
   setMarkerPosition(streamOcrMarker, ocrPercent);
-  // No browser timers simulate processing or drive execution.
+  // 浏览器定时器不模拟处理，也不驱动任务执行。
   setRingProgress(streamOcrRingFill, finished ? 100 : task.activeStages?.ocr ? 5 : ocrPercent);
   setRingProgress(streamLlmRingFill, finished ? 100 : task.activeStages?.llm ? 5 : llmPercent);
   if (backendProgressStatus) {

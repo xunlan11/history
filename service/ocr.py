@@ -34,10 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image
 
-try:  # `uvicorn service.ocr:app` 时是包内导入；直接跑脚本时退化为平级导入
-    from . import ocr_upstream
-except ImportError:  # pragma: no cover
-    import ocr_upstream  # type: ignore[no-redef]
+from service import ocr_upstream
 
 APP_DIR = Path(__file__).resolve().parent.parent
 # OCR 存储目录可用 OCR_STORAGE_DIR 环境变量覆盖（/literature 实例指向独立目录）
@@ -81,13 +78,9 @@ def cancel_marker_path(task_id: str) -> Path:
     return CANCEL_DIR / task_id
 
 
-def is_task_cancelled(task_id: str) -> bool:
-    return cancel_marker_path(task_id).exists()
-
-
 def raise_if_cancelled(task_id: str) -> None:
     """逐页循环毎页前调用：命中取消标记就中断整本任务。"""
-    if is_task_cancelled(task_id):
+    if cancel_marker_path(task_id).exists():
         raise TaskCancelled(f"任务 {task_id} 已取消")
 
 
@@ -318,7 +311,7 @@ def cancel_streams_by_document(documentId: str = ""):
 
 @app.on_event("startup")
 def recover_pending_tasks() -> None:
-    """Resume tasks that were queued when the OCR service was restarted."""
+    """恢复 OCR 服务重启时处于排队状态的任务。"""
     cleanup_temp_files()
     cleanup_orphan_task_dirs()
     cleanup_cancel_markers()
@@ -329,13 +322,12 @@ def recover_pending_tasks() -> None:
             continue
         task_id = str(task.get("taskId") or task_path.parent.name)
         # 被取消的任务（文献已删除 / 手动停止）不恢复，顺手把缓存清掉。
-        if is_task_cancelled(task_id):
+        if cancel_marker_path(task_id).exists():
             delete_task_storage(task_id)
             continue
         if task.get("status") not in {"排队中", "处理中", "准备中"}:
             continue
-        task["status"] = "排队中"
-        task["message"] = "服务已恢复，任务等待处理。"
+        task.update(status="排队中", message="服务已恢复，任务等待处理。")
         save_task(task)
         threading.Thread(
             target=process_stream_task,
@@ -365,7 +357,7 @@ async def save_task_source(upload: UploadFile, task_dir: Path) -> Path:
 
 
 def process_stream_task(task_id: str) -> None:
-    if is_task_cancelled(task_id):
+    if cancel_marker_path(task_id).exists():
         delete_task_storage(task_id)
         return
 
@@ -374,7 +366,7 @@ def process_stream_task(task_id: str) -> None:
         task = load_task(task_id)
         if not task:
             return
-        if is_task_cancelled(task_id):
+        if cancel_marker_path(task_id).exists():
             return
         quick_read = bool(task.get("quickRead"))
         task["status"] = "处理中"
@@ -419,7 +411,7 @@ def process_stream_task(task_id: str) -> None:
     finally:
         PROCESSING_SLOT.release()
         # 被取消的任务不留缓存（原件 + 逐页图），腾出空间给后登记的文献。
-        if is_task_cancelled(task_id):
+        if cancel_marker_path(task_id).exists():
             delete_task_storage(task_id)
 
 

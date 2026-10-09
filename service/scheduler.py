@@ -1,8 +1,8 @@
-﻿"""Durable, global document scheduler hosted by the data API.
+"""由数据接口托管的持久化全局文献调度器。
 
-Only this worker advances registered documents. OCR and LLM use the existing
-HTTP services; no models, browser sessions or synthetic tasks are needed.
-Registration preempts at operation boundaries (in-flight calls drain first).
+只有此工作器会推进已登记文献。OCR 和 LLM 使用现有 HTTP 服务，无需在此处
+加载模型、保持浏览器会话或创建模拟任务。登记任务会在操作边界抢占，先等待
+正在执行的调用完成。
 """
 from __future__ import annotations
 
@@ -28,11 +28,11 @@ RETRY_SECONDS = float(os.getenv("PROCESSING_RETRY_SECONDS", "10"))
 
 
 class ServiceUnavailable(RuntimeError):
-    """Retry after recovery, without consuming the ordinary failure budget."""
+    """服务恢复后重试，且不消耗普通失败重试次数。"""
 
 
 class ProcessingFailure(RuntimeError):
-    """Bad files/results/protocols have a finite retry budget."""
+    """文件、结果或协议异常使用有限的重试次数。"""
 
 
 def ensure_schema(connection):
@@ -68,7 +68,7 @@ def upgrade_checkpoint(checkpoint):
 
 
 class HttpServices:
-    """Small stdlib adapter; server-to-server URLs never come from clients."""
+    """标准库 HTTP 适配器；服务间 URL 从不接受客户端传入。"""
     def __init__(self):
         self.ocr_url = os.getenv("PROCESSING_OCR_URL", "http://127.0.0.1:8765").rstrip("/")
         self.llm_url = os.getenv("PROCESSING_LLM_URL", "http://127.0.0.1:8865").rstrip("/")
@@ -100,14 +100,9 @@ class HttpServices:
         if not isinstance(result, dict):
             raise ProcessingFailure("服务返回的结果不是对象")
         if result.get("ready") is False:
-            kind = result.get("errorKind")
-            if kind == "processing":
-                raise ProcessingFailure(result.get("message") or "识别结果无效")
-            if kind == "unavailable":
+            if result.get("errorKind") == "unavailable":
                 raise ServiceUnavailable(result.get("message") or "等候中")
-            health = self._request(f"{self.llm_url}/health", timeout=5)
-            cls = ServiceUnavailable if not health.get("ready") else ProcessingFailure
-            raise cls(result.get("message") or "识别结果无效")
+            raise ProcessingFailure(result.get("message") or "识别结果无效")
         return result
 
     def _form(self, route, field, path, fields=None):
@@ -178,7 +173,7 @@ class HttpServices:
 
 
 def preserve_server_fields(connection, document):
-    """A stale browser sync must never overwrite a scheduler checkpoint."""
+    """过期的浏览器同步绝不能覆盖调度器检查点。"""
     row = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
     job = connection.execute("SELECT mode FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
     if not row or not job:
@@ -197,8 +192,7 @@ def preserve_server_fields(connection, document):
         if key in stored:
             document[key] = stored[key]
     document["processingMode"] = job["mode"]
-    # Notes remain editable. Processed text/status and the page list belong to
-    # the scheduler while it is active; ordinary metadata remains editable.
+    # 备注仍可编辑。调度器运行期间负责正文、状态和页列表；普通元数据仍可编辑。
     active = connection.execute("SELECT status FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()["status"] not in TERMINAL
     incoming = {p.get("id"): p for p in document.get("pages", [])}
     pages = []
@@ -210,8 +204,7 @@ def preserve_server_fields(connection, document):
             if not active or page.get("llmDone"):
                 for key in ("cleanText", "punctuatedText"):
                     if key in edit:
-                        # A stale unprocessed snapshot has no authority to erase
-                        # freshly generated text. Explicit text editing is kept.
+                        # 过期的未处理快照不能删除刚生成的文本；显式文本编辑仍予以保留。
                         if edit.get("processingRevision", -1) == page.get("processingRevision", 0):
                             merged[key] = edit[key]
         pages.append(merged)
@@ -246,9 +239,6 @@ class Scheduler:
         self.thread = None
         self.lock_file = None
 
-    def _save(self, connection, job, doc, cp):
-        save_job_state(self.data, connection, job, doc, cp)
-
     def _load(self, connection, document_id):
         row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
         document = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
@@ -280,8 +270,7 @@ class Scheduler:
                 result = future.result()
             except Exception as exc:
                 task["message"] = str(exc)
-                # Concurrent lane successes must not accidentally clear another
-                # lane's wait. Each failed operation has its own durable retry.
+                # 并发通道成功时不能误清除另一通道的等待状态；每个失败操作都有独立的持久化重试。
                 cp.setdefault("errors", {})[key] = str(exc)
                 if isinstance(exc, ServiceUnavailable):
                     cp.setdefault("waiting", {})[key] = self.clock() + RETRY_SECONDS
@@ -312,7 +301,7 @@ class Scheduler:
                         doc["status"] = "登记未完成" if job["phase"] == "registration" else "处理失败"
                         if job["phase"] == "registration":
                             doc["registration"].update(status="failed", error=str(exc))
-                # Health-classified failures do not eat the ordinary retry budget.
+                # 按健康状态分类的失败不消耗普通重试次数。
             else:
                 for field in ("waiting", "retries", "errors", "attempts"):
                     cp.get(field, {}).pop(key, None)
@@ -331,8 +320,7 @@ class Scheduler:
                     doc["status"] = "排队中"
                 elif operation == "prepare":
                     cp.update(totalPages=result["totalPages"], ocrNext=1, llmNext=1)
-                    # Keep the initial page id (reader selections), discard no
-                    # processed pages: prepare is only run before any body OCR.
+                    # 保留初始页 ID（阅读页选择），不丢弃已处理页面：prepare 只会在正文 OCR 前执行。
                     doc["pages"] = doc.get("pages", [])[:1]
                     task["totalPages"] = result["totalPages"]
                 elif operation == "render":
@@ -352,7 +340,7 @@ class Scheduler:
                                 punctuatedText=str(result.get("punctuatedText") or "").strip(), llmDone=True, status="已生成整理稿")
                     cp["llmNext"] = number + 1
             self._update_status(job, doc, cp)
-            self._save(connection, job, doc, cp)
+            save_job_state(self.data, connection, job, doc, cp)
 
     def _update_status(self, job, doc, cp):
         if job["status"] in TERMINAL:
@@ -383,8 +371,7 @@ class Scheduler:
                 job["status"] = "running"
 
     def _launch(self, lane, job, doc, cp, operation, number=0):
-        # Commit a checkpoint BEFORE handing work to a thread. On a process
-        # restart this same stage is retried, never reset to the first page.
+        # 在线程接手任务前先提交检查点。进程重启后会重试当前阶段，不会重置到第一页。
         with self.data.database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             loaded = self._load(connection, doc["id"])
@@ -400,7 +387,7 @@ class Scheduler:
             if job["phase"] == "registration":
                 doc["registration"]["stage"] = "metadata"
             self._update_status(job, doc, cp)
-            self._save(connection, job, doc, cp)
+            save_job_state(self.data, connection, job, doc, cp)
         job["asset_root"] = str(self.data.FILE_STORAGE_DIR)
         source_path = (self.data.FILE_STORAGE_DIR / job["source_path"]).resolve()
         if not source_path.is_relative_to(self.data.FILE_STORAGE_DIR.resolve()):
@@ -421,7 +408,7 @@ class Scheduler:
                 job, doc, cp = loaded
                 if not doc["processingTask"].get("pausedForRegistration"):
                     doc["processingTask"]["pausedForRegistration"] = True
-                    self._save(connection, job, doc, cp)
+                    save_job_state(self.data, connection, job, doc, cp)
 
     def tick(self):
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
@@ -436,8 +423,7 @@ class Scheduler:
             """)]
         registrations = [job for job in jobs if job["phase"] == "registration" and job["retry_at"] <= self.clock()]
         if registrations:
-            # Do not overlap registration with any in-flight body operation.
-            # In parallel mode both lanes drain before priority work begins.
+            # 登记不能与正在执行的正文操作重叠；并行模式下两条通道都排空后才开始优先任务。
             if not self.running:
                 self._pause_body_for_registration()
                 job = registrations[0]
@@ -452,10 +438,9 @@ class Scheduler:
         bodies = [job for job in jobs if job["phase"] == "body"]
         if not bodies:
             return
-        job = bodies[0]  # Never skip a waiting head to process another document.
-        # Source archival reserves FIFO order even if registration is still
-        # waiting for service. Later registrations may be prepared, but their
-        # bodies cannot overtake this real, unfinished document.
+        job = bodies[0]  # 不能跳过正在等待的队首文献去处理另一份文献。
+        # 原件归档保留先进先出顺序，即使登记仍在等待服务。后续登记可以准备，
+        # 但其正文不能越过这份真实且尚未完成的文献。
         if any(entry["phase"] == "registration" and entry["sequence"] < job["sequence"] for entry in jobs):
             return
         with self.data.database() as connection:
@@ -472,7 +457,7 @@ class Scheduler:
                 self._launch("ocr", job, doc, cp, "prepare")
             return
         total = cp["totalPages"]
-        # Failed OCR pages remain visible but need no LLM call.
+        # OCR 失败的页面仍保持可见，但无需调用 LLM。
         previous_llm_next = cp["llmNext"]
         while cp["llmNext"] < cp["ocrNext"]:
             if cp["llmNext"] in cp.get("omittedPages", []):
@@ -490,7 +475,7 @@ class Scheduler:
                     return
                 saved_job, saved_doc, saved_cp = loaded
                 saved_cp["llmNext"] = cp["llmNext"]
-                self._save(connection, saved_job, saved_doc, saved_cp)
+                save_job_state(self.data, connection, saved_job, saved_doc, saved_cp)
         if cp["ocrNext"] > total and cp["llmNext"] > total and not self.running:
             with self.data.database() as connection, connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -505,16 +490,15 @@ class Scheduler:
                             currentPageStage="已完成", finalizedPages=total, pausedForRegistration=False, activeStages={},
                             message="正文处理及结果保存完成" + ("，失败页需人工处理" if task.get("failedPages") else ""))
                 doc["status"] = "已完成"
-                self._save(connection, job, doc, saved)
+                save_job_state(self.data, connection, job, doc, saved)
             return
         for lane, number in self._body_operations(job, cp, total):
             operation = "render" if lane == "ocr" and cp.get("renderedPage") != number else lane
             key = f"{operation}:{number}"
             if lane in self.running or cp.get("retries", {}).get(key, 0) > self.clock():
                 continue
-            # On outage only retry operations that caused it, before advancing
-            # another lane. A service outage therefore pauses this document at
-            # its exact checkpoint instead of silently changing the selected mode.
+            # 服务中断时只重试导致中断的操作，再推进另一条通道。因此文献会停在准确检查点，
+            # 不会静默改变已选择的模式。
             if cp.get("waiting") and key not in cp["waiting"]:
                 continue
             if cp.get("waiting", {}).get(key, 0) > self.clock():
@@ -523,13 +507,12 @@ class Scheduler:
 
     @staticmethod
     def _body_operations(job, cp, total):
-        """Return the next real stages for the fixed document mode.
+        """返回固定文献模式下接下来要执行的真实阶段。
 
-        Serial is deliberately one operation at a time: OCR/render page N,
-        then the shared LLM finalizer for page N, then page N+1. Parallel has
-        two independent lanes: OCR may advance to any page while the LLM lane
-        consumes completed OCR pages in order. Both lanes call the same service
-        contract and prompt, so mode only changes scheduling, not semantics.
+        串行模式每次只执行一个操作：先对第 N 页执行 OCR/渲染，再由共享的
+        LLM 完成第 N 页，最后进入第 N+1 页。并行模式有两条独立通道：OCR
+        可以推进到任意页面，LLM 通道则按顺序消费已完成 OCR 的页面。两条通道
+        使用相同的服务契约和提示词，因此模式只改变调度方式，不改变语义。
         """
         if job["mode"] == "serial":
             if cp["ocrNext"] <= total and cp["ocrNext"] <= cp["llmNext"]:
@@ -546,8 +529,8 @@ class Scheduler:
         return operations
 
     def _acquire_worker_lock(self):
-        # A process-lifetime OS lock prevents duplicate workers, including
-        # uvicorn --workers. It is automatically released on process death.
+        # 进程生命周期内的操作系统锁可防止重复工作器，包括 uvicorn --workers。
+        # 进程退出后锁会自动释放。
         path = self.data.DB_PATH.with_suffix(".processing.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = path.open("a+b")
@@ -574,7 +557,7 @@ class Scheduler:
                 if loaded:
                     job, doc, cp = loaded
                     doc["processingTask"]["activeStages"] = {}
-                    self._save(connection, job, doc, cp)
+                    save_job_state(self.data, connection, job, doc, cp)
         return True
 
     def _run(self):
@@ -585,8 +568,7 @@ class Scheduler:
             except Exception:
                 logger.exception("Document scheduler tick failed; durable state retained")
             self.stop_event.wait(0.25)
-        # Drain in-flight calls before releasing the single-worker lock.
-        # If killed instead, persisted checkpoints retry after restart.
+        # 释放单工作器锁前先排空正在执行的调用；如果进程被终止，持久化检查点会在重启后重试。
         self.executor.shutdown(wait=True)
         for future, doc_id, operation, number in self.running.values():
             self._record(doc_id, operation, number, future)

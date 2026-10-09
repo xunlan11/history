@@ -4,8 +4,8 @@
 
 uv：
 ```bash
-winget install astral-sh.uv # Windows
-curl -LsSf https://astral.sh/uv/install.sh | sh # Linux / macOS
+winget install astral-sh.uv # Windows 系统
+curl -LsSf https://astral.sh/uv/install.sh | sh # Linux / macOS 系统
 cd history
 uv sync
 uv lock --upgrade

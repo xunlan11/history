@@ -32,12 +32,9 @@
     return data;
   }
 
-  function myId() {
-    return currentUser ? Number(currentUser.id) : null;
-  }
-
   function isSelf(id) {
-    return myId() !== null && Number(id) === myId();
+    const currentId = currentUser ? Number(currentUser.id) : null;
+    return currentId !== null && Number(id) === currentId;
   }
 
   function toast(message, isError = false) {
@@ -138,16 +135,12 @@
   }
 
   function goToPage(target) {
-    const total = filteredCount();
+    const total = filterAndSort(users).length;
     const totalPages = total ? Math.ceil(total / PAGE_SIZE) : 1;
     const next = Math.max(1, Math.min(target, totalPages));
     if (next === page) return;
     page = next;
     render();
-  }
-
-  function filteredCount() {
-    return filterAndSort(users).length;
   }
 
   function render() {

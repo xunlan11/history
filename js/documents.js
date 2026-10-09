@@ -521,7 +521,7 @@ function clearDocumentDragState() {
   try {
     documentDragState.card.releasePointerCapture?.(documentDragState.pointerId);
   } catch {
-    // The browser may already have released capture on pointer cancellation.
+    // 指针操作取消时，浏览器可能已经释放了捕获状态。
   }
   documentDragState.card.classList.remove("dragging");
   documentDragState.card.setAttribute("aria-grabbed", "false");
@@ -964,10 +964,6 @@ function renderReaderSidebar() {
   renderStreamProgress(item);
 }
 
-function getReaderTextLayer(page) {
-  return page?.punctuatedText || page?.cleanText || page?.ocrText || "";
-}
-
 function renderReaderOriginal(page) {
   const imageSource = getPageImageSource(page);
 
@@ -984,7 +980,7 @@ function renderReaderOriginal(page) {
 }
 
 function renderReaderText(page) {
-  const text = getReaderTextLayer(page);
+  const text = getPagePrimaryText(page);
 
   if (!text) {
     readerText.classList.add("is-empty");

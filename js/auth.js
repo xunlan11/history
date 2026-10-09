@@ -14,7 +14,7 @@ window.fetch = (input, init = {}) => {
 };
 
 function authUi() {
-  // Authentication controls are only rendered in the homepage top bar.
+  // 认证控件只在首页顶部栏渲染。
   const isHomePage = document.body?.dataset.page === "library";
   if (isHomePage) {
     const bar = document.createElement("div"); bar.className = "auth-bar";
@@ -54,7 +54,7 @@ function setAuthInputRequirements(registerMode) {
   passwordInput.placeholder = registerMode ? "密码（至少6个字符）" : "密码";
   usernameInput.minLength = registerMode ? 2 : 0;
   passwordInput.minLength = registerMode ? 6 : 0;
-  // Keep the browser's account suggestion on the username field only.
+  // 只在用户名输入框保留浏览器的账户建议。
   passwordInput.autocomplete = "off";
 }
 
@@ -87,7 +87,7 @@ async function submitAuth() {
     const authPath = isRegister ? "/data/api/auth/register" : "/data/api/auth/login";
     const response = await originalFetch(endpoint(authPath), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     let result = {};
-    try { result = await response.json(); } catch (_) { /* non-JSON proxy errors */ }
+    try { result = await response.json(); } catch (_) { /* 非 JSON 代理错误 */ }
     if (!response.ok) {
       errorNode.textContent = result.detail || `请求失败（${response.status}）`;
       return;

@@ -25,49 +25,49 @@ SubModules:
     model_dir: null
     batch_size: 8
     threshold: 
-      0: 0.3  # paragraph_title
-      1: 0.5  # image
-      2: 0.4  # text
-      3: 0.5  # number
-      4: 0.5  # abstract
-      5: 0.5  # content
-      6: 0.5  # figure_table_chart_title
-      7: 0.3  # formula
-      8: 0.5  # table
-      9: 0.5  # reference
-      10: 0.5 # doc_title
-      11: 0.5 # footnote
-      12: 0.5 # header
-      13: 0.5 # algorithm
-      14: 0.5 # footer
-      15: 0.45 # seal
-      16: 0.5 # chart
-      17: 0.5 # formula_number
-      18: 0.5 # aside_text
-      19: 0.5 # reference_content
+      0: 0.3  # 段落标题
+      1: 0.5  # 图像
+      2: 0.4  # 文本
+      3: 0.5  # 编号
+      4: 0.5  # 摘要
+      5: 0.5  # 内容
+      6: 0.5  # 图表标题
+      7: 0.3  # 公式
+      8: 0.5  # 表格
+      9: 0.5  # 参考文献
+      10: 0.5 # 文档标题
+      11: 0.5 # 脚注
+      12: 0.5 # 页眉
+      13: 0.5 # 算法
+      14: 0.5 # 页脚
+      15: 0.45 # 印章
+      16: 0.5 # 图表
+      17: 0.5 # 公式编号
+      18: 0.5 # 旁注文本
+      19: 0.5 # 参考文献内容
     layout_nms: True
     layout_unclip_ratio: [1.0, 1.0] 
     layout_merge_bboxes_mode: 
-      0: "large"  # paragraph_title
-      1: "large"  # image
-      2: "union"  # text
-      3: "union"  # number
-      4: "union"  # abstract
-      5: "union"  # content
-      6: "union"  # figure_table_chart_title
-      7: "large"  # formula
-      8: "union"  # table
-      9: "union"  # reference
-      10: "union" # doc_title
-      11: "union" # footnote
-      12: "union" # header
-      13: "union" # algorithm
-      14: "union" # footer
-      15: "union" # seal
-      16: "large" # chart
-      17: "union" # formula_number
-      18: "union" # aside_text
-      19: "union" # reference_content
+      0: "large"  # 段落标题
+      1: "large"  # 图像
+      2: "union"  # 文本
+      3: "union"  # 编号
+      4: "union"  # 摘要
+      5: "union"  # 内容
+      6: "union"  # 图表标题
+      7: "large"  # 公式
+      8: "union"  # 表格
+      9: "union"  # 参考文献
+      10: "union" # 文档标题
+      11: "union" # 脚注
+      12: "union" # 页眉
+      13: "union" # 算法
+      14: "union" # 页脚
+      15: "union" # 印章
+      16: "large" # 图表
+      17: "union" # 公式编号
+      18: "union" # 旁注文本
+      19: "union" # 参考文献内容
   ChartRecognition:
     module_name: chart_recognition
     model_name: PP-Chart2Table

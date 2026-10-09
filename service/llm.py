@@ -131,16 +131,7 @@ def probe_provider_health() -> tuple[bool, str, str]:
         return False, str(exc), "not_ready"
 
 
-def probe_provider() -> tuple[bool, str]:
-    # 内部调用返回 ready/message；健康接口额外提供机器可读的状态分类。
-    ready, message, _state = probe_provider_health()
-    return ready, message
-
-
-def base_response(task: str, ready: bool | None = None, message: str = "") -> dict[str, Any]:
-    if ready is None:
-        ready = provider_configured()
-
+def base_response(task: str, ready: bool, message: str = "") -> dict[str, Any]:
     return {
         "task": task,
         "provider": LLM_PROVIDER,
@@ -157,8 +148,7 @@ def failure_response(task: str, exc: LlmServiceError) -> dict[str, Any]:
     if isinstance(exc, LlmServiceUnavailable) or not provider_configured():
         unavailable = True
     else:
-        # A ready model producing invalid JSON is an ordinary processing error.
-        # Missing models/configuration and offline providers wait for recovery.
+        # 已就绪模型生成无效 JSON 属于普通处理错误；模型、配置缺失或服务离线则等待恢复。
         unavailable = not probe_provider_health()[0]
     response["errorKind"] = "unavailable" if unavailable else "processing"
     return response

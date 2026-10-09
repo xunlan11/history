@@ -264,6 +264,5 @@ def update(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(update_project)
     response = build_status()
-    response["updating"] = True
-    response["message"] = "已开始后台更新（以服务器本地代码为准）"
+    response.update(updating=True, message="已开始后台更新（以服务器本地代码为准）")
     return JSONResponse(response)

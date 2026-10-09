@@ -1230,44 +1230,6 @@ function countFinalizedPages(item) {
   return item.pages.filter((page) => page.cleanText || page.status === "已生成整理稿").length;
 }
 
-function mergeProcessingPages(item, incomingPages) {
-  if (!Array.isArray(incomingPages) || !incomingPages.length) {
-    return false;
-  }
-
-  const byNumber = new Map(item.pages.map((page) => [page.pageNumber, page]));
-  let added = false;
-
-  incomingPages.forEach((raw, index) => {
-    const incoming = normalizeProcessingPage(raw, index);
-    const existing = byNumber.get(incoming.pageNumber);
-
-    if (existing) {
-      // 保留已由大模型生成的整理文本，仅更新 OCR 结果。
-      const ocrChanged = existing.ocrText !== incoming.ocrText;
-      existing.ocrText = incoming.ocrText;
-      existing.imageDataUrl = existing.imageDataUrl || incoming.imageDataUrl;
-      existing.imageUrl = incoming.imageUrl || existing.imageUrl;
-      existing.imageName = existing.imageName || incoming.imageName;
-      existing.ocr = incoming.ocr;
-      if (ocrChanged && existing.status !== "正在生成整理稿") {
-        existing.status = existing.cleanText ? "已生成整理稿" : "已识别";
-        existing.updatedAt = new Date().toISOString();
-      }
-      return;
-    }
-
-    item.pages.push(incoming);
-    byNumber.set(incoming.pageNumber, incoming);
-    added = true;
-  });
-
-  item.pages.sort((a, b) => a.pageNumber - b.pageNumber);
-  item.status = summarizeDocumentStatus(item);
-  item.updatedAt = new Date().toISOString();
-  return added;
-}
-
 // 只保留 OCR 摘要字段，避免大型版面坐标数据占用 localStorage。
 function normalizeStoredOcr(ocr) {
   if (!ocr) {

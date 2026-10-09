@@ -1818,7 +1818,7 @@ body {
   gap: 10px;
 }
 
-/* Keep the conversation sources with the send control in the lower-right corner. */
+/* 让会话来源与发送控件一起固定在右下角。 */
 #open-reference-documents {
   margin-left: auto;
 }

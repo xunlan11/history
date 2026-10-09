@@ -82,7 +82,7 @@ def now_iso() -> str:
 
 
 def next_available_user_id(connection: sqlite3.Connection) -> int:
-    """Return the smallest positive user ID not currently assigned."""
+    """返回当前未分配的最小正整数用户 ID。"""
     rows = connection.execute("SELECT id FROM users ORDER BY id").fetchall()
     candidate = 1
     for row in rows:
@@ -231,8 +231,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
     )
-    # Bootstrap exactly one administrator on a fresh database. Credentials
-    # are deployment configuration, never source-controlled defaults.
+    # 新数据库只初始化一名管理员。凭据属于部署配置，不能使用代码仓库中的默认值。
     if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None:
         admin_username = os.getenv("INITIAL_ADMIN_USERNAME", "").strip()
         admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
@@ -1117,7 +1116,7 @@ def require_owned_document(connection, document_id: str, user):
 
 
 def public_processing_document(connection, document_id, user):
-    # Use the same visibility/asset projection as bootstrap.
+    # 使用与初始化流程相同的可见性和资产投影。
     return next(doc for doc in active_payloads(connection, "documents", user) if doc["id"] == document_id)
 
 
@@ -1152,8 +1151,8 @@ def remove_failed_processing_page(document_id: str, page_number: int, authorizat
         omitted = checkpoint.setdefault("omittedPages", [])
         if page_number not in omitted:
             omitted.append(page_number)
-        # This transaction cannot race a page result commit. Only failed,
-        # terminal page stages can be removed; the archived source is untouched.
+        # 此事务不会与页面结果提交发生竞争。只有失败且已终止的页面阶段可以删除，
+        # 已归档原件保持不变。
         import sys
         processing_scheduler.save_job_state(sys.modules[__name__], connection, dict(row), document, checkpoint)
         return {"document": public_processing_document(connection, document_id, user)}
@@ -1264,8 +1263,7 @@ async def upload_file(
 
     mime_type = document.content_type or mimetypes.guess_type(document.filename or "")[0] or "application/octet-stream"
     timestamp = now_iso()
-    # Reject replacement before writing a new orphan asset. Re-uploading the
-    # same content is idempotent; changing a submitted source is not allowed.
+    # 在写入新的孤立资产前拒绝替换。重新上传相同内容是幂等的，但不允许修改已提交原件。
     with database() as connection:
         submitted = connection.execute("SELECT source_path FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
     if submitted:

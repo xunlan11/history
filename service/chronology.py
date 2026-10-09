@@ -4,11 +4,7 @@ import re
 from datetime import date
 from typing import Any
 
-try:
-    from lunar_python import Lunar, Solar
-except ImportError:  # 服务仍可启动，但精确农历换算会返回待核提示。
-    Lunar = None
-    Solar = None
+from lunar_python import Lunar, Solar
 
 
 ERA_DEFINITIONS = {
@@ -214,10 +210,6 @@ def convert_lunar_date(year: int, month: int, day: int, leap: bool) -> dict[str,
         if month:
             warnings.append("只有农历月份而没有日期，无法换算为唯一公历月份。")
         return base
-    if Lunar is None:
-        warnings.append("未安装 lunar-python，无法执行农历与公历的精确换算。")
-        return base
-
     try:
         lunar = Lunar.fromYmd(year, -month if leap else month, day)
         solar = lunar.getSolar()
@@ -263,9 +255,7 @@ def convert_gregorian_date(year: int, month: int, day: int) -> dict[str, Any]:
         "calendarConversionStatus": "normalized" if precision != "year" else "partial",
         "warnings": warnings,
     }
-    if precision != "day" or Solar is None:
-        if precision == "day" and Solar is None:
-            warnings.append("未安装 lunar-python，无法补充对应农历日期。")
+    if precision != "day":
         return result
 
     try:
