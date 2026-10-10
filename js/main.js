@@ -80,6 +80,10 @@ document.addEventListener("keydown", (event) => {
 });
 
 newConversationButton?.addEventListener("click", () => {
+  const currentConversation = getSelectedConversation();
+  if (currentConversation && !(currentConversation.turns || []).length) {
+    return;
+  }
   if (typeof conversationShareEditingId !== "undefined") {
     conversationShareEditingId = "";
     conversationShareSelectionIds = new Set();

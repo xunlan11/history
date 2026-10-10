@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import sqlite3
+import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SESSIONS: dict[str, dict[str, Any]] = {}
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
@@ -48,6 +49,7 @@ app.add_middleware(
 
 
 class SyncPayload(BaseModel):
+    schemaVersion: int
     clientId: str = ""
     documents: list[dict[str, Any]] = Field(default_factory=list)
     conversations: list[dict[str, Any]] = Field(default_factory=list)
@@ -172,6 +174,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
+            owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             payload TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
@@ -275,9 +278,30 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
                 f"password={admin_password}",
                 flush=True,
             )
+    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
     schema_row = connection.execute(
         "SELECT value FROM app_meta WHERE key = 'schema_version'"
     ).fetchone()
+    conversation_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversations)")}
+    if "owner_id" not in conversation_columns or (schema_row and int(schema_row["value"]) < 7):
+        connection.execute("DELETE FROM conversation_shares")
+        connection.execute("DELETE FROM conversation_files")
+        for conversation_asset_dir in FILE_STORAGE_DIR.glob("conversation-*"):
+            if conversation_asset_dir.is_dir():
+                shutil.rmtree(conversation_asset_dir)
+        connection.execute("DROP TABLE conversations")
+        connection.execute(
+            "CREATE TABLE conversations ("
+            "id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "payload TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, "
+            "deleted_at TEXT, version INTEGER NOT NULL DEFAULT 1)"
+        )
+        bump_sync_version(connection)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_owner_order "
+        "ON conversations(owner_id, deleted_at, sort_order, updated_at)"
+    )
     if schema_row is None:
         connection.execute(
             "INSERT INTO app_meta(key, value) VALUES('schema_version', ?)",
@@ -762,7 +786,12 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     if table == "documents" and user:
         where += " AND (visibility = 'public' OR owner_id = ?)"
         params = (user["id"],)
-    columns = "payload, owner_id" if table == "documents" else "payload"
+    if table == "conversations":
+        if not user:
+            return []
+        where += " AND owner_id = ?"
+        params = (user["id"],)
+    columns = "payload, owner_id"
     rows = connection.execute(
         f"""
         SELECT {columns}
@@ -789,7 +818,8 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
             result.append(rehydrate_document_assets(connection, payload))
         return result
     result = []
-    for payload in payloads:
+    for row, payload in zip(rows, payloads):
+        payload["ownerId"] = row["owner_id"]
         payload = rehydrate_conversation_files(connection, payload)
         share = connection.execute(
             "SELECT token, selected_turn_ids, active, updated_at FROM conversation_shares "
@@ -905,34 +935,39 @@ def upsert_document_pages(
             )
 
 
-def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], timestamp: str) -> None:
+def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
     for sort_order, conversation in enumerate(conversations):
         conversation_id = str(conversation.get("id") or "").strip()
         if not conversation_id:
             continue
 
-        payload = json_dump(conversation)
         existing = connection.execute(
-            "SELECT version FROM conversations WHERE id = ?",
+            "SELECT version, owner_id FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
+        if existing and existing["owner_id"] != user["id"]:
+            continue
+        stored = dict(conversation)
+        stored.pop("ownerId", None)
+        stored.pop("share", None)
+        payload = json_dump(stored)
 
         if existing:
             connection.execute(
                 """
                 UPDATE conversations
                 SET payload = ?, sort_order = ?, updated_at = ?, deleted_at = NULL, version = version + 1
-                WHERE id = ?
+                WHERE id = ? AND owner_id = ?
                 """,
-                (payload, sort_order, timestamp, conversation_id),
+                (payload, sort_order, timestamp, conversation_id, user["id"]),
             )
         else:
             connection.execute(
                 """
-                INSERT INTO conversations(id, payload, sort_order, updated_at, deleted_at, version)
-                VALUES(?, ?, ?, ?, NULL, 1)
+                INSERT INTO conversations(id, owner_id, payload, sort_order, updated_at, deleted_at, version)
+                VALUES(?, ?, ?, ?, ?, NULL, 1)
                 """,
-                (conversation_id, payload, sort_order, timestamp),
+                (conversation_id, user["id"], payload, sort_order, timestamp),
             )
 
         attachments = conversation.get("attachments") if isinstance(conversation.get("attachments"), list) else []
@@ -979,11 +1014,13 @@ def soft_delete_entities(
     user: dict[str, Any] | None = None,
 ) -> None:
     for entity_id in {str(value).strip() for value in entity_ids if str(value).strip()}:
-        owner_clause = " AND owner_id = ?" if table == "documents" and user else ""
+        if table == "conversations" and not user:
+            raise HTTPException(status_code=401, detail="authentication required")
+        owner_clause = " AND owner_id = ?" if user else ""
         params: tuple[Any, ...] = (timestamp, timestamp, entity_id) + ((user["id"],) if owner_clause else ())
         cursor = connection.execute(f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?{owner_clause}", params)
 
-        if table == "documents" and user and cursor.rowcount == 0:
+        if user and cursor.rowcount == 0:
             continue
 
         if table == "documents":
@@ -1007,7 +1044,7 @@ def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None =
     return {
         "schemaVersion": SCHEMA_VERSION,
         "documents": active_payloads(connection, "documents", user),
-        "conversations": active_payloads(connection, "conversations"),
+        "conversations": active_payloads(connection, "conversations", user),
         "syncCursor": str(get_sync_version(connection)),
     }
 
@@ -1075,13 +1112,34 @@ def conversation_share_metadata(connection: sqlite3.Connection, conversation_id:
     }
 
 
+def require_owned_conversation(connection: sqlite3.Connection, conversation_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    row = connection.execute(
+        "SELECT payload, owner_id FROM conversations WHERE id = ? AND owner_id = ? AND deleted_at IS NULL",
+        (conversation_id, user["id"]),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {**json_load(row["payload"]), "ownerId": row["owner_id"]}
+
+
+def require_owned_conversation_file(connection: sqlite3.Connection, attachment_id: str, user: dict[str, Any]) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT f.* FROM conversation_files AS f JOIN conversations AS c ON c.id = f.conversation_id "
+        "WHERE f.id = ? AND f.deleted_at IS NULL AND c.deleted_at IS NULL AND c.owner_id = ?",
+        (attachment_id, user["id"]),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="conversation attachment not found")
+    return row
+
+
 def get_conversation_for_share(connection: sqlite3.Connection, conversation_id: str) -> dict[str, Any]:
     row = connection.execute(
         "SELECT payload FROM conversations WHERE id = ? AND deleted_at IS NULL",
         (conversation_id,),
     ).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="对话不存在")
+        raise HTTPException(status_code=404, detail="?????")
     return json_load(row["payload"])
 
 
@@ -1437,11 +1495,19 @@ async def upload_conversation_file(
     attachment: UploadFile = File(...),
     conversationId: str = Form(...),
     attachmentId: str = Form(...),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    user = current_user(authorization)
     conversation_id = conversationId.strip()
     attachment_id = attachmentId.strip()
     if not conversation_id or not attachment_id:
         raise HTTPException(status_code=400, detail="conversationId 和 attachmentId 不能为空")
+
+    with database() as connection:
+        require_owned_conversation(connection, conversation_id, user)
+        existing = connection.execute("SELECT conversation_id FROM conversation_files WHERE id = ?", (attachment_id,)).fetchone()
+        if existing and existing["conversation_id"] != conversation_id:
+            raise HTTPException(status_code=404, detail="???????")
 
     content = await attachment.read()
     mime_type = attachment.content_type or mimetypes.guess_type(attachment.filename or "")[0] or "application/octet-stream"
@@ -1463,6 +1529,10 @@ async def upload_conversation_file(
     try:
         with database() as connection:
             with connection:
+                require_owned_conversation(connection, conversation_id, user)
+                existing = connection.execute("SELECT conversation_id FROM conversation_files WHERE id = ?", (attachment_id,)).fetchone()
+                if existing and existing["conversation_id"] != conversation_id:
+                    raise HTTPException(status_code=404, detail="conversation attachment not found")
                 file_record = upsert_conversation_file_record(
                     connection,
                     attachment_id=attachment_id,
@@ -1486,16 +1556,13 @@ async def upload_conversation_file(
 def update_conversation_file_text(
     attachment_id: str,
     payload: ConversationFileTextPayload,
+    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    user = current_user(authorization)
     timestamp = now_iso()
     with database() as connection:
         with connection:
-            existing = connection.execute(
-                "SELECT id FROM conversation_files WHERE id = ? AND deleted_at IS NULL",
-                (attachment_id,),
-            ).fetchone()
-            if not existing:
-                raise HTTPException(status_code=404, detail="对话附件不存在")
+            require_owned_conversation_file(connection, attachment_id, user)
             connection.execute(
                 """
                 UPDATE conversation_files
@@ -1519,10 +1586,12 @@ def update_conversation_file_text(
 
 
 @app.delete("/api/conversation-files/{attachment_id}")
-def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
+def delete_conversation_file(attachment_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    user = current_user(authorization)
     timestamp = now_iso()
     with database() as connection:
         with connection:
+            require_owned_conversation_file(connection, attachment_id, user)
             connection.execute(
                 "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, attachment_id),
@@ -1536,11 +1605,11 @@ def create_conversation_share(
     payload: ConversationSharePayload,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    current_user(authorization)
+    user = current_user(authorization)
     conversation_id = str(payload.conversationId or "").strip()
     timestamp = now_iso()
     with database() as connection:
-        conversation = get_conversation_for_share(connection, conversation_id)
+        conversation = require_owned_conversation(connection, conversation_id, user)
         selected_ids = validate_share_selection(conversation, payload.turnIds)
         existing = connection.execute(
             "SELECT id, token FROM conversation_shares WHERE conversation_id = ? AND active = 1 AND deleted_at IS NULL",
@@ -1570,7 +1639,7 @@ def update_conversation_share(
     payload: ConversationSharePayload,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    current_user(authorization)
+    user = current_user(authorization)
     timestamp = now_iso()
     with database() as connection:
         row = connection.execute(
@@ -1579,7 +1648,7 @@ def update_conversation_share(
         ).fetchone()
         if not row or row["conversation_id"] != str(payload.conversationId or "").strip():
             raise HTTPException(status_code=404, detail="分享链接不存在或已失效")
-        conversation = get_conversation_for_share(connection, row["conversation_id"])
+        conversation = require_owned_conversation(connection, row["conversation_id"], user)
         selected_ids = validate_share_selection(conversation, payload.turnIds)
         with connection:
             connection.execute(
@@ -1592,10 +1661,17 @@ def update_conversation_share(
 
 @app.delete("/api/conversation-shares/{token}")
 def delete_conversation_share(token: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    current_user(authorization)
+    user = current_user(authorization)
     timestamp = now_iso()
     with database() as connection:
         with connection:
+            row = connection.execute(
+                "SELECT conversation_id FROM conversation_shares WHERE token = ? AND active = 1 AND deleted_at IS NULL",
+                (token,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="share link not found or expired")
+            require_owned_conversation(connection, row["conversation_id"], user)
             cursor = connection.execute(
                 "UPDATE conversation_shares SET active = 0, deleted_at = ?, updated_at = ? "
                 "WHERE token = ? AND active = 1 AND deleted_at IS NULL",
@@ -1815,13 +1891,15 @@ def sync(cursor: str = Query(default=""), authorization: str | None = Header(def
 @app.post("/api/sync/push")
 def push(payload: SyncPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = current_user(authorization)
+    if payload.schemaVersion != SCHEMA_VERSION:
+        raise HTTPException(status_code=409, detail="data schema changed; refresh the page")
     timestamp = now_iso()
     try:
         with database() as connection:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
                 upsert_documents(connection, payload.documents, timestamp, user)
-                upsert_conversations(connection, payload.conversations, timestamp)
+                upsert_conversations(connection, payload.conversations, timestamp, user)
                 soft_delete_entities(
                     connection,
                     "documents",
@@ -1834,6 +1912,7 @@ def push(payload: SyncPayload, authorization: str | None = Header(default=None))
                     "conversations",
                     payload.deletedConversationIds,
                     timestamp,
+                    user,
                 )
                 cursor = bump_sync_version(connection)
                 snapshot = build_snapshot(connection, user)

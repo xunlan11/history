@@ -2923,7 +2923,9 @@ body {
   display: grid;
   width: 26px;
   height: 26px;
+  justify-self: center;
   place-items: center;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
@@ -3036,7 +3038,7 @@ body {
   max-width: 88%;
   margin: 0;
   padding: 10px 14px;
-  border-radius: 14px;
+  border-radius: 14px 0 14px 14px;
   background: var(--surface-2);
   color: var(--text);
   line-height: 1.6;
@@ -3081,8 +3083,14 @@ body {
 
 .conversation-answer {
   display: grid;
+  justify-self: start;
+  width: fit-content;
+  max-width: 88%;
   gap: 10px;
   min-width: 0;
+  padding: 10px 14px;
+  border-radius: 0 14px 14px 14px;
+  background: #f7eee8;
   overflow-wrap: anywhere;
 }
 
@@ -3457,10 +3465,6 @@ body {
   grid-template-columns: minmax(0, 1fr) 32px 28px;
 }
 
-.message-panel {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 .conversation-share {
   display: grid;
   width: 28px;
@@ -3482,11 +3486,26 @@ body {
 }
 
 .conversation-share-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(28, 37, 33, 0.34);
+}
+
+.conversation-share-editor-card {
   display: grid;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid rgba(221, 226, 220, 0.74);
-  background: #f8fbf8;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 20px 60px rgba(28, 37, 33, 0.2);
 }
 
 .conversation-share-editor.hidden,

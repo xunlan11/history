@@ -1429,7 +1429,7 @@ function openConversationShareEditor(item) {
   renderActiveConversation();
   renderReferenceDocuments();
   renderConversationAttachments();
-  messageFeed.scrollTop = 0;
+  closeConversationShareButton?.focus();
 }
 
 function closeConversationShareEditor() {
@@ -1595,6 +1595,16 @@ async function deleteConversationShare() {
 }
 
 closeConversationShareButton?.addEventListener("click", closeConversationShareEditor);
+conversationShareEditor?.addEventListener("click", (event) => {
+  if (event.target === conversationShareEditor) {
+    closeConversationShareEditor();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && conversationShareEditor && !conversationShareEditor.classList.contains("hidden")) {
+    closeConversationShareEditor();
+  }
+});
 selectAllConversationShareButton?.addEventListener("click", () => {
   const conversation = getSelectedConversation();
   conversationShareSelectionIds = new Set((conversation?.turns || []).filter((turn) => turn.status === "completed" && turn.result).map((turn) => turn.id));

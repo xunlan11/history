@@ -82,6 +82,7 @@
       fragments.push(
         { slot: "#settings-fragment-slot", path: "partials/settings.html" },
         { slot: "#reference-documents-fragment-slot", path: "partials/reference.html" },
+        { slot: "#share-fragment-slot", path: "partials/share.html" },
       );
     }
     await Promise.all(fragments.map(loadFragment));

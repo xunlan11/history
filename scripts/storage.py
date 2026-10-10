@@ -154,6 +154,10 @@ def command_export_json(args: argparse.Namespace) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     with data_service.database() as connection:
         payload = data_service.build_snapshot(connection)
+        payload["conversations"] = []
+        for row in connection.execute("SELECT id, username, is_admin FROM users ORDER BY id").fetchall():
+            user_snapshot = data_service.build_snapshot(connection, {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])})
+            payload["conversations"].extend(user_snapshot["conversations"])
         payload["exportedAt"] = data_service.now_iso()
 
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -169,8 +173,22 @@ def command_import_json(args: argparse.Namespace) -> int:
     timestamp = data_service.now_iso()
     with data_service.database() as connection:
         with connection:
-            data_service.upsert_documents(connection, payload.get("documents") or [], timestamp)
-            data_service.upsert_conversations(connection, payload.get("conversations") or [], timestamp)
+            grouped_documents = {}
+            for document in payload.get("documents") or []:
+                owner_id = int(document.get("ownerId") or 0)
+                if owner_id:
+                    grouped_documents.setdefault(owner_id, []).append(document)
+            for owner_id, documents in grouped_documents.items():
+                if connection.execute("SELECT 1 FROM users WHERE id = ?", (owner_id,)).fetchone():
+                    data_service.upsert_documents(connection, documents, timestamp, {"id": owner_id})
+            grouped_conversations = {}
+            for conversation in payload.get("conversations") or []:
+                owner_id = int(conversation.get("ownerId") or 0)
+                if owner_id:
+                    grouped_conversations.setdefault(owner_id, []).append(conversation)
+            for owner_id, conversations in grouped_conversations.items():
+                if connection.execute("SELECT 1 FROM users WHERE id = ?", (owner_id,)).fetchone():
+                    data_service.upsert_conversations(connection, conversations, timestamp, {"id": owner_id})
             cursor = data_service.bump_sync_version(connection)
 
     print(json.dumps({"status": "ok", "syncCursor": str(cursor), "importedAt": timestamp}, ensure_ascii=False, indent=2))

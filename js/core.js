@@ -15,7 +15,7 @@ const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `w
 
 const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
-const DATA_SCHEMA_VERSION = 6;
+const DATA_SCHEMA_VERSION = 7;
 
 function endpoint(proxiedPath) {
   return `${HISTORY_BASE}/api${proxiedPath}`;
@@ -283,20 +283,33 @@ const openSettingsButton = document.querySelector("#open-settings");
 const settingsDialog = document.querySelector("#settings-dialog");
 const closeSettingsButton = document.querySelector("#close-settings");
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.conversations.schema4`;
+const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema5`;
 const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
 const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
 const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema4`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
-const DELETED_CONVERSATION_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedConversations.schema4`;
+const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema5`;
 // 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
 const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema4`;
+
+localStorage.removeItem(`${SITE_STORAGE_PREFIX}.conversations.schema4`);
+localStorage.removeItem(`${SITE_STORAGE_PREFIX}.deletedConversations.schema4`);
+
+function getConversationStorageKey() {
+  const userId = typeof currentUser !== "undefined" ? currentUser?.id : null;
+  return userId ? `${CONVERSATION_STORAGE_KEY_PREFIX}.user-${userId}` : "";
+}
+
+function getDeletedConversationStorageKey() {
+  const userId = typeof currentUser !== "undefined" ? currentUser?.id : null;
+  return userId ? `${DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX}.user-${userId}` : "";
+}
 const SYNC_INTERVAL_MS = 30000;
 
 let documents = normalizeDocuments(loadCachedDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
-let conversations = loadCachedConversations();
+let conversations = [];
 let selectedConversationId = conversations[0]?.id || null;
 let syncCursor = localStorage.getItem(SYNC_CURSOR_STORAGE_KEY) || "";
 let syncReady = false;
@@ -308,7 +321,7 @@ let syncPushInFlight = null;
 let syncPullInFlight = null;
 let syncRevision = 0;
 let deletedDocumentIds = loadCachedIdSet(DELETED_DOCUMENT_IDS_STORAGE_KEY);
-let deletedConversationIds = loadCachedIdSet(DELETED_CONVERSATION_IDS_STORAGE_KEY);
+let deletedConversationIds = new Set();
 
 function loadCachedDocuments() {
   try {
@@ -441,8 +454,10 @@ function persistDocumentsCache() {
 }
 
 function loadCachedConversations() {
+  const storageKey = getConversationStorageKey();
+  if (!storageKey) return [];
   try {
-    const items = JSON.parse(localStorage.getItem(CONVERSATION_STORAGE_KEY)) || [];
+    const items = JSON.parse(localStorage.getItem(storageKey)) || [];
     return normalizeConversations(items);
   } catch {
     return [];
@@ -455,7 +470,8 @@ function persistConversations() {
 }
 
 function persistConversationsCache() {
-  localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversations));
+  const storageKey = getConversationStorageKey();
+  if (storageKey) localStorage.setItem(storageKey, JSON.stringify(conversations));
 }
 
 function getClientId() {
@@ -475,7 +491,8 @@ function cacheCurrentState() {
 
 function persistDeletedIdCache() {
   localStorage.setItem(DELETED_DOCUMENT_IDS_STORAGE_KEY, JSON.stringify(Array.from(deletedDocumentIds)));
-  localStorage.setItem(DELETED_CONVERSATION_IDS_STORAGE_KEY, JSON.stringify(Array.from(deletedConversationIds)));
+  const conversationStorageKey = getDeletedConversationStorageKey();
+  if (conversationStorageKey) localStorage.setItem(conversationStorageKey, JSON.stringify(Array.from(deletedConversationIds)));
 }
 
 function applyServerState(payload) {
@@ -512,6 +529,7 @@ function normalizeConversations(items) {
     .filter((item) => item?.id)
     .map((item) => ({
       id: item.id,
+      ownerId: Number(item.ownerId) || null,
       title: item.title || "新对话",
       mode: item.mode || "chat",
       locked: Boolean(item.locked || item.result || item.turns?.length),
@@ -612,6 +630,11 @@ function normalizeConversationAttachments(values) {
 }
 
 async function initializeServerData() {
+  if (typeof currentUser !== "undefined" && currentUser?.id) {
+    conversations = loadCachedConversations();
+    selectedConversationId = conversations[0]?.id || null;
+    deletedConversationIds = loadCachedIdSet(getDeletedConversationStorageKey());
+  }
   try {
     const response = await fetch(DATA_BOOTSTRAP_URL);
     if (!response.ok) {
@@ -661,6 +684,7 @@ async function pushServerSnapshot() {
 
   const pushedRevision = syncRevision;
   const payload = {
+    schemaVersion: DATA_SCHEMA_VERSION,
     clientId: getClientId(),
     documents,
     conversations,
@@ -839,6 +863,7 @@ function getSelectedConversation() {
 function createConversation(title = "新对话", mode = "chat") {
   const conversation = {
     id: newId(),
+    ownerId: typeof currentUser !== "undefined" ? currentUser?.id || null : null,
     title,
     mode,
     locked: false,
