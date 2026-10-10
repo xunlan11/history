@@ -75,7 +75,7 @@
       "<tr>" +
       `<td class="col-id">${user.id}</td>` +
       `<td class="col-username">${escapeHtml(user.username)}</td>` +
-      `<td>${roleHtml}</td>` +
+      `<td class="col-role">${roleHtml}</td>` +
       `<td class="col-created">${escapeHtml(created)}</td>` +
       `<td class="col-actions">${actions}</td>` +
       "</tr>"
@@ -253,7 +253,7 @@
               <col class="col-actions" />
             </colgroup>
             <thead>
-              <tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>ID</th><th>用户名</th><th class="col-role">角色</th><th>创建时间</th><th>操作</th></tr>
             </thead>
             <tbody id="accounts-tbody"></tbody>
           </table>

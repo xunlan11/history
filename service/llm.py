@@ -363,6 +363,22 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
     return response
 
 
+def format_conversation_history(options: dict[str, Any]) -> str:
+    history = options.get("history")
+    if not isinstance(history, list):
+        return "[]"
+    turns = []
+    for turn in history:
+        if not isinstance(turn, dict) or not isinstance(turn.get("prompt"), str):
+            continue
+        turns.append({
+            "mode": str(turn.get("mode") or "chat"),
+            "prompt": turn["prompt"],
+            "response": turn.get("payload") if isinstance(turn.get("payload"), dict) else {},
+        })
+    return json.dumps(turns, ensure_ascii=False)
+
+
 @app.post("/llm/chronicle")
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     prompt = f"""
@@ -414,6 +430,9 @@ def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
   ],
   "warnings": ["处理提示"]
 }}
+
+此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
+{format_conversation_history(payload.options)}
 
 主题：
 {payload.topic}
@@ -549,11 +568,14 @@ def search(payload: SearchRequest) -> dict[str, Any]:
   "warnings": ["处理提示"]
 }}
 
+此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
+{format_conversation_history(payload.options)}
+
 query：
 {payload.query}
 
 options：
-{json.dumps(payload.options, ensure_ascii=False)}
+{json.dumps({key: value for key, value in payload.options.items() if key != "history"}, ensure_ascii=False)}
 
 documents：
 {json.dumps(payload.documents, ensure_ascii=False)}
@@ -593,6 +615,9 @@ def chat(payload: ChatRequest) -> dict[str, Any]:
 2. 如果上下文不足，明确说明“当前材料不足以确认”。
 3. 不要编造来源、页码或史实。
 4. 回答要简洁，必要时列出所依据的文献页码。
+
+此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
+{format_conversation_history(payload.options)}
 
 用户问题：
 {payload.prompt}

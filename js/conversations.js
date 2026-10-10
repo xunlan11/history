@@ -1,3 +1,5 @@
+const conversationTurnRequests = new Map();
+let conversationPromptEditor = null;
 let pendingReferenceDocumentIds = new Set();
 
 function ensureReferenceConversation() {
@@ -9,6 +11,10 @@ function isReferenceScopeActive(conversation = getSelectedConversation()) {
 }
 
 function getSmartScopeDocuments(conversation = getSelectedConversation()) {
+  if (Array.isArray(conversation?.materialDocumentIds)) {
+    const ids = new Set(conversation.materialDocumentIds);
+    return documents.filter((item) => ids.has(item.id));
+  }
   const referenceIds = getConversationReferenceDocumentIds(conversation);
   if (!referenceIds.length) {
     return documents;
@@ -146,7 +152,7 @@ function renderReferenceDocuments() {
     return;
   }
 
-  const base = `后续请求仅使用所选 ${referenceIds.length} 篇文献的处理后数据。`;
+  const base = `新一轮提问将使用所选 ${referenceIds.length} 篇文献的处理后数据。`;
   referenceScopeStatus.textContent = report.warnings.length
     ? `${base}${report.warnings.join("；")}。`
     : base;
@@ -369,11 +375,11 @@ async function uploadSelectedConversationFiles(fileList) {
   const accepted = files.slice(0, remaining);
 
   if (!remaining) {
-    renderChatNotice(`每个对话最多上传 ${MAX_CONVERSATION_ATTACHMENTS} 个文件。`);
+    showUploadToast(`每个对话最多上传 ${MAX_CONVERSATION_ATTACHMENTS} 个文件。`);
     return;
   }
   if (files.length > accepted.length) {
-    renderChatNotice(`每个对话最多上传 ${MAX_CONVERSATION_ATTACHMENTS} 个文件，本次只处理前 ${accepted.length} 个。`);
+    showUploadToast(`每个对话最多上传 ${MAX_CONVERSATION_ATTACHMENTS} 个文件，本次只处理前 ${accepted.length} 个。`);
   }
 
   accepted.forEach((file) => startConversationFileUpload(file, conversation));
@@ -623,9 +629,9 @@ function splitConversationAttachmentText(text, maxLength = 1600) {
   return chunks;
 }
 
-function collectConversationAttachmentChatEntries(prompt) {
+function collectConversationAttachmentChatEntries(prompt, conversation = getSelectedConversation()) {
   const entries = [];
-  getConversationAttachmentReport().ready.forEach((attachment, attachmentIndex) => {
+  getConversationAttachmentReport(conversation).ready.forEach((attachment, attachmentIndex) => {
     splitConversationAttachmentText(attachment.extractedText, 1200).forEach((text, chunkIndex) => {
       entries.push({
         sourceType: "conversation-file",
@@ -644,9 +650,9 @@ function collectConversationAttachmentChatEntries(prompt) {
   return entries;
 }
 
-function buildConversationAttachmentDocumentsForLlm(query, maxChunks = 10, chunkLength = 1600) {
+function buildConversationAttachmentDocumentsForLlm(query, maxChunks = 10, chunkLength = 1600, conversation = getSelectedConversation()) {
   const records = [];
-  getConversationAttachmentReport().ready.forEach((attachment, attachmentIndex) => {
+  getConversationAttachmentReport(conversation).ready.forEach((attachment, attachmentIndex) => {
     splitConversationAttachmentText(attachment.extractedText, chunkLength).forEach((text, chunkIndex) => {
       records.push({
         attachment,
@@ -689,24 +695,6 @@ function buildConversationAttachmentDocumentsForLlm(query, maxChunks = 10, chunk
   return Array.from(grouped.values());
 }
 
-function buildConversationAttachmentLiteralEntries(query) {
-  const entries = [];
-  getConversationAttachmentReport().ready.forEach((attachment) => {
-    splitConversationAttachmentText(attachment.extractedText, 1600).forEach((text, chunkIndex) => {
-      const snippet = buildSnippet(text, query);
-      if (snippet) {
-        entries.push({ attachment, chunkIndex, snippet });
-      }
-    });
-  });
-  return entries;
-}
-
-function countConversationAttachmentChunks(query = "", maxChunks = 10, chunkLength = 1600) {
-  return buildConversationAttachmentDocumentsForLlm(query, maxChunks, chunkLength)
-    .reduce((total, item) => total + item.pages.length, 0);
-}
-
 function findConversationAttachment(attachmentId, title = "") {
   return getConversationAttachments().find((item) => {
     return (attachmentId && item.id === attachmentId) || (!attachmentId && item.fileName === title);
@@ -724,198 +712,16 @@ conversationFileInput?.addEventListener("change", () => {
   uploadSelectedConversationFiles(conversationFileInput.files);
   conversationFileInput.value = "";
 });
-let searchRunToken = 0;
-
-function runLiteralSearch(notice = "") {
-  const query = searchInput.value.trim();
-  searchResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
-
-  if (!query) {
-    renderSmartEmpty();
-    return;
-  }
-
-  const results = getSmartScopeDocuments().flatMap((item) => buildSearchEntries(item, query));
-  const attachmentResults = buildConversationAttachmentLiteralEntries(query);
-
-  if (!results.length && !attachmentResults.length) {
-    renderSearchNotice("未找到匹配内容");
-    return;
-  }
-
-  if (notice) {
-    const warning = document.createElement("p");
-    warning.className = "meta-line";
-    warning.textContent = notice;
-    searchResults.append(warning);
-  }
-
-  results.forEach(({ item, page, snippet }) => {
-    const result = document.createElement("article");
-    result.className = "result-item";
-
-    const content = document.createElement("div");
-    const title = document.createElement("h4");
-    const meta = document.createElement("p");
-    const excerpt = document.createElement("p");
-    const action = document.createElement("button");
-
-    title.textContent = page ? `${item.title} · 第 ${page.pageNumber} 页` : item.title;
-    meta.textContent = `${item.author || "著者未录"} · ${item.year || "年份未录"} · ${item.fileName}`;
-    excerpt.innerHTML = highlight(snippet, query);
-    action.className = "secondary-button";
-    action.type = "button";
-    action.textContent = "打开";
-    action.addEventListener("click", () => {
-      selectedDocumentId = item.id;
-      selectedPageId = page?.id || item.pages[0]?.id || null;
-      setReaderReturnView("library");
-      renderAll();
-      setView("reader");
-    });
-
-    content.append(title, meta, excerpt);
-    result.append(content, action);
-    searchResults.append(result);
-  });
-
-  attachmentResults.forEach(({ attachment, chunkIndex, snippet }) => {
-    const result = document.createElement("article");
-    const content = document.createElement("div");
-    const title = document.createElement("h4");
-    const meta = document.createElement("p");
-    const excerpt = document.createElement("p");
-    const action = document.createElement("button");
-
-    result.className = "result-item";
-    title.textContent = attachment.fileName;
-    meta.textContent = `当前对话上传文件（快速读取） · 内容片段 ${chunkIndex + 1}`;
-    excerpt.innerHTML = highlight(snippet, query);
-    action.className = "secondary-button";
-    action.type = "button";
-    action.textContent = "打开文件";
-    action.disabled = !attachment.fileUrl;
-    action.addEventListener("click", () => openConversationAttachment(attachment));
-    content.append(title, meta, excerpt);
-    result.append(content, action);
-    searchResults.append(result);
-  });
-}
-
-async function runSearch(options = {}) {
-  const query = searchInput.value.trim();
-  const conversation = getSelectedConversation();
-  const saved = conversation?.result;
-
-  if (!options.regenerate && saved?.mode === "search" && saved.prompt === query && saved.payload?.matches) {
-    clearSmartResults();
-    renderLlmSearchResults(saved.payload.matches, saved.warnings || [], query);
-    updateConversationToolbar();
-    return;
-  }
-
-  const runToken = searchRunToken + 1;
-  searchRunToken = runToken;
-  searchResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
-
-  if (!query) {
-    renderSmartEmpty();
-    return;
-  }
-
-  const contextReport = getConversationContextReport();
-  if (contextReport.error) {
-    renderSearchNotice(contextReport.error);
-    return;
-  }
-
-  if (!isLlmServiceConnected()) {
-    const notices = [
-      "未连接大模型，已使用字面检索；异称、字号、别名可能无法召回。",
-      ...contextReport.warnings,
-    ];
-    runLiteralSearch(notices.join(" "));
-    return;
-  }
-
-  const searchDocuments = collectSearchDocumentsForLlm(query);
-  if (!searchDocuments.length) {
-    renderSearchNotice("暂无可用于检索的整理文本。");
-    return;
-  }
-
-  renderSearchLoading();
-
-  try {
-    const result = await requestLlmTask("/search", {
-      query,
-      documents: searchDocuments,
-      options: {
-        source: "conversation-context",
-        maxMatches: 50,
-        totalPageCount: countSearchPages(),
-      },
-    });
-
-    if (runToken !== searchRunToken) {
-      return;
-    }
-
-    if (!result.ready) {
-      renderSearchNotice(result.message || "大模型服务未连接。");
-      return;
-    }
-
-    const warnings = [...contextReport.warnings, ...(result.warnings || [])];
-    renderLlmSearchResults(result.matches || [], warnings, query);
-    saveConversationResult(getSelectedConversation(), {
-      mode: "search",
-      prompt: query,
-      payload: {
-        matches: result.matches || [],
-        expandedTerms: result.expandedTerms || [],
-      },
-      warnings,
-    });
-  } catch (error) {
-    if (runToken !== searchRunToken) {
-      return;
-    }
-
-    renderSearchNotice("暂时无法调用大模型检索。");
-  }
-}
-
-function buildSearchEntries(item, query) {
-  const entries = [];
-  const metadataSnippet = buildSnippet(buildSearchMetadata(item), query);
-
-  if (metadataSnippet) {
-    entries.push({ item, page: null, snippet: metadataSnippet });
-  }
-
-  item.pages.forEach((page) => {
-    const pageSnippet = buildSnippet(getSmartPageSearchText(page), query);
-    if (pageSnippet) {
-      entries.push({ item, page, snippet: pageSnippet });
-    }
-  });
-
-  return entries;
-}
-
-function collectSearchDocumentsForLlm(query) {
+function collectSearchDocumentsForLlm(query, conversation = getSelectedConversation()) {
   const records = [];
-  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(query, 12, 1600);
+  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(query, 12, 1600, conversation);
   const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
 
-  getSmartScopeDocuments().forEach((item, documentIndex) => {
+  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
     const metadata = buildSearchMetadata(item);
 
     item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPageSearchText(page).trim();
+      const text = getSmartPageSearchText(page, conversation).trim();
       if (!text) {
         return;
       }
@@ -951,7 +757,7 @@ function collectSearchDocumentsForLlm(query) {
       grouped.get(item.id).pages.push({
         pageId: page.id,
         pageNumber: page.pageNumber,
-        text: getSmartPageSearchText(page).slice(0, 1600),
+        text: getSmartPageSearchText(page, conversation).slice(0, 1600),
         notes: (page.notes || "").slice(0, 400),
       });
     });
@@ -973,27 +779,12 @@ function buildSearchMetadata(item) {
   ].filter(Boolean).join("\n");
 }
 
-function countSearchPages() {
-  const documentPages = getSmartScopeDocuments().reduce((total, item) => {
-    return total + item.pages.filter((page) => getSmartPageSearchText(page).trim()).length;
-  }, 0);
-  return documentPages + countConversationAttachmentChunks(searchInput.value.trim(), 12, 1600);
-}
-
-function renderSearchLoading() {
-  renderResultState(searchResults, "正在调用大模型检索...");
-}
-
-function renderSearchNotice(message) {
-  renderResultState(searchResults, message);
-}
-
-function renderLlmSearchResults(matches, warnings = [], query = "") {
-  searchResults.innerHTML = "";
-  searchResults.classList.remove("empty-result-list");
+function renderLlmSearchResults(matches, warnings = [], query = "", container = searchResults) {
+  container.innerHTML = "";
+  container.classList.remove("empty-result-list");
 
   if (!matches.length) {
-    renderSearchNotice("未找到匹配内容");
+    renderResultState(container, "未找到匹配内容");
     return;
   }
 
@@ -1044,7 +835,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "") {
       content.append(formatWarnings(warnings));
     }
     result.append(content, action);
-    searchResults.append(result);
+    container.append(result);
   });
 }
 
@@ -1064,216 +855,19 @@ function resolveSearchMatch(match) {
   }
   return target;
 }
-const RESULT_MODE_LABELS = {
-  chat: { update: "用当前文献重答", regenerate: "重新回答", showRegenerate: false },
-  search: { update: "用当前文献重检", regenerate: "重新检索", showRegenerate: false },
-  chronicle: { update: "并入当前文献", regenerate: "从零重生成", showRegenerate: true },
-};
-
-function getScopeProcessedDocumentIds() {
-  return getSmartScopeDocuments()
-    .filter((item) => item.pages.some((page) => getPageProcessedText(page).trim()))
-    .map((item) => item.id);
-}
-
-function saveConversationResult(conversation, { mode, prompt, payload, warnings }) {
-  if (!conversation) {
-    return;
-  }
-
-  conversation.result = {
-    mode,
-    prompt: prompt || "",
-    payload: payload || {},
-    warnings: Array.isArray(warnings) ? warnings : [],
-    sourceDocumentIds: getScopeProcessedDocumentIds(),
-    generatedAt: new Date().toISOString(),
-  };
-  conversation.updatedAt = new Date().toISOString();
-  persistConversations();
-  updateConversationToolbar();
-}
-
-function updateConversationToolbar() {
-  if (!resultToolbar) {
-    return;
-  }
-
-  const result = getSelectedConversation()?.result;
-  if (!result) {
-    resultToolbar.classList.add("hidden");
-    return;
-  }
-
-  const labels = RESULT_MODE_LABELS[result.mode] || RESULT_MODE_LABELS.chat;
-  const documentCount = (result.sourceDocumentIds || []).length;
-  resultToolbar.classList.remove("hidden");
-
-  if (resultToolbarStatus) {
-    const title = result.prompt ? `“${result.prompt}”` : "本次结果";
-    resultToolbarStatus.textContent = `${title}已保存 · 依据 ${documentCount} 篇文献`;
-  }
-  if (resultUpdateButton) {
-    resultUpdateButton.textContent = labels.update;
-    resultUpdateButton.disabled = false;
-    resultUpdateButton.title = "按当前文献范围重新更新结果";
-  }
-  if (resultRegenerateButton) {
-    resultRegenerateButton.textContent = labels.regenerate;
-    resultRegenerateButton.classList.toggle("hidden", !labels.showRegenerate);
-  }
-}
-
-async function supplementConversation() {
-  const conversation = getSelectedConversation();
-  const result = conversation?.result;
-  if (!conversation || !result) {
-    return;
-  }
-
-  if (result.mode === "chronicle") {
-    await supplementChronicle(conversation, result);
-    return;
-  }
-
-  if (result.mode === "search") {
-    await runSearch({ regenerate: true });
-    return;
-  }
-
-  await runSmartChat({ regenerate: true });
-}
-
-function regenerateConversationResult() {
-  const mode = getSelectedConversation()?.result?.mode || selectedSmartMode;
-
-  if (mode === "chronicle") {
-    buildChronicle({ regenerate: true });
-    return;
-  }
-
-  if (mode === "search") {
-    runSearch({ regenerate: true });
-    return;
-  }
-
-  runSmartChat({ regenerate: true });
-}
-
-async function buildChronicle(options = {}) {
-  const topic = chronicleTopic.value.trim();
-  const conversation = getSelectedConversation();
-  const saved = conversation?.result;
-
-  if (!options.regenerate && saved?.mode === "chronicle" && saved.prompt === topic && saved.payload?.entries?.length) {
-    clearSmartResults();
-    renderChronicleLlmEntries(saved.payload.entries, saved.warnings || []);
-    updateConversationToolbar();
-    return;
-  }
-
-  const contextReport = getConversationContextReport();
-  if (contextReport.error) {
-    renderChronicleNotice(contextReport.error);
-    return;
-  }
-  const chronicleDocuments = collectChronicleDocumentsForLlm(topic);
-  chronicleResults.innerHTML = "";
-  chronicleResults.classList.remove("empty-result-list");
-
-  if (!chronicleDocuments.length) {
-    renderChronicleNotice("暂无可用于生成编年的整理文本。");
-    return;
-  }
-
-  if (!isLlmServiceConnected()) {
-    renderChronicleNotice("未连接大模型，无法生成复杂纪年编排。");
-    return;
-  }
-
-  renderChronicleLoading();
-
-  try {
-    const result = await requestLlmTask("/chronicle", {
-      topic,
-      documents: chronicleDocuments,
-      options: {
-        source: "conversation-context",
-        maxEntries: 40,
-        totalPageCount: countChroniclePagesForLlm(),
-      },
-    });
-
-    if (!result.ready) {
-      renderChronicleNotice(result.message || "大模型服务未连接。");
-      return;
-    }
-
-    const warnings = [...contextReport.warnings, ...(result.warnings || [])];
-    renderChronicleLlmEntries(result.entries || [], warnings);
-    saveConversationResult(conversation, {
-      mode: "chronicle",
-      prompt: topic,
-      payload: { entries: result.entries || [] },
-      warnings,
-    });
-  } catch (error) {
-    renderChronicleNotice("暂时无法调用大模型生成编年。");
-  }
-}
-
-async function supplementChronicle(conversation, saved) {
-  const topic = saved.prompt;
-  const documents = collectChronicleDocumentsForLlm(topic, { limit: 0 });
-  if (!documents.length) {
-    renderChronicleNotice("当前文献范围内暂无可用的整理文本。");
-    return;
-  }
-
-  renderChronicleLoading();
-
-  try {
-    const result = await requestLlmTask("/chronicle/supplement", {
-      topic,
-      previousEntries: saved.payload?.entries || [],
-      documents,
-      options: {
-        source: "conversation-scope",
-        maxEntries: 60,
-      },
-    });
-
-    if (!result.ready) {
-      renderChronicleNotice(result.message || "大模型服务未连接。");
-      return;
-    }
-
-    const warnings = [...(saved.warnings || []), ...(result.warnings || [])];
-    renderChronicleLlmEntries(result.entries || [], warnings);
-    saveConversationResult(conversation, {
-      mode: "chronicle",
-      prompt: topic,
-      payload: { entries: result.entries || [] },
-      warnings,
-    });
-  } catch (error) {
-    renderChronicleNotice("暂时无法更新编年。");
-  }
-}
-
-function collectChronicleDocumentsForLlm(topic, options = {}) {
+function collectChronicleDocumentsForLlm(topic, options = {}, conversation = getSelectedConversation()) {
   const records = [];
   const includeAttachments = options.includeAttachments !== false;
-  const attachmentDocuments = includeAttachments ? buildConversationAttachmentDocumentsForLlm(topic, 10, 1800) : [];
+  const attachmentDocuments = includeAttachments ? buildConversationAttachmentDocumentsForLlm(topic, 10, 1800, conversation) : [];
   const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
   const onlyDocumentIds = options.onlyDocumentIds ? new Set(options.onlyDocumentIds) : null;
 
-  getSmartScopeDocuments().forEach((item, documentIndex) => {
+  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
     if (onlyDocumentIds && !onlyDocumentIds.has(item.id)) {
       return;
     }
     item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPagePrimaryText(page).trim();
+      const text = getSmartPagePrimaryText(page, conversation).trim();
       if (!text) {
         return;
       }
@@ -1311,7 +905,7 @@ function collectChronicleDocumentsForLlm(topic, options = {}) {
       grouped.get(item.id).pages.push({
         pageId: page.id,
         pageNumber: page.pageNumber,
-        text: getSmartPagePrimaryText(page).slice(0, 1800),
+        text: getSmartPagePrimaryText(page, conversation).slice(0, 1800),
         notes: (page.notes || "").slice(0, 500),
       });
     });
@@ -1340,27 +934,12 @@ function scoreChroniclePageForLlm(item, page, text, topic) {
   return haystack.includes(normalizedTopic) ? 3 : 1;
 }
 
-function countChroniclePagesForLlm() {
-  const documentPages = getSmartScopeDocuments().reduce((total, item) => {
-    return total + item.pages.filter((page) => getSmartPagePrimaryText(page).trim()).length;
-  }, 0);
-  return documentPages + countConversationAttachmentChunks(chronicleTopic.value.trim(), 10, 1800);
-}
-
-function renderChronicleLoading() {
-  renderResultState(chronicleResults, "正在调用大模型生成编年...");
-}
-
-function renderChronicleNotice(message) {
-  renderResultState(chronicleResults, message);
-}
-
-function renderChronicleLlmEntries(entries, warnings = []) {
-  chronicleResults.innerHTML = "";
-  chronicleResults.classList.remove("empty-result-list");
+function renderChronicleLlmEntries(entries, warnings = [], container = chronicleResults) {
+  container.innerHTML = "";
+  container.classList.remove("empty-result-list");
 
   if (!entries.length) {
-    renderChronicleNotice("未找到可生成编年的日期条目。");
+    renderResultState(container, "未找到可生成编年的日期条目。");
     return;
   }
 
@@ -1383,7 +962,7 @@ function renderChronicleLlmEntries(entries, warnings = []) {
       content.append(formatWarnings(warnings));
     }
     result.append(content);
-    chronicleResults.append(result);
+    container.append(result);
   });
 }
 
@@ -1490,4 +1069,337 @@ function searchResultHref(attachment, item, page) {
     params.set("page", pageId);
   }
   return `reader.html?${params.toString()}`;
+}
+
+// 对话轮次：保存原始请求，供编辑和重新生成使用。
+function isConversationTurnRunning(conversationId, turnId) {
+  return conversationTurnRequests.get(conversationId)?.turnId === turnId;
+}
+
+function getConversationTurn(conversationId, turnId) {
+  const conversation = conversations.find((item) => item.id === conversationId);
+  const turn = conversation?.turns?.find((item) => item.id === turnId);
+  return { conversation, turn };
+}
+
+function getConversationTurnHistory(conversation, beforeTurnId = "") {
+  const turns = conversation.turns || [];
+  const index = beforeTurnId ? turns.findIndex((turn) => turn.id === beforeTurnId) : turns.length;
+  return turns.slice(0, Math.max(0, index)).filter((turn) => turn.result).map((turn) => ({
+    mode: turn.mode,
+    prompt: turn.prompt,
+    payload: turn.result.payload,
+  }));
+}
+
+function captureConversationTurnRequest(conversation, mode, prompt, beforeTurnId = "") {
+  const report = getConversationContextReport(conversation);
+  if (report.error) throw new Error(report.error);
+  const options = { source: "conversation-context", history: getConversationTurnHistory(conversation, beforeTurnId) };
+  let body;
+  if (mode === "chat") {
+    body = { prompt, context: buildLibraryChatContext(prompt, conversation), options };
+  } else {
+    const documents = mode === "search"
+      ? collectSearchDocumentsForLlm(prompt, conversation)
+      : collectChronicleDocumentsForLlm(prompt, {}, conversation);
+    if (!documents.length) throw new Error("暂无可用于" + (mode === "search" ? "检索" : "生成编年") + "的整理文本。");
+    const totalPageCount = getSmartScopeDocuments(conversation).reduce((total, item) => total +
+      item.pages.filter((page) => (mode === "search" ? getSmartPageSearchText(page, conversation) :
+        getSmartPagePrimaryText(page, conversation)).trim()).length, 0) +
+      documents.filter((item) => item.sourceType === "conversation-file").reduce((total, item) => total + item.pages.length, 0);
+    body = mode === "search"
+      ? { query: prompt, documents, options: { ...options, maxMatches: 50, totalPageCount } }
+      : { topic: prompt, documents, options: { ...options, maxEntries: 40, totalPageCount } };
+  }
+  const sources = mode === "chat" ? body.context : body.documents;
+  const sourceDocumentIds = [...new Set(sources.filter((item) => item.sourceType !== "conversation-file").map((item) => item.documentId))];
+  const request = { path: "/" + mode, body, warnings: report.warnings, sourceDocumentIds };
+  if (mode === "search") {
+    // Keep the offline fallback independent of future library/reference changes too.
+    request.literalSources = getSmartScopeDocuments(conversation).flatMap((item) => [
+      { documentId: item.id, title: getDocumentDisplayTitle(item), author: item.author, year: item.year,
+        text: buildSearchMetadata(item) },
+      ...item.pages.map((page) => ({ documentId: item.id, title: getDocumentDisplayTitle(item),
+        author: item.author, year: item.year, pageId: page.id, pageNumber: page.pageNumber,
+        text: getSmartPageSearchText(page, conversation) })),
+    ]);
+    getConversationAttachmentReport(conversation).ready.forEach((attachment) => {
+      splitConversationAttachmentText(attachment.extractedText, 1600).forEach((text, index) => {
+        request.literalSources.push({ sourceType: "conversation-file", attachmentId: attachment.id,
+          documentId: attachment.id, title: attachment.fileName, pageNumber: index + 1, text });
+      });
+    });
+  }
+  return JSON.parse(JSON.stringify(request));
+}
+
+function getLegacyTurnRequest(conversation, turn) {
+  const ids = turn.result?.sourceDocumentIds || [];
+  const scope = { ...conversation, referenceDocumentIds: ids, materialDocumentIds: ids };
+  // Legacy records did not store request materials. Restrict their first retry to recorded sources.
+  if (!scope.referenceDocumentIds.length) {
+    scope.referenceDocumentIds = ["__no_recorded_source__"];
+  }
+  const request = captureConversationTurnRequest(scope, turn.mode, turn.prompt, turn.id);
+  request.warnings.push("此旧记录未保存当时的材料；本次重试使用已记录文献的现有文本。");
+  return request;
+}
+
+async function sendConversationTurn(mode) {
+  const prompt = searchInput?.value.trim();
+  if (!prompt) return;
+  let conversation = getSelectedConversation();
+  if (conversationTurnRequests.has(conversation?.id)) return;
+  mode = conversation?.locked ? conversation.mode : mode;
+  conversation = conversation || createConversation("新对话", mode);
+  let request;
+  try {
+    request = captureConversationTurnRequest(conversation, mode, prompt);
+  } catch (error) {
+    showUploadToast(error.message);
+    return;
+  }
+  conversation = upsertConversationFromPrompt(prompt, mode);
+  conversation.turns = conversation.turns || [];
+  const timestamp = new Date().toISOString();
+  const turn = { id: newId(), mode, prompt, request, status: "pending", error: "", result: null,
+    createdAt: timestamp, updatedAt: timestamp };
+  conversation.turns.push(turn);
+  searchInput.value = "";
+  chronicleTopic.value = "";
+  conversationPromptEditor = null;
+  await generateConversationTurn(conversation.id, turn.id, true);
+}
+
+function literalConversationTurnResult(turn) {
+  const matches = (turn.request.literalSources || []).flatMap(({ text, ...source }) => {
+    const quote = buildSnippet(text, turn.prompt);
+    return quote ? [{ ...source, quote, matchType: "字面匹配" }] : [];
+  });
+  return { ready: true, matches, warnings: ["未连接大模型，已使用字面检索；异称、字号、别名可能无法召回。"] };
+}
+
+async function generateConversationTurn(conversationId, turnId, scrollToTurn = false) {
+  let { conversation, turn } = getConversationTurn(conversationId, turnId);
+  if (!conversation || !turn || conversationTurnRequests.has(conversationId)) return;
+  const token = { turnId };
+  conversationTurnRequests.set(conversationId, token);
+  turn.status = "pending";
+  turn.error = "";
+  turn.updatedAt = new Date().toISOString();
+  conversation.updatedAt = turn.updatedAt;
+  persistConversations();
+  refreshConversationTurnView(conversationId, scrollToTurn);
+  try {
+    if (!turn.request) turn.request = getLegacyTurnRequest(conversation, turn);
+    // Persist before sending so a page interruption still leaves a retryable request.
+    persistConversations();
+    const request = JSON.parse(JSON.stringify(turn.request));
+    if (request.path !== "/" + turn.mode) throw new Error("无法重试此记录，请编辑提示词后重新发送。");
+    let response;
+    if (!isLlmServiceConnected() && turn.mode === "search") {
+      response = literalConversationTurnResult(turn);
+    } else {
+      if (!isLlmServiceConnected()) throw new Error("未连接大模型，请连接后点击重新生成。");
+      response = await requestLlmTask(request.path, request.body);
+    }
+    if (!response.ready) throw new Error(response.message || "暂时无法调用大模型服务，请重新生成。");
+    ({ conversation, turn } = getConversationTurn(conversationId, turnId));
+    if (!conversation || !turn || conversationTurnRequests.get(conversationId) !== token) return;
+    const payload = turn.mode === "chat" ? { answer: response.answer || "未生成回答。" }
+      : turn.mode === "search" ? { matches: response.matches || [], expandedTerms: response.expandedTerms || [] }
+      : { entries: response.entries || [] };
+    turn.result = { mode: turn.mode, prompt: turn.prompt, payload,
+      warnings: [...new Set([...(request.warnings || []), ...(response.warnings || [])])],
+      sourceDocumentIds: request.sourceDocumentIds || [], generatedAt: new Date().toISOString() };
+    turn.status = "completed";
+    turn.updatedAt = turn.result.generatedAt;
+    conversation.result = conversation.turns.slice().reverse().find((item) => item.result)?.result || null;
+  } catch (error) {
+    ({ conversation, turn } = getConversationTurn(conversationId, turnId));
+    if (conversation && turn && conversationTurnRequests.get(conversationId) === token) {
+      turn.status = "failed";
+      turn.error = error.message || "回答中断，请点击重新生成。";
+      turn.updatedAt = new Date().toISOString();
+    }
+  } finally {
+    if (conversationTurnRequests.get(conversationId) === token) conversationTurnRequests.delete(conversationId);
+    if (conversation && turn) {
+      conversation.updatedAt = turn.updatedAt;
+      persistConversations();
+    }
+    refreshConversationTurnView(conversationId);
+  }
+}
+
+function retryConversationTurn(conversationId, turnId) {
+  return generateConversationTurn(conversationId, turnId);
+}
+
+function startConversationPromptEdit(conversationId, turnId) {
+  const { turn } = getConversationTurn(conversationId, turnId);
+  if (!turn || conversationTurnRequests.has(conversationId)) return;
+  conversationPromptEditor = { conversationId, turnId, prompt: turn.prompt };
+  renderConversationTurns();
+  const textarea = searchResults.querySelector(".conversation-prompt-editor textarea");
+  textarea?.focus();
+  textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+async function saveConversationPromptEdit(conversationId, turnId, value) {
+  const prompt = value.trim();
+  const { conversation, turn } = getConversationTurn(conversationId, turnId);
+  if (!prompt || !turn || conversationTurnRequests.has(conversationId)) return;
+  let request;
+  try {
+    request = JSON.parse(JSON.stringify(turn.request || getLegacyTurnRequest(conversation, turn)));
+  } catch (error) {
+    showUploadToast(error.message);
+    return;
+  }
+  const promptKey = turn.mode === "chat" ? "prompt" : turn.mode === "search" ? "query" : "topic";
+  request.body[promptKey] = prompt;
+  const index = conversation.turns.findIndex((item) => item.id === turnId);
+  conversation.turns = conversation.turns.slice(0, index + 1);
+  turn.prompt = prompt;
+  turn.request = request;
+  turn.result = null;
+  conversation.result = conversation.turns.slice(0, -1).reverse().find((item) => item.result)?.result || null;
+  if (index === 0) conversation.title = prompt;
+  conversationPromptEditor = null;
+  await generateConversationTurn(conversationId, turnId);
+}
+
+function refreshConversationTurnView(conversationId, scrollToTurn = false) {
+  renderConversationList();
+  if (selectedConversationId !== conversationId) return;
+  renderSmartModeButtons();
+  renderActiveConversation();
+  if (scrollToTurn) messageFeed.scrollTop = messageFeed.scrollHeight;
+}
+
+function createConversationTurnAction(label, icon, handler, disabled) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "conversation-turn-action";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  const paths = icon === "edit"
+    ? '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>'
+    : '<path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/>';
+  button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>';
+  button.disabled = disabled;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function renderConversationPromptEditor(container, conversation, turn) {
+  const editor = document.createElement("form");
+  editor.className = "conversation-prompt-editor";
+  const textarea = document.createElement("textarea");
+  textarea.value = conversationPromptEditor.prompt;
+  textarea.setAttribute("aria-label", "编辑已发送的提示词");
+  textarea.required = true;
+  const actions = document.createElement("div");
+  actions.className = "conversation-edit-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary-button";
+  cancel.textContent = "取消";
+  cancel.addEventListener("click", () => { conversationPromptEditor = null; renderConversationTurns(); });
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "primary-button";
+  save.textContent = "保存并重新生成";
+  save.disabled = !textarea.value.trim();
+  textarea.addEventListener("input", () => {
+    conversationPromptEditor.prompt = textarea.value;
+    save.disabled = !textarea.value.trim();
+  });
+  editor.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveConversationPromptEdit(conversation.id, turn.id, textarea.value);
+  });
+  editor.append(textarea);
+  if (conversation.turns.at(-1).id !== turn.id) {
+    const notice = document.createElement("p");
+    notice.className = "meta-line";
+    notice.textContent = "修改这一轮后将重新生成回答，并移除后续轮次。";
+    editor.append(notice);
+  }
+  actions.append(cancel, save);
+  editor.append(actions);
+  container.append(editor);
+}
+
+function renderConversationTurns() {
+  if (!searchResults || !chronicleResults) return;
+  const conversation = getSelectedConversation();
+  const turns = conversation?.turns || [];
+  const busy = conversationTurnRequests.has(conversation?.id);
+  const feedScroll = messageFeed.scrollTop;
+  const editingInput = searchResults.querySelector(".conversation-prompt-editor textarea");
+  const editingFocus = editingInput && document.activeElement === editingInput
+    ? [editingInput.selectionStart, editingInput.selectionEnd] : null;
+  searchResults.replaceChildren();
+  searchResults.classList.remove("empty-result-list");
+  searchResults.classList.add("conversation-history");
+  chronicleResults.replaceChildren();
+  chronicleResults.classList.remove("empty-result-list");
+  const send = document.querySelector("#smart-send");
+  if (send) send.disabled = busy;
+  turns.forEach((turn, index) => {
+    const article = document.createElement("article");
+    article.className = "conversation-turn";
+    article.dataset.turnId = turn.id;
+    article.setAttribute("aria-label", "第 " + (index + 1) + " 轮");
+    const question = document.createElement("div");
+    question.className = "conversation-question";
+    if (conversationPromptEditor?.conversationId === conversation.id && conversationPromptEditor.turnId === turn.id) {
+      renderConversationPromptEditor(question, conversation, turn);
+    } else {
+      const prompt = document.createElement("p");
+      prompt.className = "conversation-prompt";
+      prompt.textContent = turn.prompt;
+      const actions = document.createElement("div");
+      actions.className = "conversation-prompt-actions";
+      actions.append(createConversationTurnAction("编辑提示词", "edit", () => startConversationPromptEdit(conversation.id, turn.id), busy));
+      question.append(prompt, actions);
+    }
+    const answer = document.createElement("div");
+    answer.className = "conversation-answer";
+    if (turn.result) {
+      if (turn.mode === "chat") {
+        const text = document.createElement("p");
+        text.className = "conversation-answer-text";
+        text.textContent = turn.result.payload.answer;
+        answer.append(text);
+        if (turn.result.warnings.length) answer.append(formatWarnings(turn.result.warnings));
+      } else if (turn.mode === "search") {
+        renderLlmSearchResults(turn.result.payload.matches || [], turn.result.warnings, turn.prompt, answer);
+      } else {
+        renderChronicleLlmEntries(turn.result.payload.entries || [], turn.result.warnings, answer);
+      }
+    }
+    if (turn.status === "pending" || turn.error) {
+      const status = document.createElement("p");
+      status.className = "conversation-turn-status";
+      status.setAttribute("role", turn.status === "pending" ? "status" : "alert");
+      status.textContent = turn.status === "pending" ? "正在生成回答…" : turn.error;
+      answer.append(status);
+    }
+    const footer = document.createElement("div");
+    footer.className = "conversation-answer-actions";
+    footer.append(createConversationTurnAction("重新生成", "refresh", () => retryConversationTurn(conversation.id, turn.id), busy));
+    if (turn.result) {
+      const sources = document.createElement("span");
+      sources.className = "conversation-turn-meta";
+      sources.textContent = "依据 " + turn.result.sourceDocumentIds.length + " 篇文献";
+      footer.append(sources);
+    }
+    article.append(question, answer, footer);
+    searchResults.append(article);
+  });
+  messageFeed.scrollTop = feedScroll;
 }

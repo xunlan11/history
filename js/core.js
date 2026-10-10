@@ -238,10 +238,6 @@ const searchInput = document.querySelector("#search-input");
 const searchResults = document.querySelector("#search-results");
 const chronicleTopic = document.querySelector("#chronicle-topic");
 const chronicleResults = document.querySelector("#chronicle-results");
-const resultToolbar = document.querySelector("#result-toolbar");
-const resultToolbarStatus = document.querySelector("#result-toolbar-status");
-const resultRegenerateButton = document.querySelector("#result-regenerate");
-const resultUpdateButton = document.querySelector("#result-update");
 const cardTemplate = document.querySelector("#document-card-template");
 const versionServiceStatus = document.querySelector("#version-service-status");
 const versionUpdateButton = document.querySelector("#version-update-button");
@@ -508,10 +504,11 @@ function normalizeConversations(items) {
       id: item.id,
       title: item.title || "新对话",
       mode: item.mode || "chat",
-      locked: Boolean(item.locked),
+      locked: Boolean(item.locked || item.result || item.turns?.length),
       referenceDocumentIds: normalizeReferenceDocumentIds(item.referenceDocumentIds),
       attachments: normalizeConversationAttachments(item.attachments),
       result: normalizeConversationResult(item.result),
+      turns: normalizeConversationTurns(item.turns, item.result, item.id),
       createdAt: item.createdAt || "",
       updatedAt: item.updatedAt || "",
     }));
@@ -538,6 +535,31 @@ function normalizeConversationResult(value) {
     sourceDocumentIds: normalizeReferenceDocumentIds(value.sourceDocumentIds),
     generatedAt: value.generatedAt || "",
   };
+}
+
+function normalizeConversationTurns(values, legacyResult, conversationId) {
+  const items = Array.isArray(values) ? values.slice() : [];
+  const legacy = normalizeConversationResult(legacyResult);
+  if (!items.length && legacy) {
+    items.push({ id: conversationId + "-legacy", mode: legacy.mode, prompt: legacy.prompt,
+      status: "completed", result: legacy, createdAt: legacy.generatedAt });
+  }
+  return items.filter((turn) => turn?.id).map((turn) => {
+    const running = typeof isConversationTurnRunning === "function" &&
+      isConversationTurnRunning(conversationId, turn.id);
+    const interrupted = turn.status === "pending" && !running;
+    return {
+      id: String(turn.id),
+      mode: turn.mode || "chat",
+      prompt: String(turn.prompt || ""),
+      status: interrupted ? "failed" : turn.status || "completed",
+      error: interrupted ? "上次回答已中断，请点击重新生成。" : String(turn.error || ""),
+      request: turn.request && typeof turn.request.body === "object" ? turn.request : null,
+      result: normalizeConversationResult(turn.result),
+      createdAt: turn.createdAt || "",
+      updatedAt: turn.updatedAt || "",
+    };
+  });
 }
 
 function normalizeConversationAttachments(values) {
@@ -799,6 +821,7 @@ function createConversation(title = "新对话", mode = "chat") {
     referenceDocumentIds: [],
     attachments: [],
     result: null,
+    turns: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -810,24 +833,14 @@ function createConversation(title = "新对话", mode = "chat") {
 }
 
 function upsertConversationFromPrompt(prompt, mode) {
-  const title = prompt || "新对话";
-  let conversation = getSelectedConversation();
-
-  if (!conversation) {
-    conversation = createConversation(title, mode);
-  } else {
-    conversation.title = title;
-    conversation.mode = mode;
-    conversation.locked = true;
-    conversation.updatedAt = new Date().toISOString();
-    conversations = [
-      conversation,
-      ...conversations.filter((item) => item.id !== conversation.id),
-    ];
-    selectedConversationId = conversation.id;
-    persistConversations();
-  }
-
+  const conversation = getSelectedConversation() || createConversation(prompt || "新对话", mode);
+  if (!conversation.turns?.length) conversation.title = prompt || "新对话";
+  conversation.mode = mode;
+  conversation.locked = true;
+  conversation.updatedAt = new Date().toISOString();
+  conversations = [conversation, ...conversations.filter((item) => item.id !== conversation.id)];
+  selectedConversationId = conversation.id;
+  persistConversations();
   return conversation;
 }
 

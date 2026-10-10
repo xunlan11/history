@@ -50,13 +50,6 @@
                   <span id="chat-hint">对话类型</span>
                 </div>
                 <div class="message-scroll" id="message-feed">
-                  <div class="result-toolbar hidden" id="result-toolbar">
-                    <span class="result-toolbar-status" id="result-toolbar-status"></span>
-                    <div class="result-toolbar-actions">
-                      <button class="ghost-link" id="result-regenerate" type="button">重新生成</button>
-                      <button class="ghost-link" id="result-update" type="button">纳入新文献</button>
-                    </div>
-                  </div>
                   <div class="smart-results">
                     <div class="result-list" id="search-results"></div>
                     <div class="result-list" id="chronicle-results"></div>
@@ -111,43 +104,9 @@
 
     <div id="delete-fragment-slot" data-title="删除内容"></div>
 
-    <div class="settings-dialog hidden" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <section class="settings-card">
-        <header class="settings-header">
-          <h2 id="settings-title">设置</h2>
-          <button class="icon-button subtle" id="close-settings" type="button" aria-label="关闭">×</button>
-        </header>
-        <div class="settings-field">
-          <span class="settings-field-label">字体</span>
-          <div class="font-options" role="group" aria-label="字体">
-            <button class="font-option" type="button" data-font-option="hei">黑体</button>
-            <button class="font-option" type="button" data-font-option="kai">楷体</button>
-          </div>
-        </div>
-      </section>
-    </div>
+    <div id="settings-fragment-slot"></div>
 
-    <div class="reference-dialog hidden" id="reference-document-dialog" role="dialog" aria-modal="true" aria-labelledby="reference-document-title">
-      <section class="reference-dialog-card">
-        <header class="reference-dialog-header">
-          <div>
-            <h2 id="reference-document-title">从文献库导入</h2>
-            <p>选择一个或多个已处理文献，作为当前对话的背景信息。</p>
-          </div>
-          <button class="reference-dialog-close" id="close-reference-documents" type="button" aria-label="关闭">×</button>
-        </header>
-        <label class="sr-only" for="reference-document-search">搜索文献</label>
-        <input class="reference-document-search" id="reference-document-search" type="search" placeholder="搜索题名、著者、出版时间或标签" />
-        <div class="reference-document-list" id="reference-document-list"></div>
-        <footer class="reference-dialog-footer">
-          <span id="reference-selection-summary">未选择文献</span>
-          <div class="confirm-actions">
-            <button class="secondary-button" id="cancel-reference-documents" type="button">取消</button>
-            <button class="primary-button" id="confirm-reference-documents" type="button">导入所选文献</button>
-          </div>
-        </footer>
-      </section>
-    </div>
+    <div id="reference-documents-fragment-slot"></div>
 
     <div id="registration-fragment-slot"></div>
     <script src="../js/bootstrap.js"></script>

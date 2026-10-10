@@ -215,8 +215,6 @@ editDocumentButton?.addEventListener("click", () => {
 });
 
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
-document.querySelector("#result-regenerate")?.addEventListener("click", regenerateConversationResult);
-document.querySelector("#result-update")?.addEventListener("click", supplementConversation);
 const exportPdfButton = document.querySelector("#export-pdf");
 if (exportPdfButton) {
   exportPdfButton.addEventListener("click", exportPdf);
@@ -314,117 +312,25 @@ function closeDeleteConversationDialog() {
   pendingDeleteDocumentId = null;
 }
 
-async function runSmartChat(options = {}) {
-  const prompt = searchInput.value.trim();
-
-  if (!prompt) {
-    renderSmartEmpty();
-    return;
-  }
-
-  const conversation = getSelectedConversation();
-  const saved = conversation?.result;
-  if (!options.regenerate && saved?.mode === "chat" && saved.prompt === prompt && saved.payload?.answer) {
-    renderChatMessage(prompt, saved.payload.answer, saved.warnings || []);
-    updateConversationToolbar();
-    return;
-  }
-
-  const contextReport = getConversationContextReport();
-  if (contextReport.error) {
-    renderChatNotice(contextReport.error);
-    return;
-  }
-
-  upsertConversationFromPrompt(prompt, "chat");
-  clearSmartResults();
-  renderSmartModeButtons();
-  renderConversationList();
-  renderActiveConversation();
-  messageFeed.scrollTop = 0;
-
-  if (!isLlmServiceConnected()) {
-    renderChatNotice("未连接大模型。");
-    return;
-  }
-
-  renderChatMessage(prompt, "正在思考...");
-
-  try {
-    const result = await requestLlmTask("/chat", {
-      prompt,
-      context: buildLibraryChatContext(prompt),
-    });
-
-    if (!result.ready) {
-      renderChatNotice(result.message || "未连接大模型。");
-      return;
-    }
-
-    const answer = result.answer || "未生成回答。";
-    renderChatMessage(prompt, answer, contextReport.warnings);
-    saveConversationResult(getSelectedConversation(), {
-      mode: "chat",
-      prompt,
-      payload: { answer },
-      warnings: contextReport.warnings || [],
-    });
-  } catch (error) {
-    renderChatNotice("暂时无法调用大模型服务。");
-  }
+function runSmartChat() {
+  return sendConversationTurn("chat");
 }
 
 function runSmartSearch() {
-  const prompt = searchInput.value.trim();
-  const contextReport = getConversationContextReport();
-
-  if (contextReport.error) {
-    renderSearchNotice(contextReport.error);
-    return;
-  }
-
-  if (prompt) {
-    upsertConversationFromPrompt(prompt, "search");
-  }
-
-  chronicleTopic.value = "";
-  clearSmartResults();
-  renderSmartModeButtons();
-  renderConversationList();
-  renderActiveConversation();
-  runSearch();
-  messageFeed.scrollTop = 0;
+  return sendConversationTurn("search");
 }
 
 function runSmartChronicle() {
-  const prompt = searchInput.value.trim();
-  const contextReport = getConversationContextReport();
-
-  if (contextReport.error) {
-    renderChronicleNotice(contextReport.error);
-    return;
-  }
-
-  if (prompt) {
-    upsertConversationFromPrompt(prompt, "chronicle");
-  }
-
-  chronicleTopic.value = prompt;
-  clearSmartResults();
-  renderSmartModeButtons();
-  renderConversationList();
-  renderActiveConversation();
-  buildChronicle();
-  messageFeed.scrollTop = 0;
+  return sendConversationTurn("chronicle");
 }
 
-function buildLibraryChatContext(prompt) {
+function buildLibraryChatContext(prompt, conversation = getSelectedConversation()) {
   const entries = [];
-  const attachmentEntries = collectConversationAttachmentChatEntries(prompt);
+  const attachmentEntries = collectConversationAttachmentChatEntries(prompt, conversation);
 
-  getSmartScopeDocuments().forEach((item, documentIndex) => {
+  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
     item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPagePrimaryText(page);
+      const text = getSmartPagePrimaryText(page, conversation);
       if (!text) {
         return;
       }
@@ -454,36 +360,6 @@ function buildLibraryChatContext(prompt) {
 
   return selectedEntries
     .map(({ score, documentIndex, pageIndex, ...entry }) => entry);
-}
-
-function renderChatMessage(prompt, answer, warnings = []) {
-  clearSmartResults();
-
-  const result = document.createElement("article");
-  const content = document.createElement("div");
-  const title = document.createElement("h4");
-  const question = document.createElement("p");
-  const response = document.createElement("p");
-
-  result.className = "result-item chat-result";
-  title.textContent = "对话";
-  question.textContent = `问：${prompt}`;
-  response.textContent = answer;
-  content.append(title, question, response);
-  if (warnings.length) {
-    content.append(formatWarnings(warnings));
-  }
-  result.append(content);
-  searchResults.append(result);
-}
-
-function renderChatNotice(message) {
-  clearSmartResults();
-  searchResults.classList.add("empty-result-list");
-
-  const empty = emptyState(message);
-  empty.classList.add("result-empty");
-  searchResults.append(empty);
 }
 
 function isLlmServiceConnected() {

@@ -77,7 +77,14 @@
   }
 
   async function startApplication() {
-    await Promise.all(fragmentDefinitions.map(loadFragment));
+    const fragments = [...fragmentDefinitions];
+    if (document.body.dataset.page === "library") {
+      fragments.push(
+        { slot: "#settings-fragment-slot", path: "partials/settings.html" },
+        { slot: "#reference-documents-fragment-slot", path: "partials/reference.html" },
+      );
+    }
+    await Promise.all(fragments.map(loadFragment));
     configureDocumentShelf();
     setDeleteDialogTitle();
 

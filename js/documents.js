@@ -141,30 +141,13 @@ function renderConversationList() {
       selectedConversationId = item.id;
       selectedSmartMode = item.mode || "chat";
       renderSmartModeButtons();
-      searchInput.value = item.title === "新对话" ? "" : item.title;
-      chronicleTopic.value = item.mode === "chronicle" ? searchInput.value : "";
-      clearSmartResults();
+      searchInput.value = "";
+      chronicleTopic.value = "";
       renderConversationList();
       renderActiveConversation();
       renderReferenceDocuments();
       renderConversationAttachments();
-
-      if (!searchInput.value.trim()) {
-        renderSmartEmpty();
-        return;
-      }
-
-      if (item.mode === "chat") {
-        runSmartChat();
-        return;
-      }
-
-      if (item.mode === "chronicle") {
-        buildChronicle();
-        return;
-      }
-
-      runSearch();
+      messageFeed.scrollTop = messageFeed.scrollHeight;
     });
 
     deleteButton.className = "conversation-delete";
@@ -225,7 +208,7 @@ function renderActiveConversation() {
 
   chatTitle.textContent = conversation?.title || "新对话";
   chatHint.textContent = getConversationModeLabel(selectedSmartMode);
-  updateConversationToolbar();
+  if (typeof renderConversationTurns === "function") renderConversationTurns();
 }
 
 function getConversationModeLabel(mode) {
@@ -1003,6 +986,10 @@ function readerEmptyState(message) {
 }
 
 function renderSmartEmpty() {
+  if (typeof renderConversationTurns === "function") {
+    renderConversationTurns();
+    return;
+  }
   if (!searchInput || !searchResults || !chronicleResults) {
     return;
   }
