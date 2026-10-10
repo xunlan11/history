@@ -2596,7 +2596,7 @@ body {
   width: 142px;
   overflow: hidden;
   font-weight: 700;
-  text-align: left;
+  text-align: center;
   text-overflow: ellipsis;
 }
 
