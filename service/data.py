@@ -60,6 +60,11 @@ class ConversationFileTextPayload(BaseModel):
     status: str = "ready"
     warnings: list[str] = Field(default_factory=list)
 
+
+class ConversationSharePayload(BaseModel):
+    conversationId: str
+    turnIds: list[str] = Field(default_factory=list)
+
 class Credentials(BaseModel):
     username: str
     password: str
@@ -208,6 +213,18 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             deleted_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS conversation_shares (
+            id TEXT PRIMARY KEY,
+            token TEXT NOT NULL UNIQUE,
+            conversation_id TEXT NOT NULL,
+            selected_turn_ids TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '[]',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_documents_active_order
             ON documents(deleted_at, sort_order, updated_at);
         CREATE INDEX IF NOT EXISTS idx_document_pages_document_order
@@ -224,9 +241,15 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON conversation_files(conversation_id, deleted_at, updated_at);
         CREATE INDEX IF NOT EXISTS idx_conversation_files_hash
             ON conversation_files(sha256);
+        CREATE INDEX IF NOT EXISTS idx_conversation_shares_conversation
+            ON conversation_shares(conversation_id, active, updated_at);
 
         """
     )
+    share_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_shares)").fetchall()}
+    if "content" not in share_columns:
+        connection.execute("ALTER TABLE conversation_shares ADD COLUMN content TEXT NOT NULL DEFAULT '[]'")
+
     processing_scheduler.ensure_schema(connection)
     connection.execute(
         "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
@@ -765,7 +788,25 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
                 payload["creator"] = {"username": owner["username"]}
             result.append(rehydrate_document_assets(connection, payload))
         return result
-    return [rehydrate_conversation_files(connection, payload) for payload in payloads]
+    result = []
+    for payload in payloads:
+        payload = rehydrate_conversation_files(connection, payload)
+        share = connection.execute(
+            "SELECT token, selected_turn_ids, active, updated_at FROM conversation_shares "
+            "WHERE conversation_id = ? AND active = 1 AND deleted_at IS NULL",
+            (str(payload.get("id") or ""),),
+        ).fetchone()
+        if share:
+            payload["share"] = {
+                "token": share["token"],
+                "selectedTurnIds": json_load(share["selected_turn_ids"]),
+                "active": True,
+                "updatedAt": share["updated_at"],
+            }
+        else:
+            payload["share"] = None
+        result.append(payload)
+    return result
 
 
 def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
@@ -970,6 +1011,92 @@ def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None =
         "syncCursor": str(get_sync_version(connection)),
     }
 
+
+def conversation_share_turns(conversation: dict[str, Any], selected_ids: list[str]) -> list[dict[str, Any]]:
+    selected = {str(value).strip() for value in selected_ids if str(value).strip()}
+    turns = conversation.get("turns") if isinstance(conversation.get("turns"), list) else []
+    result = []
+    for turn in turns:
+        if not isinstance(turn, dict) or str(turn.get("id") or "") not in selected:
+            continue
+        if turn.get("status") != "completed" or not isinstance(turn.get("result"), dict):
+            continue
+        result_payload = turn["result"].get("payload") if isinstance(turn["result"].get("payload"), dict) else {}
+        mode = str(turn.get("mode") or turn["result"].get("mode") or "chat")
+        if mode == "chat":
+            content = {"type": "text", "text": str(result_payload.get("answer") or "")}
+        elif mode == "search":
+            content = {
+                "type": "search",
+                "items": [
+                    {
+                        "title": str(item.get("title") or "匹配结果"),
+                        "meta": " · ".join(str(value) for value in [item.get("author"), item.get("year")] if value),
+                        "text": str(item.get("quote") or item.get("snippet") or item.get("summary") or ""),
+                    }
+                    for item in result_payload.get("matches", [])
+                    if isinstance(item, dict)
+                ],
+            }
+        else:
+            content = {
+                "type": "chronicle",
+                "items": [
+                    {
+                        "title": str(item.get("date") or item.get("year") or "史事"),
+                        "text": str(item.get("summary") or item.get("event") or ""),
+                    }
+                    for item in result_payload.get("entries", [])
+                    if isinstance(item, dict)
+                ],
+            }
+        result.append({
+            "id": str(turn["id"]),
+            "mode": mode,
+            "prompt": str(turn.get("prompt") or ""),
+            "content": content,
+        })
+    return result
+
+
+def conversation_share_metadata(connection: sqlite3.Connection, conversation_id: str) -> dict[str, Any] | None:
+    row = connection.execute(
+        "SELECT token, selected_turn_ids, active, updated_at FROM conversation_shares "
+        "WHERE conversation_id = ? AND active = 1 AND deleted_at IS NULL",
+        (conversation_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "token": row["token"],
+        "selectedTurnIds": json_load(row["selected_turn_ids"]),
+        "active": True,
+        "updatedAt": row["updated_at"],
+    }
+
+
+def get_conversation_for_share(connection: sqlite3.Connection, conversation_id: str) -> dict[str, Any]:
+    row = connection.execute(
+        "SELECT payload FROM conversations WHERE id = ? AND deleted_at IS NULL",
+        (conversation_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return json_load(row["payload"])
+
+
+def validate_share_selection(conversation: dict[str, Any], turn_ids: list[str]) -> list[str]:
+    requested = {str(value).strip() for value in turn_ids if str(value).strip()}
+    turns = conversation.get("turns") if isinstance(conversation.get("turns"), list) else []
+    valid = [
+        str(turn.get("id"))
+        for turn in turns
+        if isinstance(turn, dict) and str(turn.get("id") or "") in requested
+        and turn.get("status") == "completed" and isinstance(turn.get("result"), dict)
+    ]
+    if not valid:
+        raise HTTPException(status_code=400, detail="至少选择一轮已完成的对话")
+    return valid
 
 def get_schema_version(connection: sqlite3.Connection) -> int:
     row = connection.execute(
@@ -1403,6 +1530,102 @@ def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
             cursor = bump_sync_version(connection)
     return {"status": "ok", "attachmentId": attachment_id, "syncCursor": str(cursor)}
 
+
+@app.post("/api/conversation-shares")
+def create_conversation_share(
+    payload: ConversationSharePayload,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    current_user(authorization)
+    conversation_id = str(payload.conversationId or "").strip()
+    timestamp = now_iso()
+    with database() as connection:
+        conversation = get_conversation_for_share(connection, conversation_id)
+        selected_ids = validate_share_selection(conversation, payload.turnIds)
+        existing = connection.execute(
+            "SELECT id, token FROM conversation_shares WHERE conversation_id = ? AND active = 1 AND deleted_at IS NULL",
+            (conversation_id,),
+        ).fetchone()
+        share_id = existing["id"] if existing else secrets.token_hex(12)
+        token = existing["token"] if existing else secrets.token_urlsafe(24)
+        with connection:
+            if existing:
+                connection.execute(
+                    "UPDATE conversation_shares SET selected_turn_ids = ?, content = ?, updated_at = ? WHERE id = ?",
+                    (json_dump(selected_ids), json_dump({"title": conversation.get("title") or "分享的对话", "turns": conversation_share_turns(conversation, selected_ids)}), timestamp, share_id),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO conversation_shares(id, token, conversation_id, selected_turn_ids, content, active, created_at, updated_at) "
+                    "VALUES(?, ?, ?, ?, ?, 1, ?, ?)",
+                    (share_id, token, conversation_id, json_dump(selected_ids), json_dump({"title": conversation.get("title") or "分享的对话", "turns": conversation_share_turns(conversation, selected_ids)}), timestamp, timestamp),
+                )
+            bump_sync_version(connection)
+    return {"shareId": share_id, "token": token, "selectedTurnIds": selected_ids, "updatedAt": timestamp}
+
+
+@app.put("/api/conversation-shares/{token}")
+def update_conversation_share(
+    token: str,
+    payload: ConversationSharePayload,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    current_user(authorization)
+    timestamp = now_iso()
+    with database() as connection:
+        row = connection.execute(
+            "SELECT id, conversation_id FROM conversation_shares WHERE token = ? AND active = 1 AND deleted_at IS NULL",
+            (token,),
+        ).fetchone()
+        if not row or row["conversation_id"] != str(payload.conversationId or "").strip():
+            raise HTTPException(status_code=404, detail="分享链接不存在或已失效")
+        conversation = get_conversation_for_share(connection, row["conversation_id"])
+        selected_ids = validate_share_selection(conversation, payload.turnIds)
+        with connection:
+            connection.execute(
+                "UPDATE conversation_shares SET selected_turn_ids = ?, content = ?, updated_at = ? WHERE id = ?",
+                (json_dump(selected_ids), json_dump({"title": conversation.get("title") or "分享的对话", "turns": conversation_share_turns(conversation, selected_ids)}), timestamp, row["id"]),
+            )
+            bump_sync_version(connection)
+    return {"shareId": row["id"], "token": token, "selectedTurnIds": selected_ids, "updatedAt": timestamp}
+
+
+@app.delete("/api/conversation-shares/{token}")
+def delete_conversation_share(token: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    current_user(authorization)
+    timestamp = now_iso()
+    with database() as connection:
+        with connection:
+            cursor = connection.execute(
+                "UPDATE conversation_shares SET active = 0, deleted_at = ?, updated_at = ? "
+                "WHERE token = ? AND active = 1 AND deleted_at IS NULL",
+                (timestamp, timestamp, token),
+            )
+            if cursor.rowcount:
+                bump_sync_version(connection)
+    if not cursor.rowcount:
+        raise HTTPException(status_code=404, detail="分享链接不存在或已失效")
+    return {"status": "ok", "token": token, "updatedAt": timestamp}
+
+
+@app.get("/api/conversation-shares/{token}")
+def get_conversation_share(token: str) -> dict[str, Any]:
+    with database() as connection:
+        row = connection.execute(
+            "SELECT conversation_id, selected_turn_ids, content FROM conversation_shares "
+            "WHERE token = ? AND active = 1 AND deleted_at IS NULL",
+            (token,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="分享链接不存在或已失效")
+        conversation = get_conversation_for_share(connection, row["conversation_id"])
+        snapshot = json_load(row["content"]) if row["content"] else {}
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        return {
+            "title": str(snapshot.get("title") or conversation.get("title") or "分享的对话"),
+            "turns": snapshot.get("turns") if isinstance(snapshot.get("turns"), list) else conversation_share_turns(conversation, json_load(row["selected_turn_ids"])),
+        }
 
 @app.post("/api/auth/register")
 def register(credentials: Credentials) -> dict[str, Any]:

@@ -80,6 +80,10 @@ document.addEventListener("keydown", (event) => {
 });
 
 newConversationButton?.addEventListener("click", () => {
+  if (typeof conversationShareEditingId !== "undefined") {
+    conversationShareEditingId = "";
+    conversationShareSelectionIds = new Set();
+  }
   createConversation("新对话", selectedSmartMode);
   searchInput.value = "";
   chronicleTopic.value = "";

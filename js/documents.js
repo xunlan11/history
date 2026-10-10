@@ -119,6 +119,7 @@ function renderConversationList() {
 
     const row = document.createElement("article");
     const button = document.createElement("button");
+    const shareButton = document.createElement("button");
     const deleteButton = document.createElement("button");
     const title = document.createElement("strong");
     const meta = document.createElement("span");
@@ -138,6 +139,10 @@ function renderConversationList() {
     ].filter(Boolean).join(" · ");
     button.append(title, meta);
     button.addEventListener("click", () => {
+      if (typeof conversationShareEditingId !== "undefined" && conversationShareEditingId) {
+        conversationShareEditingId = "";
+        conversationShareSelectionIds = new Set();
+      }
       selectedConversationId = item.id;
       selectedSmartMode = item.mode || "chat";
       renderSmartModeButtons();
@@ -150,6 +155,17 @@ function renderConversationList() {
       messageFeed.scrollTop = messageFeed.scrollHeight;
     });
 
+    shareButton.className = "conversation-share";
+    shareButton.classList.toggle("active", Boolean(item.share?.active && item.share?.token));
+    shareButton.type = "button";
+    shareButton.title = item.share?.active ? "编辑分享内容" : "分享对话";
+    shareButton.setAttribute("aria-label", item.share?.active ? `编辑分享：${item.title || "新对话"}` : `分享对话：${item.title || "新对话"}`);
+    shareButton.textContent = item.share?.active ? "↗" : "分享";
+    shareButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openConversationShareEditor(item);
+    });
+
     deleteButton.className = "conversation-delete";
     deleteButton.type = "button";
     deleteButton.title = "删除对话";
@@ -159,7 +175,7 @@ function renderConversationList() {
       openDeleteConversationDialog(item);
     });
 
-    row.append(button, deleteButton);
+    row.append(button, shareButton, deleteButton);
     conversationList.append(row);
   });
 }
@@ -209,6 +225,7 @@ function renderActiveConversation() {
   chatTitle.textContent = conversation?.title || "新对话";
   chatHint.textContent = getConversationModeLabel(selectedSmartMode);
   if (typeof renderConversationTurns === "function") renderConversationTurns();
+  if (typeof renderConversationShareEditor === "function") renderConversationShareEditor();
 }
 
 function getConversationModeLabel(mode) {

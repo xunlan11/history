@@ -33,6 +33,7 @@ const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
 const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
 const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
 const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
+const CONVERSATION_SHARE_API_URL = endpoint("/data/api/conversation-shares");
 const LLM_SERVICE_URL = endpoint("/llm/llm");
 const LLM_HEALTH_URL = endpoint("/llm/health");
 const VERSION_STATUS_URL = endpoint("/version/version");
@@ -268,6 +269,15 @@ const uploadConversationFilesButton = document.querySelector("#upload-conversati
 const conversationFileInput = document.querySelector("#conversation-file-input");
 const conversationAttachmentChips = document.querySelector("#conversation-attachment-chips");
 const conversationAttachmentStatus = document.querySelector("#conversation-attachment-status");
+const conversationShareEditor = document.querySelector("#conversation-share-editor");
+const conversationShareStatus = document.querySelector("#conversation-share-status");
+const closeConversationShareButton = document.querySelector("#close-conversation-share");
+const conversationShareSelection = document.querySelector("#conversation-share-selection");
+const conversationShareCount = document.querySelector("#conversation-share-count");
+const selectAllConversationShareButton = document.querySelector("#select-all-conversation-share");
+const saveConversationShareButton = document.querySelector("#save-conversation-share");
+const deleteConversationShareButton = document.querySelector("#delete-conversation-share");
+const conversationShareLink = document.querySelector("#conversation-share-link");
 const fontOptionButtons = document.querySelectorAll("[data-font-option]");
 const openSettingsButton = document.querySelector("#open-settings");
 const settingsDialog = document.querySelector("#settings-dialog");
@@ -507,6 +517,7 @@ function normalizeConversations(items) {
       locked: Boolean(item.locked || item.result || item.turns?.length),
       referenceDocumentIds: normalizeReferenceDocumentIds(item.referenceDocumentIds),
       attachments: normalizeConversationAttachments(item.attachments),
+      share: normalizeConversationShare(item.share),
       result: normalizeConversationResult(item.result),
       turns: normalizeConversationTurns(item.turns, item.result, item.id),
       createdAt: item.createdAt || "",
@@ -562,6 +573,19 @@ function normalizeConversationTurns(values, legacyResult, conversationId) {
   });
 }
 
+function normalizeConversationShare(value) {
+  if (!value || typeof value !== "object" || !value.token) {
+    return null;
+  }
+  return {
+    token: String(value.token),
+    selectedTurnIds: Array.isArray(value.selectedTurnIds)
+      ? Array.from(new Set(value.selectedTurnIds.map((item) => String(item).trim()).filter(Boolean)))
+      : [],
+    active: value.active !== false,
+    updatedAt: value.updatedAt || "",
+  };
+}
 function normalizeConversationAttachments(values) {
   if (!Array.isArray(values)) {
     return [];
@@ -820,6 +844,7 @@ function createConversation(title = "新对话", mode = "chat") {
     locked: false,
     referenceDocumentIds: [],
     attachments: [],
+    share: null,
     result: null,
     turns: [],
     createdAt: new Date().toISOString(),

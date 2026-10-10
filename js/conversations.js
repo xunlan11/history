@@ -1403,3 +1403,202 @@ function renderConversationTurns() {
   });
   messageFeed.scrollTop = feedScroll;
 }
+
+let conversationShareEditingId = "";
+let conversationShareSelectionIds = new Set();
+
+function getConversationShareAnswerPreview(turn) {
+  const payload = turn?.result?.payload || {};
+  if (turn?.mode === "search") {
+    return (payload.matches || []).map((item) => item.quote || item.snippet || item.summary || item.title || "").filter(Boolean).join("；");
+  }
+  if (turn?.mode === "chronicle") {
+    return (payload.entries || []).map((item) => item.summary || item.event || "").filter(Boolean).join("；");
+  }
+  return payload.answer || "";
+}
+
+function openConversationShareEditor(item) {
+  if (!item?.id) return;
+  selectedConversationId = item.id;
+  selectedSmartMode = item.mode || "chat";
+  conversationShareEditingId = item.id;
+  conversationShareSelectionIds = new Set(item.share?.selectedTurnIds || []);
+  renderSmartModeButtons();
+  renderConversationList();
+  renderActiveConversation();
+  renderReferenceDocuments();
+  renderConversationAttachments();
+  messageFeed.scrollTop = 0;
+}
+
+function closeConversationShareEditor() {
+  conversationShareEditingId = "";
+  conversationShareSelectionIds = new Set();
+  conversationShareEditor?.classList.add("hidden");
+  if (conversationShareSelection) conversationShareSelection.replaceChildren();
+  if (conversationShareLink) {
+    conversationShareLink.replaceChildren();
+    conversationShareLink.classList.add("hidden");
+  }
+  renderActiveConversation();
+}
+
+function renderConversationShareEditor() {
+  const conversation = getSelectedConversation();
+  if (!conversationShareEditor || conversationShareEditingId !== conversation?.id) {
+    conversationShareEditor?.classList.add("hidden");
+    return;
+  }
+  conversationShareEditor.classList.remove("hidden");
+  conversationShareSelection?.replaceChildren();
+  const turns = conversation.turns || [];
+  turns.forEach((turn, index) => {
+    const completed = turn.status === "completed" && Boolean(turn.result);
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    const body = document.createElement("span");
+    const prompt = document.createElement("strong");
+    const preview = document.createElement("span");
+    label.className = "conversation-share-choice";
+    label.classList.toggle("disabled", !completed);
+    checkbox.type = "checkbox";
+    checkbox.value = turn.id;
+    checkbox.checked = completed && conversationShareSelectionIds.has(turn.id);
+    checkbox.disabled = !completed;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) conversationShareSelectionIds.add(turn.id);
+      else conversationShareSelectionIds.delete(turn.id);
+      updateConversationShareSelectionSummary();
+    });
+    prompt.textContent = `${index + 1}. ${turn.prompt || "未命名提问"}`;
+    preview.textContent = completed ? getConversationShareAnswerPreview(turn) : (turn.error || "回答尚未完成");
+    body.append(prompt, preview);
+    label.append(checkbox, body);
+    conversationShareSelection?.append(label);
+  });
+  const hasExisting = Boolean(conversation.share?.active && conversation.share?.token);
+  if (saveConversationShareButton) saveConversationShareButton.textContent = hasExisting ? "更新分享链接" : "创建分享链接";
+  deleteConversationShareButton?.classList.toggle("hidden", !hasExisting);
+  if (conversationShareStatus) conversationShareStatus.textContent = hasExisting ? "可修改分享内容，链接地址保持不变。" : "选择后将按原对话顺序展示。";
+  updateConversationShareSelectionSummary();
+  if (hasExisting) {
+    showConversationShareLink(conversation.share.token);
+  } else if (conversationShareLink) {
+    conversationShareLink.replaceChildren();
+    conversationShareLink.classList.add("hidden");
+  }
+}
+
+function updateConversationShareSelectionSummary() {
+  const selected = conversationShareSelection
+    ? Array.from(conversationShareSelection.querySelectorAll("input:checked"))
+    : [];
+  if (conversationShareCount) conversationShareCount.textContent = `已选择 ${selected.length} 轮`;
+  if (saveConversationShareButton) saveConversationShareButton.disabled = selected.length === 0;
+}
+
+function conversationShareLinkForToken(token) {
+  const url = new URL("share.html", window.location.href);
+  url.search = `?token=${encodeURIComponent(token)}`;
+  return url.href;
+}
+
+function showConversationShareLink(token) {
+  if (!conversationShareLink || !token) return;
+  const url = conversationShareLinkForToken(token);
+  conversationShareLink.replaceChildren();
+  const label = document.createElement("span");
+  const link = document.createElement("a");
+  const copy = document.createElement("button");
+  label.textContent = "分享链接：";
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = url;
+  copy.className = "secondary-button";
+  copy.type = "button";
+  copy.textContent = "复制";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      copy.textContent = "已复制";
+      window.setTimeout(() => { copy.textContent = "复制"; }, 1200);
+    } catch (_) {
+      window.prompt("复制分享链接", url);
+    }
+  });
+  conversationShareLink.append(label, link, copy);
+  conversationShareLink.classList.remove("hidden");
+}
+
+function selectedConversationShareTurnIds(conversation) {
+  const selected = new Set(conversationShareSelection
+    ? Array.from(conversationShareSelection.querySelectorAll("input:checked")).map((input) => input.value)
+    : []);
+  return (conversation?.turns || []).filter((turn) => selected.has(turn.id)).map((turn) => turn.id);
+}
+
+async function saveConversationShare() {
+  const conversation = getSelectedConversation();
+  if (!conversation || !conversationShareEditingId) return;
+  const turnIds = selectedConversationShareTurnIds(conversation);
+  if (!turnIds.length) {
+    if (conversationShareStatus) conversationShareStatus.textContent = "请至少选择一轮已完成的对话。";
+    return;
+  }
+  saveConversationShareButton.disabled = true;
+  if (conversationShareStatus) conversationShareStatus.textContent = "正在保存分享内容…";
+  try {
+    persistConversations();
+    await flushPendingSync();
+    const existingToken = conversation.share?.active ? conversation.share.token : "";
+    const response = await fetch(existingToken ? `${CONVERSATION_SHARE_API_URL}/${encodeURIComponent(existingToken)}` : CONVERSATION_SHARE_API_URL, {
+      method: existingToken ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId: conversation.id, turnIds }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `分享保存失败（${response.status}）`);
+    conversation.share = normalizeConversationShare({ token: payload.token, selectedTurnIds: payload.selectedTurnIds, active: true, updatedAt: payload.updatedAt });
+    conversationShareSelectionIds = new Set(turnIds);
+    persistConversations();
+    renderConversationList();
+    renderConversationShareEditor();
+    if (conversationShareStatus) conversationShareStatus.textContent = existingToken ? "分享内容已更新，链接保持不变。" : "分享链接已创建。";
+  } catch (error) {
+    if (conversationShareStatus) conversationShareStatus.textContent = error.message || "分享保存失败。";
+  } finally {
+    saveConversationShareButton.disabled = false;
+    updateConversationShareSelectionSummary();
+  }
+}
+
+async function deleteConversationShare() {
+  const conversation = getSelectedConversation();
+  const token = conversation?.share?.active ? conversation.share.token : "";
+  if (!conversation || !token || !window.confirm("删除后此分享链接将立即失效，确定删除吗？")) return;
+  deleteConversationShareButton.disabled = true;
+  try {
+    const response = await fetch(`${CONVERSATION_SHARE_API_URL}/${encodeURIComponent(token)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `删除失败（${response.status}）`);
+    conversation.share = null;
+    persistConversations();
+    renderConversationList();
+    closeConversationShareEditor();
+  } catch (error) {
+    if (conversationShareStatus) conversationShareStatus.textContent = error.message || "删除分享失败。";
+  } finally {
+    deleteConversationShareButton.disabled = false;
+  }
+}
+
+closeConversationShareButton?.addEventListener("click", closeConversationShareEditor);
+selectAllConversationShareButton?.addEventListener("click", () => {
+  const conversation = getSelectedConversation();
+  conversationShareSelectionIds = new Set((conversation?.turns || []).filter((turn) => turn.status === "completed" && turn.result).map((turn) => turn.id));
+  renderConversationShareEditor();
+});
+saveConversationShareButton?.addEventListener("click", saveConversationShare);
+deleteConversationShareButton?.addEventListener("click", deleteConversationShare);
