@@ -270,7 +270,6 @@ const conversationFileInput = document.querySelector("#conversation-file-input")
 const conversationAttachmentChips = document.querySelector("#conversation-attachment-chips");
 const conversationAttachmentStatus = document.querySelector("#conversation-attachment-status");
 const conversationShareEditor = document.querySelector("#conversation-share-editor");
-const conversationShareStatus = document.querySelector("#conversation-share-status");
 const closeConversationShareButton = document.querySelector("#close-conversation-share");
 const conversationShareSelection = document.querySelector("#conversation-share-selection");
 const conversationShareCount = document.querySelector("#conversation-share-count");

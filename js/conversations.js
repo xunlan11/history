@@ -1461,11 +1461,9 @@ function renderConversationShareEditor() {
     const prompt = document.createElement("strong");
     const preview = document.createElement("span");
     label.className = "conversation-share-choice";
-    label.classList.toggle("disabled", !completed);
     checkbox.type = "checkbox";
     checkbox.value = turn.id;
-    checkbox.checked = completed && conversationShareSelectionIds.has(turn.id);
-    checkbox.disabled = !completed;
+    checkbox.checked = conversationShareSelectionIds.has(turn.id);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) conversationShareSelectionIds.add(turn.id);
       else conversationShareSelectionIds.delete(turn.id);
@@ -1478,9 +1476,8 @@ function renderConversationShareEditor() {
     conversationShareSelection?.append(label);
   });
   const hasExisting = Boolean(conversation.share?.active && conversation.share?.token);
-  if (saveConversationShareButton) saveConversationShareButton.textContent = hasExisting ? "更新分享链接" : "创建分享链接";
+  if (saveConversationShareButton) saveConversationShareButton.textContent = hasExisting ? "更新链接" : "创建链接";
   deleteConversationShareButton?.classList.toggle("hidden", !hasExisting);
-  if (conversationShareStatus) conversationShareStatus.textContent = hasExisting ? "可修改分享内容，链接地址保持不变。" : "选择后将按原对话顺序展示。";
   updateConversationShareSelectionSummary();
   if (hasExisting) {
     showConversationShareLink(conversation.share.token);
@@ -1491,11 +1488,15 @@ function renderConversationShareEditor() {
 }
 
 function updateConversationShareSelectionSummary() {
-  const selected = conversationShareSelection
-    ? Array.from(conversationShareSelection.querySelectorAll("input:checked"))
+  const inputs = conversationShareSelection
+    ? Array.from(conversationShareSelection.querySelectorAll("input"))
     : [];
+  const selected = inputs.filter((input) => input.checked);
   if (conversationShareCount) conversationShareCount.textContent = `已选择 ${selected.length} 轮`;
   if (saveConversationShareButton) saveConversationShareButton.disabled = selected.length === 0;
+  if (selectAllConversationShareButton) {
+    selectAllConversationShareButton.textContent = inputs.length > 0 && selected.length === inputs.length ? "清空选择" : "全选";
+  }
 }
 
 function conversationShareLinkForToken(token) {
@@ -1508,10 +1509,8 @@ function showConversationShareLink(token) {
   if (!conversationShareLink || !token) return;
   const url = conversationShareLinkForToken(token);
   conversationShareLink.replaceChildren();
-  const label = document.createElement("span");
   const link = document.createElement("a");
   const copy = document.createElement("button");
-  label.textContent = "分享链接：";
   link.href = url;
   link.target = "_blank";
   link.rel = "noopener";
@@ -1525,11 +1524,23 @@ function showConversationShareLink(token) {
       copy.textContent = "已复制";
       window.setTimeout(() => { copy.textContent = "复制"; }, 1200);
     } catch (_) {
-      window.prompt("复制分享链接", url);
+      window.prompt("复制链接", url);
     }
   });
-  conversationShareLink.append(label, link, copy);
+  conversationShareLink.append(link, copy);
   conversationShareLink.classList.remove("hidden");
+}
+
+async function copyConversationShareLink(token) {
+  if (!token) return;
+  const url = conversationShareLinkForToken(token);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(url);
+    if (typeof showUploadToast === "function") showUploadToast("链接已自动复制");
+  } catch (_) {
+    if (typeof showUploadToast === "function") showUploadToast("链接已创建，请点击复制按钮");
+  }
 }
 
 function selectedConversationShareTurnIds(conversation) {
@@ -1544,11 +1555,9 @@ async function saveConversationShare() {
   if (!conversation || !conversationShareEditingId) return;
   const turnIds = selectedConversationShareTurnIds(conversation);
   if (!turnIds.length) {
-    if (conversationShareStatus) conversationShareStatus.textContent = "请至少选择一轮已完成的对话。";
     return;
   }
   saveConversationShareButton.disabled = true;
-  if (conversationShareStatus) conversationShareStatus.textContent = "正在保存分享内容…";
   try {
     persistConversations();
     await flushPendingSync();
@@ -1561,13 +1570,13 @@ async function saveConversationShare() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `分享保存失败（${response.status}）`);
     conversation.share = normalizeConversationShare({ token: payload.token, selectedTurnIds: payload.selectedTurnIds, active: true, updatedAt: payload.updatedAt });
-    conversationShareSelectionIds = new Set(turnIds);
+    conversationShareSelectionIds = new Set(payload.selectedTurnIds || turnIds);
     persistConversations();
     renderConversationList();
     renderConversationShareEditor();
-    if (conversationShareStatus) conversationShareStatus.textContent = existingToken ? "分享内容已更新，链接保持不变。" : "分享链接已创建。";
+    copyConversationShareLink(conversation.share.token);
   } catch (error) {
-    if (conversationShareStatus) conversationShareStatus.textContent = error.message || "分享保存失败。";
+    if (typeof showUploadToast === "function") showUploadToast(error.message || "分享保存失败。");
   } finally {
     saveConversationShareButton.disabled = false;
     updateConversationShareSelectionSummary();
@@ -1588,7 +1597,7 @@ async function deleteConversationShare() {
     renderConversationList();
     closeConversationShareEditor();
   } catch (error) {
-    if (conversationShareStatus) conversationShareStatus.textContent = error.message || "删除分享失败。";
+    if (typeof showUploadToast === "function") showUploadToast(error.message || "删除分享失败。");
   } finally {
     deleteConversationShareButton.disabled = false;
   }
@@ -1607,7 +1616,13 @@ document.addEventListener("keydown", (event) => {
 });
 selectAllConversationShareButton?.addEventListener("click", () => {
   const conversation = getSelectedConversation();
-  conversationShareSelectionIds = new Set((conversation?.turns || []).filter((turn) => turn.status === "completed" && turn.result).map((turn) => turn.id));
+  const inputs = conversationShareSelection
+    ? Array.from(conversationShareSelection.querySelectorAll("input"))
+    : [];
+  const allSelected = inputs.length > 0 && inputs.every((input) => input.checked);
+  conversationShareSelectionIds = allSelected
+    ? new Set()
+    : new Set((conversation?.turns || []).map((turn) => turn.id));
   renderConversationShareEditor();
 });
 saveConversationShareButton?.addEventListener("click", saveConversationShare);

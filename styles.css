@@ -3526,10 +3526,19 @@ body {
   font-size: 14px;
 }
 
-.conversation-share-editor-head p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 12px;
+.conversation-share-editor-foot {
+  align-items: flex-end;
+}
+
+.conversation-share-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conversation-share-create .conversation-share-link {
+  flex: 1 1 auto;
 }
 
 .conversation-share-selection {
@@ -3549,6 +3558,10 @@ body {
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
+}
+
+.conversation-share-choice:has(input:checked) {
+  border: none;
 }
 
 .conversation-share-choice.disabled {
@@ -3717,6 +3730,10 @@ body {
   }
 
   .conversation-share-editor-foot .confirm-actions {
+    flex-wrap: wrap;
+  }
+
+  .conversation-share-create {
     flex-wrap: wrap;
   }
 }
