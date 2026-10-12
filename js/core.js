@@ -529,7 +529,7 @@ function normalizeConversations(items) {
     .filter((item) => item?.id)
     .map((item) => ({
       id: item.id,
-      ownerId: Number(item.ownerId) || null,
+      ownerId: item.ownerId || null,
       title: item.title || "新对话",
       mode: item.mode || "chat",
       locked: Boolean(item.locked || item.result || item.turns?.length),
@@ -1113,7 +1113,7 @@ function canEditDocument(item) {
   if (!item?.canEdit || !currentUser || item.ownerId === null || item.ownerId === undefined) {
     return false;
   }
-  return Number(item.ownerId) === Number(currentUser.id);
+  return String(item.ownerId) === String(currentUser.id);
 }
 
 function getSelectedPage() {

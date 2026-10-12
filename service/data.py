@@ -16,13 +16,15 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Header
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
+from contextvars import ContextVar
+from service.wenqu_sso.session import SsoResolver, verify_service_token
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -46,6 +48,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 站点认证模式：``sso`` = 走问渠统一登录（wenqu_session Cookie 跳转 /login）；
+# ``local`` = 本站本地账号（登录弹窗 + Bearer Token）。两站共用同一份后端代码，
+# 靠环境变量区分：literature 设 AUTH_MODE=sso，history 保持默认 local。
+AUTH_MODE = os.getenv("AUTH_MODE", "local").strip().lower() or "local"
+_sso = SsoResolver(os.getenv("DATABASE_URL", ""))
+_current_user: ContextVar[dict[str, Any] | None] = ContextVar("current_user", default=None)
+
+
+def _user_from_sso(request: Request) -> dict[str, Any] | None:
+    token = request.cookies.get("wenqu_session")
+    if not token:
+        return None
+    account = _sso.resolve_account(token)
+    if not account:
+        return None
+    with database() as connection:
+        local = get_or_create_local_account(connection, account)
+    return {"id": local["id"], "username": local["username"], "isAdmin": bool(local["is_admin"]), "role": "admin" if local["is_admin"] else "user"}
+
+
+def _user_from_bearer(request: Request) -> dict[str, Any] | None:
+    token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    return SESSIONS.get(token)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    user = _user_from_sso(request) if AUTH_MODE == "sso" else _user_from_bearer(request)
+    _current_user.set(user)
+    try:
+        return await call_next(request)
+    finally:
+        _current_user.set(None)
 
 
 class SyncPayload(BaseModel):
@@ -80,6 +118,10 @@ class UserAdminUpdate(BaseModel):
     isAdmin: bool = False
 
 
+class RebindPayload(BaseModel):
+    toId: str = ""
+
+
 class PageAnnotationUpdate(BaseModel):
     content: str = Field(default="", max_length=100_000)
 
@@ -102,6 +144,17 @@ def next_available_user_id(connection: sqlite3.Connection) -> int:
     return candidate
 
 
+def insert_user(connection: sqlite3.Connection, username: str, password: str, is_admin: bool) -> dict[str, Any]:
+    connection.execute("BEGIN IMMEDIATE")
+    user_id = next_available_user_id(connection)
+    with connection:
+        connection.execute(
+            "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
+            (user_id, username, hash_password(password), int(is_admin), now_iso()),
+        )
+    return {"id": user_id, "username": username, "isAdmin": bool(is_admin)}
+
+
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=30)
@@ -121,12 +174,24 @@ def database():
         connection.close()
 
 
+def _ensure_users_sso_columns(connection: sqlite3.Connection) -> None:
+    # 全新数据库此时 users 表尚未创建，ALTER 会报错；等建表后再迁移。
+    if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone():
+        return
+    cols = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+    if "sso_account_id" not in cols:
+        connection.execute("ALTER TABLE users ADD COLUMN sso_account_id TEXT")
+    if "deleted_at" not in cols:
+        connection.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
+
+
 def ensure_schema(connection: sqlite3.Connection) -> None:
     documents_exists = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'").fetchone()
     if documents_exists:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)").fetchall()}
         if "owner_id" not in columns:
             connection.executescript("DROP TABLE IF EXISTS page_annotations; DROP TABLE IF EXISTS document_files; DROP TABLE IF EXISTS document_pages; DROP TABLE IF EXISTS documents; DROP TABLE IF EXISTS conversations; DROP TABLE IF EXISTS conversation_files; DROP TABLE IF EXISTS users;")
+    _ensure_users_sso_columns(connection)
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS app_meta (
@@ -150,7 +215,15 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             is_admin INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            sso_account_id TEXT,
+            deleted_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS roles (
+            account_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL DEFAULT '',
+            role TEXT NOT NULL DEFAULT 'user'
         );
 
         CREATE TABLE IF NOT EXISTS document_pages (
@@ -312,9 +385,22 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
     connection.commit()
 
-def current_user(authorization: str | None) -> dict[str, Any]:
-    token = (authorization or "").removeprefix("Bearer ").strip()
-    user = SESSIONS.get(token)
+def get_or_create_local_account(connection, account: dict[str, Any]) -> dict[str, Any]:
+    row = connection.execute("SELECT id, username, is_admin FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (account["id"],)).fetchone()
+    if row:
+        return row
+    username = account.get("username") or ""
+    try:
+        connection.execute("INSERT INTO users(username, password_hash, is_admin, created_at, sso_account_id) VALUES(?, '', 0, ?, ?)", (username, now_iso(), account["id"]))
+    except sqlite3.IntegrityError:
+        username = f"{username}__{account['id'][:8]}"
+        connection.execute("INSERT INTO users(username, password_hash, is_admin, created_at, sso_account_id) VALUES(?, '', 0, ?, ?)", (username, now_iso(), account["id"]))
+    connection.commit()
+    return connection.execute("SELECT id, username, is_admin FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (account["id"],)).fetchone()
+
+
+def current_user() -> dict[str, Any]:
+    user = _current_user.get()
     if not user:
         raise HTTPException(status_code=401, detail="请先登录")
     return user
@@ -1306,8 +1392,8 @@ def public_processing_document(connection, document_id, user):
 
 
 @app.post("/api/documents/{document_id}/processing")
-def submit_document_processing(document_id: str, payload: ProcessingSubmission, authorization: str | None = Header(default=None)):
-    user = current_user(authorization)
+def submit_document_processing(document_id: str, payload: ProcessingSubmission):
+    user = current_user()
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         require_owned_document(connection, document_id, user)
@@ -1317,8 +1403,8 @@ def submit_document_processing(document_id: str, payload: ProcessingSubmission, 
 
 
 @app.delete("/api/documents/{document_id}/processing/failed-pages/{page_number}")
-def remove_failed_processing_page(document_id: str, page_number: int, authorization: str | None = Header(default=None)):
-    user = current_user(authorization)
+def remove_failed_processing_page(document_id: str, page_number: int):
+    user = current_user()
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         require_owned_document(connection, document_id, user)
@@ -1344,8 +1430,8 @@ def remove_failed_processing_page(document_id: str, page_number: int, authorizat
 
 
 @app.delete("/api/documents/{document_id}/processing")
-def cancel_document_processing(document_id: str, authorization: str | None = Header(default=None)):
-    user = current_user(authorization)
+def cancel_document_processing(document_id: str):
+    user = current_user()
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT owner_id,payload,deleted_at FROM documents WHERE id=?", (document_id,)).fetchone()
@@ -1365,8 +1451,8 @@ def cancel_document_processing(document_id: str, authorization: str | None = Hea
 
 
 @app.get("/api/documents/{document_id}/processing")
-def document_processing_status(document_id: str, authorization: str | None = Header(default=None)):
-    user = current_user(authorization)
+def document_processing_status(document_id: str):
+    user = current_user()
     with database() as connection:
         row = connection.execute("SELECT owner_id,visibility FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
         if not row or (row["owner_id"] != user["id"] and row["visibility"] != "public"):
@@ -1375,8 +1461,8 @@ def document_processing_status(document_id: str, authorization: str | None = Hea
 
 
 @app.post("/api/documents/{document_id}/processing/retry")
-def retry_document_processing(document_id: str, authorization: str | None = Header(default=None)):
-    user = current_user(authorization)
+def retry_document_processing(document_id: str):
+    user = current_user()
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         require_owned_document(connection, document_id, user)
@@ -1424,9 +1510,8 @@ async def upload_file(
     documentId: str = Form(...),
     role: str = Form("source"),
     pageId: str = Form(""),
-    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user = current_user(authorization)
+    user = current_user()
     document_id = documentId.strip()
     if not document_id:
         raise HTTPException(status_code=400, detail="documentId 不能为空")
@@ -1495,9 +1580,8 @@ async def upload_conversation_file(
     attachment: UploadFile = File(...),
     conversationId: str = Form(...),
     attachmentId: str = Form(...),
-    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user = current_user(authorization)
+    user = current_user()
     conversation_id = conversationId.strip()
     attachment_id = attachmentId.strip()
     if not conversation_id or not attachment_id:
@@ -1556,9 +1640,8 @@ async def upload_conversation_file(
 def update_conversation_file_text(
     attachment_id: str,
     payload: ConversationFileTextPayload,
-    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user = current_user(authorization)
+    user = current_user()
     timestamp = now_iso()
     with database() as connection:
         with connection:
@@ -1586,8 +1669,8 @@ def update_conversation_file_text(
 
 
 @app.delete("/api/conversation-files/{attachment_id}")
-def delete_conversation_file(attachment_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def delete_conversation_file(attachment_id: str) -> dict[str, Any]:
+    user = current_user()
     timestamp = now_iso()
     with database() as connection:
         with connection:
@@ -1603,9 +1686,8 @@ def delete_conversation_file(attachment_id: str, authorization: str | None = Hea
 @app.post("/api/conversation-shares")
 def create_conversation_share(
     payload: ConversationSharePayload,
-    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user = current_user(authorization)
+    user = current_user()
     conversation_id = str(payload.conversationId or "").strip()
     timestamp = now_iso()
     with database() as connection:
@@ -1637,9 +1719,8 @@ def create_conversation_share(
 def update_conversation_share(
     token: str,
     payload: ConversationSharePayload,
-    authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user = current_user(authorization)
+    user = current_user()
     timestamp = now_iso()
     with database() as connection:
         row = connection.execute(
@@ -1660,8 +1741,8 @@ def update_conversation_share(
 
 
 @app.delete("/api/conversation-shares/{token}")
-def delete_conversation_share(token: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def delete_conversation_share(token: str) -> dict[str, Any]:
+    user = current_user()
     timestamp = now_iso()
     with database() as connection:
         with connection:
@@ -1705,6 +1786,9 @@ def get_conversation_share(token: str) -> dict[str, Any]:
 
 @app.post("/api/auth/register")
 def register(credentials: Credentials) -> dict[str, Any]:
+    if AUTH_MODE == "sso":
+        # 统一注册由 SSO 提供。
+        raise HTTPException(status_code=410, detail="请前往统一登录 /login 注册")
     username = credentials.username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="账号不能为空")
@@ -1720,35 +1804,46 @@ def register(credentials: Credentials) -> dict[str, Any]:
     token = create_session(user)
     return {"token": token, "user": user}
 
+
 @app.post("/api/auth/login")
 def login(credentials: Credentials) -> dict[str, Any]:
+    if AUTH_MODE == "sso":
+        raise HTTPException(status_code=410, detail="请前往统一登录 /login 登录")
     with database() as connection:
-        row = connection.execute("SELECT id,username,is_admin FROM users WHERE username=? AND password_hash=?", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
+        row = connection.execute("SELECT id,username,is_admin FROM users WHERE username=? AND password_hash=? AND deleted_at IS NULL", (credentials.username.strip(), hash_password(credentials.password))).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="账号或密码错误")
     user = {"id": row["id"], "username": row["username"], "isAdmin": bool(row["is_admin"])}
     token = create_session(user)
     return {"token": token, "user": user}
 
+
 @app.get("/api/auth/me")
-def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    return {"user": current_user(authorization)}
+def me() -> dict[str, Any]:
+    return {"user": current_user()}
+
 
 @app.post("/api/auth/logout")
-def logout(authorization: str | None = Header(default=None)) -> dict[str, str]:
-    token = (authorization or "").removeprefix("Bearer ").strip(); SESSIONS.pop(token, None)
+def logout(request: Request) -> dict[str, str]:
+    if AUTH_MODE != "sso":
+        token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        SESSIONS.pop(token, None)
     return {"status": "ok"}
 
+
 @app.get("/api/admin/users")
-def list_users(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
-    user = current_user(authorization)
+def list_users() -> list[dict[str, Any]]:
+    user = current_user()
     require_admin(user)
     with database() as connection:
-        return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "createdAt": r["created_at"]} for r in connection.execute("SELECT id,username,is_admin,created_at FROM users ORDER BY created_at ASC, id ASC").fetchall()]
+        return [{"id": r["id"], "username": r["username"], "isAdmin": bool(r["is_admin"]), "role": "admin" if r["is_admin"] else "user", "createdAt": r["created_at"]} for r in connection.execute("SELECT id, username, is_admin, created_at FROM users WHERE deleted_at IS NULL ORDER BY is_admin DESC, username").fetchall()]
+
 
 @app.post("/api/admin/users")
-def create_user(payload: UserCreate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    admin = current_user(authorization)
+def create_user(payload: UserCreate) -> dict[str, Any]:
+    if AUTH_MODE == "sso":
+        raise HTTPException(status_code=410, detail="账户由统一登录管理")
+    admin = current_user()
     require_admin(admin)
     try:
         with database() as connection:
@@ -1756,13 +1851,17 @@ def create_user(payload: UserCreate, authorization: str | None = Header(default=
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="账号已存在") from exc
 
+
 @app.delete("/api/admin/users/{user_id}")
-def delete_user(user_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
-    user = current_user(authorization)
+def delete_user(user_id: int) -> dict[str, str]:
+    if AUTH_MODE == "sso":
+        raise HTTPException(status_code=410, detail="账户由统一登录管理")
+    user = current_user()
     require_admin(user)
-    if user_id == user["id"]: raise HTTPException(status_code=400, detail="不能删除当前管理员")
+    if user_id == user["id"]:
+        raise HTTPException(status_code=400, detail="不能删除当前管理员")
     with database() as connection:
-        row = connection.execute("SELECT id, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+        row = connection.execute("SELECT id, is_admin FROM users WHERE id=? AND deleted_at IS NULL", (user_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="用户不存在")
         if row["is_admin"]:
@@ -1772,22 +1871,100 @@ def delete_user(user_id: int, authorization: str | None = Header(default=None)) 
     purge_sessions_for(user_id)
     return {"status": "ok"}
 
+
 @app.patch("/api/admin/users/{user_id}")
-def set_user_admin(user_id: int, payload: UserAdminUpdate, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def set_user_admin(user_id: int, payload: UserAdminUpdate) -> dict[str, Any]:
+    user = current_user()
     require_admin(user)
+    if user_id == user["id"]:
+        raise HTTPException(status_code=400, detail="不能修改当前账户的管理员状态")
     with database() as connection:
-        row = connection.execute("SELECT id, username, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+        row = connection.execute("SELECT id, is_admin FROM users WHERE id=? AND deleted_at IS NULL", (user_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="用户不存在")
-        if row["id"] == user["id"]:
-            raise HTTPException(status_code=400, detail="不能修改当前账户的管理员状态")
         if row["is_admin"] and not payload.isAdmin:
             ensure_admin_remains(connection)
         with connection:
-            connection.execute("UPDATE users SET is_admin=? WHERE id=?", (int(payload.isAdmin), user_id))
+            connection.execute("UPDATE users SET is_admin=? WHERE id=? AND deleted_at IS NULL", (int(payload.isAdmin), user_id))
     purge_sessions_for(user_id)
-    return {"id": row["id"], "username": row["username"], "isAdmin": payload.isAdmin}
+    return {"id": user_id, "isAdmin": payload.isAdmin}
+
+
+def _require_service_token(request: Request, sites: tuple[str, ...]) -> None:
+    payload = verify_service_token(request.headers.get("x-wenqu-service"), os.getenv("SERVICE_TOKEN_SECRET", ""))
+    if not payload or payload.get("site") not in sites:
+        raise HTTPException(status_code=403, detail="需要服务令牌")
+
+
+@app.get("/api/admin/admin")
+def list_admins() -> dict[str, Any]:
+    current_user()
+    with database() as connection:
+        return {"admins": [{"accountId": r["sso_account_id"], "localId": r["id"], "username": r["username"]} for r in connection.execute("SELECT id, sso_account_id, username FROM users WHERE is_admin=1 AND deleted_at IS NULL").fetchall()]}
+
+
+@app.put("/api/admin/admin/{account_id}")
+def appoint_admin(account_id: str, request: Request) -> dict[str, Any]:
+    _require_service_token(request, ("history", "literature"))
+    with database() as connection:
+        row = connection.execute("SELECT id FROM users WHERE sso_account_id=?", (account_id,)).fetchone()
+        with connection:
+            if row:
+                connection.execute("UPDATE users SET is_admin=1 WHERE id=?", (row["id"],))
+            else:
+                connection.execute("INSERT INTO users(username, password_hash, is_admin, created_at, sso_account_id) VALUES(?, '', 1, ?, ?)", (account_id, now_iso(), account_id))
+    return {"ok": True, "accountId": account_id}
+
+
+@app.delete("/api/admin/admin/{account_id}")
+def revoke_admin(account_id: str, request: Request) -> dict[str, Any]:
+    _require_service_token(request, ("history", "literature"))
+    with database() as connection:
+        with connection:
+            info = connection.execute("UPDATE users SET is_admin=0 WHERE sso_account_id=? AND is_admin=1 AND deleted_at IS NULL", (account_id,))
+        if info.rowcount == 0:
+            raise HTTPException(status_code=404, detail="不是管理员")
+    return {"ok": True, "accountId": account_id}
+
+
+@app.get("/api/sso/account/{account_id}")
+def get_sso_account(account_id: str, request: Request) -> dict[str, Any]:
+    _require_service_token(request, ("history", "literature"))
+    with database() as connection:
+        row = connection.execute("SELECT id, username, is_admin FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (account_id,)).fetchone()
+    if not row:
+        return {"exists": False}
+    return {"exists": True, "id": row["id"], "username": row["username"], "role": "admin" if row["is_admin"] else "user"}
+
+
+@app.delete("/api/sso/account/{account_id}")
+def delete_sso_account(account_id: str, request: Request) -> dict[str, Any]:
+    _require_service_token(request, ("history", "literature"))
+    with database() as connection:
+        row = connection.execute("SELECT id FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        with connection:
+            connection.execute("UPDATE users SET username=?, sso_account_id=NULL, deleted_at=? WHERE id=?", (f"deleted_{row['id']}", now_iso(), row["id"]))
+    return {"ok": True, "id": row["id"]}
+
+
+@app.post("/api/sso/account/{from_id}/rebind")
+def rebind_sso_account(from_id: str, payload: RebindPayload, request: Request) -> dict[str, Any]:
+    _require_service_token(request, ("history", "literature"))
+    to_id = payload.toId.strip()
+    if not to_id:
+        raise HTTPException(status_code=400, detail="缺少目标账号")
+    with database() as connection:
+        row = connection.execute("SELECT id FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (from_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        occupied = connection.execute("SELECT 1 FROM users WHERE sso_account_id=? AND deleted_at IS NULL", (to_id,)).fetchone()
+        if occupied:
+            raise HTTPException(status_code=409, detail="目标位置账号已存在")
+        with connection:
+            connection.execute("UPDATE users SET sso_account_id=? WHERE id=?", (to_id, row["id"]))
+    return {"ok": True, "id": row["id"]}
 
 
 def require_visible_document_page(
@@ -1817,9 +1994,8 @@ def require_visible_document_page(
 def get_page_annotation(
     document_id: str,
     page_id: str,
-    authorization: str | None = Header(default=None),
 ) -> dict[str, str]:
-    user = current_user(authorization)
+    user = current_user()
     with database() as connection:
         require_visible_document_page(connection, user, document_id, page_id)
         row = connection.execute(
@@ -1837,9 +2013,8 @@ def put_page_annotation(
     document_id: str,
     page_id: str,
     payload: PageAnnotationUpdate,
-    authorization: str | None = Header(default=None),
 ) -> dict[str, str]:
-    user = current_user(authorization)
+    user = current_user()
     timestamp = now_iso()
     with database() as connection:
         require_visible_document_page(connection, user, document_id, page_id)
@@ -1864,15 +2039,15 @@ def put_page_annotation(
     return {"status": "ok", "content": payload.content, "updatedAt": timestamp}
 
 @app.get("/api/bootstrap")
-def bootstrap(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def bootstrap() -> dict[str, Any]:
+    user = current_user()
     with database() as connection:
         return build_snapshot(connection, user)
 
 
 @app.get("/api/sync")
-def sync(cursor: str = Query(default=""), authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def sync(cursor: str = Query(default="")) -> dict[str, Any]:
+    user = current_user()
     with database() as connection:
         current_cursor = str(get_sync_version(connection))
         if cursor and cursor == current_cursor:
@@ -1889,8 +2064,8 @@ def sync(cursor: str = Query(default=""), authorization: str | None = Header(def
 
 
 @app.post("/api/sync/push")
-def push(payload: SyncPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = current_user(authorization)
+def push(payload: SyncPayload) -> dict[str, Any]:
+    user = current_user()
     if payload.schemaVersion != SCHEMA_VERSION:
         raise HTTPException(status_code=409, detail="data schema changed; refresh the page")
     timestamp = now_iso()

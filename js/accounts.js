@@ -32,9 +32,11 @@
     return data;
   }
 
+  // history 使用本站本地账号，可在对话框内删除账户；SSO 站点（literature）账户由问渠管理。
+  const USE_SSO = typeof SITE_ID === "string" && SITE_ID !== "history";
+
   function isSelf(id) {
-    const currentId = currentUser ? Number(currentUser.id) : null;
-    return currentId !== null && Number(id) === currentId;
+    return Boolean(currentUser && String(currentUser.id) === String(id));
   }
 
   function toast(message, isError = false) {
@@ -52,7 +54,7 @@
     if (q) result = result.filter((u) => String(u.username).toLowerCase().includes(q));
     return result.sort((a, b) => {
       const createdComparison = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
-      return createdComparison || Number(a.id) - Number(b.id);
+      return createdComparison || (Number(a.id) - Number(b.id) || String(a.id).localeCompare(String(b.id)));
     });
   }
 
@@ -69,7 +71,10 @@
       const toggle = isAdmin
         ? `<button type="button" class="accounts-btn" data-id="${user.id}" data-act="role" data-val="0">设为普通用户</button>`
         : `<button type="button" class="accounts-btn" data-id="${user.id}" data-act="role" data-val="1">设为管理员</button>`;
-      actions = `<div class="accounts-row">${toggle}<button type="button" class="accounts-btn accounts-btn-danger" data-id="${user.id}" data-act="delete">删除</button></div>`;
+      const remove = USE_SSO
+        ? ""
+        : `<button type="button" class="accounts-btn accounts-btn-danger" data-id="${user.id}" data-act="delete">删除</button>`;
+      actions = `<div class="accounts-row">${toggle}${remove}</div>`;
     }
     return (
       "<tr>" +
@@ -186,10 +191,10 @@
   }
 
   async function handleAction(button) {
-    const user = users.find((u) => Number(u.id) === Number(button.dataset.id));
+    const user = users.find((u) => String(u.id) === String(button.dataset.id));
     if (!user) return;
     const act = button.dataset.act;
-    if (act === "delete") {
+    if (!USE_SSO && act === "delete") {
       const ok = await askConfirm("删除账户", `确定删除账户 “${user.username}” 吗？删除后无法恢复。`, "删除");
       if (!ok) return;
       try {

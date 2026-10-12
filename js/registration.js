@@ -47,6 +47,8 @@ function postFormDataWithProgress(url, formData, options = {}) {
     };
 
     xhr.open("POST", url);
+    // 本地登录站点（history）手动附加 Bearer Token；SSO 站点没有本地 Token，
+    // 改由 wenqu_session Cookie 自动携带。
     const token = getStoredAuthToken();
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);

@@ -11,6 +11,7 @@ dependencies = [
     "pydantic",
     "Pillow",
     "PyMuPDF",
+    "psycopg[binary]>=3.1",
 ]
 
 [tool.uv]

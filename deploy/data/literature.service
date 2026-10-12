@@ -13,6 +13,10 @@ Environment=DATA_FILE_STORAGE_DIR=/home/ubuntu/Codefield/literature/files
 Environment=DATA_PUBLIC_BASE_URL=/literature/api/data
 Environment=PROCESSING_OCR_URL=http://127.0.0.1:18765
 Environment=PROCESSING_LLM_URL=http://127.0.0.1:8865
+# 本模块接入问渠统一用户系统：Cookie 认证 + 跳转 /login，复用 SSO 的数据库与
+# 服务令牌（/etc/wenqu-sso.env 提供 DATABASE_URL / SERVICE_TOKEN_SECRET）。
+Environment=AUTH_MODE=sso
+EnvironmentFile=/etc/wenqu-sso.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 18665
 Restart=always
 RestartSec=5
