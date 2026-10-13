@@ -3576,10 +3576,11 @@ body {
 .conversation-share-editor-card {
   display: grid;
   gap: 12px;
-  width: min(680px, calc(100vw - 32px));
-  max-height: min(720px, calc(100vh - 48px));
-  overflow: auto;
-  padding: 20px;
+  width: min(780px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 22px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -3610,6 +3611,12 @@ body {
   gap: 10px;
 }
 
+/* 分享窗口：「已选择 x 轮」靠左，并与同行的「全选」按钮文字垂直居中对齐。 */
+.conversation-share-editor-foot .confirm-actions {
+  justify-content: flex-start;
+  align-items: center;
+}
+
 .conversation-share-create {
   display: flex;
   align-items: center;
@@ -3621,11 +3628,22 @@ body {
   flex: 1 1 auto;
 }
 
+/* 底部操作区：按钮文字保持单行、不收缩，避免换行或被挤成两行。 */
+.conversation-share-editor-card button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.conversation-share-editor-foot #conversation-share-count {
+  white-space: nowrap;
+}
+
 .conversation-share-selection {
   display: grid;
   gap: 7px;
-  max-height: 230px;
-  overflow: auto;
+  max-height: 280px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .conversation-share-choice {
@@ -3640,10 +3658,6 @@ body {
   cursor: pointer;
 }
 
-.conversation-share-choice:has(input:checked) {
-  border: none;
-}
-
 .conversation-share-choice.disabled {
   cursor: default;
   opacity: .58;
@@ -3652,6 +3666,12 @@ body {
 .conversation-share-choice input {
   margin-top: 3px;
   accent-color: #3d8052;
+}
+
+/* 去掉复选框获得焦点时的黄色外框（来自全局 input:focus 规则）；选框本身已能说明选中状态。 */
+.conversation-share-choice input:focus,
+.conversation-share-choice input:focus-visible {
+  outline: none;
 }
 
 .conversation-share-choice span {
