@@ -79,6 +79,37 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+editChatTitleButton?.addEventListener("mousedown", (event) => {
+  // 保持输入框焦点，避免点击按钮时先触发 blur 提交、再被 click 重新置为编辑态。
+  if (chatTitleEditingId) {
+    event.preventDefault();
+  }
+});
+
+editChatTitleButton?.addEventListener("click", toggleChatTitleEdit);
+
+chatTitleInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.stopPropagation();
+    finishChatTitleEdit(true);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    finishChatTitleEdit(false);
+  }
+});
+
+chatTitleInput?.addEventListener("blur", (event) => {
+  // 点击对号按钮时先失焦，交给按钮的点击逻辑处理，避免重复进入编辑态。
+  if (event.relatedTarget === editChatTitleButton) {
+    return;
+  }
+  if (chatTitleEditingId) {
+    finishChatTitleEdit(true);
+  }
+});
+
 newConversationButton?.addEventListener("click", () => {
   const currentConversation = getSelectedConversation();
   if (currentConversation && !(currentConversation.turns || []).length) {

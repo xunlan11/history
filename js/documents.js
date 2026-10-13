@@ -4,6 +4,7 @@ let documentDragState = null;
 let suppressDocumentClickUntil = 0;
 let readerReturnView = "library";
 let readerEditing = false;
+let chatTitleEditingId = "";
 
 const PAGE_ROUTES = {
   library: "index.html",
@@ -222,10 +223,75 @@ function renderActiveConversation() {
   }
   const conversation = getSelectedConversation();
 
-  chatTitle.textContent = conversation?.title || "新对话";
+  // 切换对话时退出标题编辑态，避免把输入框留在别的对话上。
+  if (chatTitleEditingId && chatTitleEditingId !== conversation?.id) {
+    setChatTitleEditMode("");
+  }
+
+  if (!chatTitleEditingId) {
+    chatTitle.textContent = conversation?.title || "新对话";
+  }
+
+  if (editChatTitleButton) {
+    editChatTitleButton.classList.toggle("hidden", !conversation);
+  }
+
   chatHint.textContent = getConversationModeLabel(selectedSmartMode);
   if (typeof renderConversationTurns === "function") renderConversationTurns();
   if (typeof renderConversationShareEditor === "function") renderConversationShareEditor();
+}
+
+function setChatTitleEditMode(conversationId) {
+  chatTitleEditingId = conversationId || "";
+  const active = Boolean(chatTitleEditingId);
+
+  if (!chatTitle || !chatTitleInput || !editChatTitleButton) {
+    return;
+  }
+
+  chatTitle.classList.toggle("hidden", active);
+  chatTitleInput.classList.toggle("hidden", !active);
+  editChatTitleButton.classList.toggle("editing", active);
+  editChatTitleButton.title = active ? "保存标题" : "修改标题";
+  editChatTitleButton.setAttribute("aria-label", active ? "保存对话标题" : "修改对话标题");
+}
+
+function startChatTitleEdit() {
+  const conversation = getSelectedConversation();
+  if (!conversation || !chatTitleInput) {
+    return;
+  }
+
+  chatTitleInput.value = conversation.title || "";
+  setChatTitleEditMode(conversation.id);
+  chatTitleInput.focus();
+  chatTitleInput.select();
+}
+
+function finishChatTitleEdit(commit) {
+  const conversation = getSelectedConversation();
+  const editingId = chatTitleEditingId;
+  setChatTitleEditMode("");
+
+  if (commit && conversation && conversation.id === editingId && chatTitleInput) {
+    const resolvedTitle = chatTitleInput.value.trim() || "新对话";
+    if (resolvedTitle !== (conversation.title || "")) {
+      conversation.title = resolvedTitle;
+      conversation.updatedAt = new Date().toISOString();
+      persistConversations();
+    }
+  }
+
+  renderActiveConversation();
+  renderConversationList();
+}
+
+function toggleChatTitleEdit() {
+  if (chatTitleEditingId) {
+    finishChatTitleEdit(true);
+  } else {
+    startChatTitleEdit();
+  }
 }
 
 function getConversationModeLabel(mode) {

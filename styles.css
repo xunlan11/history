@@ -2965,6 +2965,84 @@ body {
   white-space: nowrap;
 }
 
+.message-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-title-edit {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #7b817b;
+  cursor: pointer;
+}
+
+.chat-title-edit.hidden,
+.chat-title-input.hidden {
+  display: none;
+}
+
+.chat-title-edit:hover {
+  background: rgba(32, 36, 31, 0.06);
+  color: #34734a;
+}
+
+.chat-title-edit.editing {
+  background: #e3eee5;
+  color: #34734a;
+}
+
+.chat-title-edit svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-title-edit .icon-check {
+  display: none;
+}
+
+.chat-title-edit.editing .icon-pencil {
+  display: none;
+}
+
+.chat-title-edit.editing .icon-check {
+  display: inline;
+}
+
+.chat-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.chat-title-input:focus {
+  outline: none;
+  border-color: #3d8052;
+  box-shadow: 0 0 0 3px rgba(61, 128, 82, 0.12);
+}
+
 .message-scroll {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -3527,7 +3605,9 @@ body {
 }
 
 .conversation-share-editor-foot {
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
 }
 
 .conversation-share-create {
@@ -3724,11 +3804,6 @@ body {
 }
 
 @media (max-width: 720px) {
-  .conversation-share-editor-foot {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .conversation-share-editor-foot .confirm-actions {
     flex-wrap: wrap;
   }
