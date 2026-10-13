@@ -3764,6 +3764,7 @@ body {
 .conversation-share-page-turns {
   display: grid;
   gap: 28px;
+  margin-top: 32px;
 }
 
 .conversation-share-page-turn {
