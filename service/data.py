@@ -1388,7 +1388,9 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
     document["processingTask"] = {**(document.get("processingTask") or {}), "backendManaged": True,
         "remoteTaskId": f"document-{result.lastrowid}", "status": "登记中", "mode": selected,
         "queueSequence": result.lastrowid, "revision": 1, "metadataSnapshot": processing_scheduler.metadata(document), "activeStages": {}, "submittedAt": stamp, "finishedAt": "", "message": "原件已归档，后端准备登记",
-        "totalPages": 0, "completedPages": 0, "finalizedPages": 0, "failedPages": []}
+        "totalPages": 0, "completedPages": 0, "finalizedPages": 0,
+        "stageProgress": {stage: {"done": 0, "total": 0} for stage in processing_scheduler.PROCESSING_STAGES},
+        "failedPages": []}
     document.update(status="登记中", updatedAt=stamp)
     connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(document), stamp, document_id))
     return document

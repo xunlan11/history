@@ -1,4 +1,4 @@
-﻿// 后端调度正文；浏览器轮询只用于显示，不触发 OCR/LLM 执行。
+// 后端调度正文；浏览器轮询只用于显示，不触发 OCR/LLM 执行。
 const PROCESSING_POLL_INTERVAL_MS = 1500;
 const processingPollTimers = new Map();
 const processingPollInFlight = new Set();
@@ -167,22 +167,25 @@ async function requestLlmTask(path, payload, options = {}) {
   }
 }
 
-let streamProgressMainFill, streamProgressSubFill, streamProgressOcrPages, streamProgressLlmPages;
-let streamProgressTotalNodes, streamOcrMarker, streamLlmMarker, streamOcrRingFill, streamLlmRingFill;
+const PROCESSING_STAGE_CONFIG = [
+  { key: "ocr", label: "文字识别", color: "ocr" },
+  { key: "variant", label: "简繁转换", color: "variant" },
+  { key: "punctuation", label: "标点符号", color: "punctuation" },
+  { key: "proofreading", label: "校对", color: "proofreading" },
+];
+let progressStageNodes = new Map();
 let backendProgressStatus, failedPageMarkers;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
   streamStatus?.remove();
-  streamProgressMainFill = streamProgress.querySelector(".progress-fill-ocr");
-  streamProgressSubFill = streamProgress.querySelector(".progress-fill-llm");
-  streamProgressOcrPages = streamProgress.querySelector(".progress-ocr-pages");
-  streamProgressLlmPages = streamProgress.querySelector(".progress-llm-pages");
-  streamProgressTotalNodes = streamProgress.querySelectorAll(".progress-total-pages");
-  streamOcrMarker = streamProgress.querySelector(".progress-marker-ocr");
-  streamLlmMarker = streamProgress.querySelector(".progress-marker-llm");
-  streamOcrRingFill = streamProgress.querySelector(".progress-ring-fill-ocr");
-  streamLlmRingFill = streamProgress.querySelector(".progress-ring-fill-llm");
+  progressStageNodes = new Map([...streamProgress.querySelectorAll("[data-progress-stage]")].map((node) => [node.dataset.progressStage, {
+    root: node,
+    fill: node.querySelector("[data-progress-fill]"),
+    pages: node.querySelector("[data-progress-pages]"),
+    total: node.querySelector("[data-progress-total]"),
+    ring: node.querySelector("[data-progress-ring]"),
+  }]));
   backendProgressStatus = document.createElement("p");
   backendProgressStatus.className = "backend-processing-status";
   backendProgressStatus.setAttribute("aria-live", "polite");
@@ -202,18 +205,16 @@ function setRingProgress(node, percent) {
   node.style.strokeDasharray = `${length}`;
   node.style.strokeDashoffset = `${length * (1 - clampPercent(percent) / 100)}`;
 }
-function setMarkerPosition(node, percent) {
-  if (node) node.style.left = `${Math.min(88, Math.max(4, clampPercent(percent)))}%`;
-}
 
 function renderFailedProcessingPages(item) {
   if (!failedPageMarkers) return;
+  const labels = Object.fromEntries(PROCESSING_STAGE_CONFIG.map((stage) => [stage.key, stage.label]));
   failedPageMarkers.replaceChildren();
   for (const failed of item.processingTask?.failedPages || []) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `processing-failed-page is-${failed.stage === "ocr" ? "ocr" : "llm"}`;
-    button.textContent = `${failed.stage === "ocr" ? "识别" : "整理"}失败：第 ${failed.pageNumber} 页`;
+    button.className = `processing-failed-page is-${failed.stage || "proofreading"}`;
+    button.textContent = `${labels[failed.stage] || "处理"}失败：第 ${failed.pageNumber} 页`;
     button.title = `${failed.message || "处理失败"}；左键跳转，右键删除失败页`;
     button.addEventListener("click", () => {
       const current = getLiveDocument(item.id);
@@ -248,25 +249,30 @@ function renderStreamProgress(item) {
     streamProgress?.classList.add("hidden");
     return;
   }
-  const total = task.totalPages || 0;
-  const ocrDone = Math.min(total, Number(task.completedPages) || 0);
-  const finalized = Math.min(total, Number(task.finalizedPages) || countFinalizedPages(item));
+  const total = Number(task.totalPages) || 0;
+  const legacyProgress = {
+    ocr: { done: Number(task.completedPages) || 0, total },
+    variant: { done: 0, total },
+    punctuation: { done: 0, total },
+    proofreading: { done: Number(task.finalizedPages) || countFinalizedPages(item), total },
+  };
+  const progress = task.stageProgress || legacyProgress;
   const finished = task.status === "已完成";
-  const ocrPercent = total > 0 ? ocrDone / total * 100 : 0;
-  const llmPercent = total > 0 ? finalized / total * 100 : 0;
   streamProgress?.classList.remove("hidden");
-  if (streamProgressMainFill) streamProgressMainFill.style.width = `${clampPercent(ocrPercent)}%`;
-  if (streamProgressSubFill) streamProgressSubFill.style.width = `${clampPercent(llmPercent)}%`;
-  if (streamProgressOcrPages) streamProgressOcrPages.textContent = `${ocrDone}`;
-  if (streamProgressLlmPages) streamProgressLlmPages.textContent = `${finalized}`;
-  streamProgressTotalNodes?.forEach((node) => { node.textContent = `${total}`; });
-  setMarkerPosition(streamLlmMarker, llmPercent);
-  setMarkerPosition(streamOcrMarker, ocrPercent);
-  // 浏览器定时器不模拟处理，也不驱动任务执行。
-  setRingProgress(streamOcrRingFill, finished ? 100 : task.activeStages?.ocr ? 5 : ocrPercent);
-  setRingProgress(streamLlmRingFill, finished ? 100 : task.activeStages?.llm ? 5 : llmPercent);
+  for (const stage of PROCESSING_STAGE_CONFIG) {
+    const nodes = progressStageNodes.get(stage.key);
+    if (!nodes) continue;
+    const entry = progress[stage.key] || legacyProgress[stage.key];
+    const done = Math.min(total, Number(entry?.done) || 0);
+    const percent = total > 0 ? done / total * 100 : 0;
+    const active = Boolean(task.activeStages?.[stage.key]);
+    if (nodes.fill) nodes.fill.style.width = `${clampPercent(percent)}%`;
+    if (nodes.pages) nodes.pages.textContent = `${done}`;
+    if (nodes.total) nodes.total.textContent = `${total}`;
+    setRingProgress(nodes.ring, finished ? 100 : active ? 5 : percent);
+  }
   if (backendProgressStatus) {
-    const mode = task.mode === "parallel" ? "并行" : "串行";
+    const mode = task.mode === "parallel" ? "并行流水线" : "串行逐页";
     backendProgressStatus.textContent = `${mode} · ${getProcessingTaskLabel(item)}${task.status === "等候中" ? "（后端自动续跑，无需保持浏览器打开）" : ""}`;
   }
   renderFailedProcessingPages(item);

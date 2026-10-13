@@ -1146,6 +1146,83 @@ body {
   font-weight: 700;
 }
 
+.progress-mode-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.progress-stage {
+  position: relative;
+  min-height: 66px;
+  padding: 8px 58px 8px 10px;
+  border: 1px solid var(--border, #e6ebe6);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+}
+
+.progress-stage-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.progress-stage-label {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.progress-stage-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-stage-count b {
+  color: var(--text);
+}
+
+.progress-stage-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2ef;
+}
+
+.progress-stage-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.35s ease;
+}
+
+.progress-stage-fill-ocr { background: var(--primary); }
+.progress-stage-fill-variant { background: #6d8fbd; }
+.progress-stage-fill-punctuation { background: #b27a42; }
+.progress-stage-fill-proofreading { background: var(--accent); }
+
+.progress-stage .progress-stage-ring {
+  position: absolute;
+  top: 9px;
+  right: 8px;
+  width: 38px;
+  height: 38px;
+}
+
+.progress-ring-fill-variant { stroke: #6d8fbd; }
+.progress-ring-fill-punctuation { stroke: #b27a42; }
+.progress-ring-fill-proofreading { stroke: var(--accent); }
+
 /* 进度区自上而下：OCR 页数 / 进度条 + 末尾总页数 / LLM 页数 */
 .progress-body {
   display: grid;

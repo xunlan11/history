@@ -395,6 +395,8 @@ function normalizeDocuments(items) {
             id: page.id,
             pageNumber: Number(page.pageNumber),
             ocrText: page.ocrText || "",
+            normalizedText: page.normalizedText || "",
+            punctuationDraftText: page.punctuationDraftText || "",
             cleanText: page.cleanText || "",
             punctuatedText: page.punctuatedText || "",
             notes: page.notes || "",
@@ -408,8 +410,12 @@ function normalizeDocuments(items) {
             imageSize: Number(page.imageSize) || 0,
             ocr: normalizeStoredOcr(page.ocr),
             processingRevision: Number(page.processingRevision) || 0,
+            stageStatus: page.stageStatus || {},
             ocrDone: page.ocrDone === true,
-            llmDone: page.llmDone === true,
+            variantDone: page.variantDone === true,
+            punctuationDone: page.punctuationDone === true,
+            proofreadingDone: page.proofreadingDone === true,
+            llmDone: page.llmDone === true || page.proofreadingDone === true,
             failureStage: page.failureStage || "",
             failureMessage: page.failureMessage || "",
             updatedAt: page.updatedAt || "",
@@ -1222,6 +1228,8 @@ function createProcessingTask(file) {
     remoteTaskId: "",
     totalPages: 0,
     completedPages: 0,
+    finalizedPages: 0,
+    stageProgress: normalizeStageProgress(null, 0),
     currentPage: 0,
     currentPageStage: "",
     currentPageProgress: 0,
@@ -1231,6 +1239,17 @@ function createProcessingTask(file) {
   };
 }
 
+function normalizeStageProgress(value, total = 0) {
+  const stages = ["ocr", "variant", "punctuation", "proofreading"];
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(stages.map((stage) => {
+    const entry = source[stage] || {};
+    return [stage, {
+      done: Math.min(Number(total) || 0, Math.max(0, Number(entry.done) || 0)),
+      total: Number(entry.total) || Number(total) || 0,
+    }];
+  }));
+}
 function normalizeProcessingTask(task) {
   if (!task) {
     return null;
@@ -1243,6 +1262,7 @@ function normalizeProcessingTask(task) {
     revision: Number(task.revision) || 0,
     metadataSnapshot: task.metadataSnapshot || null,
     activeStages: task.activeStages || {},
+    stageProgress: normalizeStageProgress(task.stageProgress, task.totalPages),
     finalizedPages: Number(task.finalizedPages) || 0,
     failedPages: Array.isArray(task.failedPages) ? task.failedPages : [],
     queueSequence: Number(task.queueSequence) || 0,
@@ -1271,8 +1291,11 @@ function getProcessingTaskLabel(item) {
 
   if (task.pausedForRegistration) return "登记准备优先，正文暂缓调度";
   const total = task.totalPages || 0;
-  const ocrDone = task.completedPages || 0;
-  const finalized = task.backendManaged ? task.finalizedPages || 0 : countFinalizedPages(item);
+  const stageProgress = task.stageProgress || {};
+  const ocrDone = stageProgress.ocr?.done ?? task.completedPages ?? 0;
+  const variantDone = stageProgress.variant?.done ?? 0;
+  const punctuationDone = stageProgress.punctuation?.done ?? 0;
+  const finalized = stageProgress.proofreading?.done ?? (task.backendManaged ? task.finalizedPages || 0 : countFinalizedPages(item));
 
   // 登记阶段（后端元数据识别）也计入同一条进度显示。
   if (total === 0 && isDocumentRegistrationPending(item)) {
@@ -1280,14 +1303,14 @@ function getProcessingTaskLabel(item) {
   }
 
   if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {
-    return `${task.status} 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
+    return `${task.status} 识别 ${ocrDone}/${total} · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
   }
 
   if (total > 0 && (task.status === "已完成" || task.status === "已回填")) {
     if (finalized < total) {
-      return `识别完成 · 整理 ${finalized}/${total}`;
+      return `识别完成 · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
     }
-    return `处理完成 识别 ${ocrDone}/${total} · 整理 ${finalized}/${total}`;
+    return `处理完成 识别 ${ocrDone}/${total} · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
   }
 
   return task.status || "等待处理";

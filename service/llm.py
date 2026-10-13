@@ -62,6 +62,9 @@ class PreviousPageContext(BaseModel):
 
 class FinalizePageRequest(LlmTaskRequest):
     ocrText: str = ""
+    normalizedText: str = ""
+    punctuationDraftText: str = ""
+    # 兼容旧调用方；新调度器使用 normalizedText / punctuationDraftText。
     cleanText: str = ""
     punctuatedText: str = ""
     previousPages: list[PreviousPageContext] = Field(default_factory=list)
@@ -180,15 +183,16 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 请处理一页近代军史文献整理文本。
 
 任务：
-1. 在不增删、不改写、不概括原文内容的前提下，进行简体转换、断句和添加现代标点。
-2. 保留人名、地名、机构名、军队番号、年号、日期等专名信息。
-3. 如果输入来自竖排古籍 OCR，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
-4. 不能把推测内容直接写入正文；不确定处放入 uncertainItems。
-5. 输出必须是 JSON，不要输出解释文字。
+1. 输入已经由 OpenCC 完成简体转换；不要再次进行简繁转换或改写字词。
+2. 在不增删、不改写、不概括原文内容的前提下，进行断句和添加现代标点。
+3. 保留人名、地名、机构名、军队番号、年号、日期等专名信息。
+4. 如果输入来自竖排古籍 OCR，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
+5. 不能把推测内容直接写入正文；不确定处放入 uncertainItems。
+6. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
-  "punctuatedText": "简体标点文本",
+  "punctuatedText": "已完成断句和标点的文本",
   "uncertainItems": ["不确定处"],
   "warnings": ["处理提示"]
 }}
@@ -229,7 +233,9 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
 @app.post("/llm/finalize-page")
 def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
-    source_text = payload.punctuatedText or payload.cleanText or payload.ocrText
+    normalized_text = payload.normalizedText or payload.cleanText or payload.ocrText
+    punctuation_draft = payload.punctuationDraftText or payload.punctuatedText
+    source_text = punctuation_draft or normalized_text or payload.ocrText
     previous_pages = "\n\n".join(
         f"第 {page.pageNumber or '?'} 页：\n{page.text}"
         for page in payload.previousPages
@@ -240,14 +246,15 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 请将一页近代军史文献 OCR 文本整理成一版可继续人工编辑的正文。
 
 任务：
-1. 以 OCR 原始录文为底本，参考已有整理文本和简体标点文本。
-2. 修正常见 OCR 错字、漏空格、断行和明显排版噪声。
-3. 进行简体转换、断句和添加现代标点。
-4. 保留原文意思和专名信息，不增补史实，不改写为摘要。
-5. 如果 OCR 原始录文来自竖排古籍，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
-6. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
-7. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
-8. 输出必须是 JSON，不要输出解释文字。
+1. OCR 原始录文仅作为核对底本；输入文本已经由 OpenCC 完成简体转换，并已经完成一次断句和标点。
+2. 修正常见 OCR 错字、漏字、重复字、断行和明显排版噪声，但只能依据 OCR 底本、当前页文本和上下文作出有依据的修改。
+3. 保持简体输出，不要重新进行大范围简繁转换；只有在明确修正 OCR 字符时才修改个别字。
+4. 以已有标点文本为基础，只有内容修正导致句界变化时才调整相关标点。
+5. 保留原文意思和专名信息，不增补史实，不改写为摘要。
+6. 如果 OCR 原始录文来自竖排古籍，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
+7. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
+8. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
+9. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
@@ -266,11 +273,11 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 OCR 原始录文：
 {payload.ocrText}
 
-已有忠实整理文本：
-{payload.cleanText}
+OpenCC 简体文本：
+{normalized_text}
 
-已有简体标点文本：
-{payload.punctuatedText}
+已有标点文本：
+{punctuation_draft}
 
 优先处理文本：
 {source_text}
@@ -293,6 +300,8 @@ OCR 原始录文：
             "documentId": payload.documentId,
             "pageId": payload.pageId,
             "pageNumber": payload.pageNumber,
+            "normalizedText": normalized_text,
+            "punctuationDraftText": punctuation_draft,
             "cleanText": clean_text,
             "punctuatedText": punctuated_text,
             "warnings": warnings,

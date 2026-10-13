@@ -21,10 +21,19 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from service.variant import to_simplified
+
 logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "failed", "cancelled"}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = float(os.getenv("PROCESSING_RETRY_SECONDS", "10"))
+PROCESSING_STAGES = ("ocr", "variant", "punctuation", "proofreading")
+STAGE_LABELS = {
+    "ocr": "文字识别",
+    "variant": "简繁转换",
+    "punctuation": "标点符号",
+    "proofreading": "校对",
+}
 
 
 class ServiceUnavailable(RuntimeError):
@@ -59,11 +68,14 @@ def metadata(document):
 
 
 def upgrade_checkpoint(checkpoint):
-    """登记阶段只剩元数据识别：旧任务的封面步骤检查点直接前进到下一步。"""
+    """升级旧检查点，同时为四阶段正文处理补齐默认状态。"""
     if checkpoint.get("registrationStep") in {"cover_candidate", "cover"}:
         checkpoint["registrationStep"] = "metadata_candidate"
     for key in ("coverCandidate", "cover"):
         checkpoint.pop(key, None)
+    checkpoint.setdefault("stageRetries", {})
+    checkpoint.setdefault("stageErrors", {})
+    checkpoint.setdefault("stageWaiting", {})
     return checkpoint
 
 
@@ -157,17 +169,31 @@ class HttpServices:
             if not image_path.is_relative_to(Path(job["asset_root"]).resolve()):
                 raise ProcessingFailure("页面图片路径无效")
             return self._form("/ocr", "image", image_path, {"pageNumber": page_number})
-        if operation == "llm":
+        if operation == "variant":
+            page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
+            return {"normalizedText": to_simplified(str(page.get("ocrText") or ""))}
+        if operation == "punctuation":
+            page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
+            result = self._llm("punctuate", {
+                "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
+                "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
+                "sourceLayer": "clean"})
+            if page.get("normalizedText", "").strip() and not result.get("punctuatedText"):
+                raise ProcessingFailure("标点服务没有返回正文")
+            return result
+        if operation == "proofreading":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             previous = sorted((p for p in document["pages"] if p["pageNumber"] < page_number and (
-                p.get("cleanText") or p.get("punctuatedText"))), key=lambda p: p["pageNumber"])[-2:]
+                p.get("cleanText") or p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText"))),
+                key=lambda p: p["pageNumber"])[-2:]
             result = self._llm("finalize-page", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
-                "cleanText": page.get("cleanText", ""), "punctuatedText": page.get("punctuatedText", ""),
-                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("cleanText", "")} for p in previous]})
+                "normalizedText": page.get("normalizedText", ""),
+                "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
+                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("cleanText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
             if page.get("ocrText", "").strip() and not (result.get("cleanText") or result.get("punctuatedText")):
-                raise ProcessingFailure("整理服务没有返回正文")
+                raise ProcessingFailure("校对服务没有返回正文")
             return result
         raise ProcessingFailure(f"未知阶段：{operation}")
 
@@ -233,7 +259,7 @@ class Scheduler:
         self.data = data
         self.services = services or HttpServices()
         self.clock = clock
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="document-stage")
+        self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="document-stage")
         self.running: dict[str, tuple[Future, str, str, int]] = {}
         self.stop_event = threading.Event()
         self.thread = None
@@ -246,15 +272,79 @@ class Scheduler:
             return None
         return dict(row), json.loads(document["payload"]), upgrade_checkpoint(json.loads(row["checkpoint"]))
 
+
+
     @staticmethod
     def _page(doc, number):
         for page in doc["pages"]:
             if page["pageNumber"] == number:
+                page.setdefault("stageStatus", {})
+                page.setdefault("normalizedText", "")
+                page.setdefault("punctuationDraftText", "")
+                if page.get("llmDone") and not page.get("proofreadingDone"):
+                    page["proofreadingDone"] = True
+                    page["stageStatus"].setdefault("proofreading", "done")
+                for stage in PROCESSING_STAGES:
+                    page.setdefault(f"{stage}Done", False)
+                page.setdefault("llmDone", page.get("proofreadingDone", False))
                 return page
-        page = {"id": f"{doc['id']}-page-{number}", "pageNumber": number, "ocrText": "", "cleanText": "", "punctuatedText": "", "notes": "", "status": "待整理"}
+        page = {
+            "id": f"{doc['id']}-page-{number}", "pageNumber": number,
+            "ocrText": "", "normalizedText": "", "punctuationDraftText": "",
+            "cleanText": "", "punctuatedText": "", "notes": "",
+            "stageStatus": {}, "status": "待整理",
+        }
         doc["pages"].append(page)
         doc["pages"].sort(key=lambda p: p["pageNumber"])
         return page
+
+    @staticmethod
+    def _stage_terminal(page, stage):
+        if stage == "proofreading" and page.get("llmDone"):
+            return True
+        if page.get(f"{stage}Done"):
+            return True
+        status = (page.get("stageStatus") or {}).get(stage)
+        if status in {"done", "failed", "skipped"}:
+            return True
+        failure_stage = page.get("failureStage")
+        if failure_stage in PROCESSING_STAGES:
+            failure_index = PROCESSING_STAGES.index(failure_stage)
+            return PROCESSING_STAGES.index(stage) > failure_index and failure_stage in {"ocr", "variant"}
+        return False
+
+    @staticmethod
+    def _stage_failed(page, stage):
+        return (page.get("stageStatus") or {}).get(stage) == "failed" or page.get("failureStage") == stage
+
+    @staticmethod
+    def _set_stage(page, stage, status):
+        page.setdefault("stageStatus", {})[stage] = status
+        page[f"{stage}Done"] = True
+        if stage == "proofreading":
+            page["llmDone"] = True
+
+    @classmethod
+    def _skip_downstream(cls, page, stage):
+        index = PROCESSING_STAGES.index(stage)
+        for downstream in PROCESSING_STAGES[index + 1:]:
+            cls._set_stage(page, downstream, "skipped")
+
+    @classmethod
+    def _stage_progress(cls, doc, cp, total):
+        omitted = set(cp.get("omittedPages", []))
+        pages = {int(page.get("pageNumber")): page for page in doc.get("pages", []) if page.get("pageNumber")}
+        progress = {}
+        for stage in PROCESSING_STAGES:
+            done = len(omitted)
+            for number in range(1, total + 1):
+                if number in omitted:
+                    continue
+                page = pages.get(number)
+                if page and cls._stage_terminal(page, stage):
+                    done += 1
+            progress[stage] = {"done": min(total, done), "total": total}
+        return progress
 
     def _record(self, document_id, operation, number, future):
         with self.data.database() as connection, connection:
@@ -264,13 +354,13 @@ class Scheduler:
                 return
             job, doc, cp = loaded
             task = doc["processingTask"]
-            task.setdefault("activeStages", {}).pop("registration" if job["phase"] == "registration" else "ocr" if operation in {"prepare", "render"} else operation, None)
+            active_stage = "ocr" if operation == "render" else operation
+            task.setdefault("activeStages", {}).pop(active_stage, None)
             key = f"{operation}:{number}"
             try:
                 result = future.result()
             except Exception as exc:
                 task["message"] = str(exc)
-                # 并发通道成功时不能误清除另一通道的等待状态；每个失败操作都有独立的持久化重试。
                 cp.setdefault("errors", {})[key] = str(exc)
                 if isinstance(exc, ServiceUnavailable):
                     cp.setdefault("waiting", {})[key] = self.clock() + RETRY_SECONDS
@@ -280,19 +370,20 @@ class Scheduler:
                     attempts[key] = attempts.get(key, 0) + 1
                     if attempts[key] < MAX_ATTEMPTS:
                         cp.setdefault("retries", {})[key] = self.clock() + RETRY_SECONDS
-                    elif job["phase"] == "body" and operation in {"render", "ocr", "llm"}:
+                    elif job["phase"] == "body" and operation in {"render", *PROCESSING_STAGES}:
                         page = self._page(doc, number)
-                        failed_lane = "ocr" if operation == "render" else operation
+                        failed_stage = "ocr" if operation == "render" else operation
                         page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
-                        page["failureStage"] = failed_lane
+                        page["failureStage"] = page.get("failureStage") or failed_stage
                         page["failureMessage"] = str(exc)
-                        page["status"] = "识别失败" if failed_lane == "ocr" else "生成失败"
-                        page[f"{failed_lane}Done"] = True
-                        if failed_lane == "ocr":
-                            page["llmDone"] = True
-                            cp["ocrNext"] = number + 1
-                        else:
-                            cp["llmNext"] = number + 1
+                        page["status"] = f"{STAGE_LABELS[failed_stage]}失败"
+                        self._set_stage(page, failed_stage, "failed")
+                        if failed_stage in {"ocr", "variant"}:
+                            self._skip_downstream(page, failed_stage)
+                        elif failed_stage == "proofreading":
+                            page["cleanText"] = page.get("normalizedText", "")
+                            page["punctuatedText"] = page.get("punctuationDraftText") or page.get("normalizedText", "")
+                        cp.setdefault("stageErrors", {})[failed_stage] = str(exc)
                         cp.get("retries", {}).pop(key, None)
                     else:
                         job["status"] = "failed"
@@ -301,7 +392,6 @@ class Scheduler:
                         doc["status"] = "登记未完成" if job["phase"] == "registration" else "处理失败"
                         if job["phase"] == "registration":
                             doc["registration"].update(status="failed", error=str(exc))
-                # 按健康状态分类的失败不消耗普通重试次数。
             else:
                 for field in ("waiting", "retries", "errors", "attempts"):
                     cp.get(field, {}).pop(key, None)
@@ -319,8 +409,8 @@ class Scheduler:
                     task.update(status="排队中", message="登记准备完成，正文按后端队列顺序处理。")
                     doc["status"] = "排队中"
                 elif operation == "prepare":
-                    cp.update(totalPages=result["totalPages"], ocrNext=1, llmNext=1)
-                    # 保留初始页 ID（阅读页选择），不丢弃已处理页面：prepare 只会在正文 OCR 前执行。
+                    cp.update(totalPages=result["totalPages"], stageNext={stage: 1 for stage in PROCESSING_STAGES})
+                    cp.setdefault("omittedPages", [])
                     doc["pages"] = doc.get("pages", [])[:1]
                     task["totalPages"] = result["totalPages"]
                 elif operation == "render":
@@ -330,15 +420,29 @@ class Scheduler:
                 elif operation == "ocr":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
-                    page.update(ocrText=str(result.get("text") or ""), ocr={k: result.get(k) for k in ("confidence", "engine", "warnings", "width", "height")}, ocrDone=True, status="已识别",
+                    page.update(ocrText=str(result.get("text") or ""), ocr={k: result.get(k) for k in ("confidence", "engine", "warnings", "width", "height")}, status="已识别",
                                 imageName=page.get("imageName") or f"page-{number}.png")
-                    cp["ocrNext"] = number + 1
-                elif operation == "llm":
+                    self._set_stage(page, "ocr", "done")
+                elif operation == "variant":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
-                    page.update(cleanText=str(result.get("cleanText") or "").strip(),
-                                punctuatedText=str(result.get("punctuatedText") or "").strip(), llmDone=True, status="已生成整理稿")
-                    cp["llmNext"] = number + 1
+                    page["normalizedText"] = str(result.get("normalizedText") or "").strip()
+                    page["status"] = "已完成简繁转换"
+                    self._set_stage(page, "variant", "done")
+                elif operation == "punctuation":
+                    page = self._page(doc, number)
+                    page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
+                    page["punctuationDraftText"] = to_simplified(str(result.get("punctuatedText") or "").strip())
+                    page["punctuationWarnings"] = result.get("warnings") or []
+                    page["status"] = "已完成标点"
+                    self._set_stage(page, "punctuation", "done")
+                elif operation == "proofreading":
+                    page = self._page(doc, number)
+                    page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
+                    page.update(cleanText=to_simplified(str(result.get("cleanText") or "").strip()),
+                                punctuatedText=to_simplified(str(result.get("punctuatedText") or "").strip()),
+                                proofreadingWarnings=result.get("warnings") or [], status="已生成整理稿")
+                    self._set_stage(page, "proofreading", "done")
             self._update_status(job, doc, cp)
             save_job_state(self.data, connection, job, doc, cp)
 
@@ -347,8 +451,11 @@ class Scheduler:
             return
         task = doc["processingTask"]
         if job["phase"] == "body":
-            task["completedPages"] = sum(bool(p.get("ocrDone")) for p in doc["pages"]) + len(cp.get("omittedPages", []))
-            task["finalizedPages"] = sum(bool(p.get("llmDone")) for p in doc["pages"]) + len(cp.get("omittedPages", []))
+            total = int(cp.get("totalPages") or task.get("totalPages") or 0)
+            progress = self._stage_progress(doc, cp, total)
+            task["stageProgress"] = progress
+            task["completedPages"] = progress["ocr"]["done"]
+            task["finalizedPages"] = progress["proofreading"]["done"]
             task["failedPages"] = [{"pageNumber": p["pageNumber"], "stage": p["failureStage"], "message": p.get("failureMessage", "")} for p in doc["pages"] if p.get("failureStage")]
         waiting = cp.get("waiting", {})
         retry_times = list(waiting.values()) + list(cp.get("retries", {}).values())
@@ -457,77 +564,96 @@ class Scheduler:
                 self._launch("ocr", job, doc, cp, "prepare")
             return
         total = cp["totalPages"]
-        # OCR 失败的页面仍保持可见，但无需调用 LLM。
-        previous_llm_next = cp["llmNext"]
-        while cp["llmNext"] < cp["ocrNext"]:
-            if cp["llmNext"] in cp.get("omittedPages", []):
-                cp["llmNext"] += 1
-                continue
-            page = self._page(doc, cp["llmNext"])
-            if not page.get("llmDone"):
-                break
-            cp["llmNext"] += 1
-        if cp["llmNext"] != previous_llm_next:
-            with self.data.database() as connection, connection:
-                connection.execute("BEGIN IMMEDIATE")
-                loaded = self._load(connection, doc["id"])
-                if not loaded:
-                    return
-                saved_job, saved_doc, saved_cp = loaded
-                saved_cp["llmNext"] = cp["llmNext"]
-                save_job_state(self.data, connection, saved_job, saved_doc, saved_cp)
-        if cp["ocrNext"] > total and cp["llmNext"] > total and not self.running:
+        if self._body_complete(doc, cp, total) and not self.running:
             with self.data.database() as connection, connection:
                 connection.execute("BEGIN IMMEDIATE")
                 loaded = self._load(connection, doc["id"])
                 if not loaded:
                     return
                 job, doc, saved = loaded
-                saved["llmNext"] = cp["llmNext"]
                 job.update(status="completed", retry_at=0)
                 task = doc["processingTask"]
                 task.update(status="已完成", finishedAt=self.data.now_iso(), currentPageProgress=100,
                             currentPageStage="已完成", finalizedPages=total, pausedForRegistration=False, activeStages={},
+                            stageProgress={stage: {"done": total, "total": total} for stage in PROCESSING_STAGES},
                             message="正文处理及结果保存完成" + ("，失败页需人工处理" if task.get("failedPages") else ""))
+                task["completedPages"] = total
                 doc["status"] = "已完成"
                 save_job_state(self.data, connection, job, doc, saved)
             return
-        for lane, number in self._body_operations(job, cp, total):
-            operation = "render" if lane == "ocr" and cp.get("renderedPage") != number else lane
+        for lane, operation, number in self._body_operations(job, doc, cp, total):
             key = f"{operation}:{number}"
             if lane in self.running or cp.get("retries", {}).get(key, 0) > self.clock():
                 continue
-            # 服务中断时只重试导致中断的操作，再推进另一条通道。因此文献会停在准确检查点，
-            # 不会静默改变已选择的模式。
             if cp.get("waiting") and key not in cp["waiting"]:
                 continue
             if cp.get("waiting", {}).get(key, 0) > self.clock():
                 continue
             self._launch(lane, job, doc, cp, operation, number)
 
-    @staticmethod
-    def _body_operations(job, cp, total):
-        """返回固定文献模式下接下来要执行的真实阶段。
+    @classmethod
+    def _body_complete(cls, doc, cp, total):
+        omitted = set(cp.get("omittedPages", []))
+        for number in range(1, total + 1):
+            if number in omitted:
+                continue
+            page = next((item for item in doc.get("pages", []) if item.get("pageNumber") == number), None)
+            if not page or not cls._stage_terminal(page, "proofreading"):
+                return False
+        return True
 
-        串行模式每次只执行一个操作：先对第 N 页执行 OCR/渲染，再由共享的
-        LLM 完成第 N 页，最后进入第 N+1 页。并行模式有两条独立通道：OCR
-        可以推进到任意页面，LLM 通道则按顺序消费已完成 OCR 的页面。两条通道
-        使用相同的服务契约和提示词，因此模式只改变调度方式，不改变语义。
-        """
+    @classmethod
+    def _body_operations(cls, job, doc, cp, total):
+        """选择依赖就绪的阶段；串行逐页完成， 并行跨页形成四阶段流水线。"""
+        omitted = set(cp.get("omittedPages", []))
+
+        def page_for(number):
+            return next((item for item in doc.get("pages", []) if item.get("pageNumber") == number), None)
+
+        def ready(stage, page):
+            if cls._stage_terminal(page, stage):
+                return False
+            index = PROCESSING_STAGES.index(stage)
+            previous = PROCESSING_STAGES[index - 1] if index else None
+            if previous and not cls._stage_terminal(page, previous):
+                return False
+            if stage in {"variant", "punctuation", "proofreading"} and cls._stage_failed(page, "ocr"):
+                return False
+            if stage in {"punctuation", "proofreading"} and cls._stage_failed(page, "variant"):
+                return False
+            return True
+
+        def operation_for(stage, page):
+            if stage == "ocr" and not page.get("imageFile") and not page.get("imageDataUrl"):
+                return ("ocr", "render")
+            return (stage, stage)
+
         if job["mode"] == "serial":
-            if cp["ocrNext"] <= total and cp["ocrNext"] <= cp["llmNext"]:
-                return [("ocr", cp["ocrNext"])]
-            if cp["llmNext"] < cp["ocrNext"] and cp["llmNext"] <= total:
-                return [("llm", cp["llmNext"])]
+            for number in range(1, total + 1):
+                if number in omitted:
+                    continue
+                page = page_for(number) or {"pageNumber": number}
+                for stage in PROCESSING_STAGES:
+                    if ready(stage, page):
+                        lane, operation = operation_for(stage, page)
+                        return [(lane, operation, number)]
+                if not cls._stage_terminal(page, "proofreading"):
+                    return []
             return []
 
         operations = []
-        if cp["ocrNext"] <= total:
-            operations.append(("ocr", cp["ocrNext"]))
-        if cp["llmNext"] < cp["ocrNext"] and cp["llmNext"] <= total:
-            operations.append(("llm", cp["llmNext"]))
+        for stage in PROCESSING_STAGES:
+            for number in range(1, total + 1):
+                if number in omitted:
+                    continue
+                page = page_for(number)
+                if page is None:
+                    page = {"pageNumber": number}
+                if ready(stage, page):
+                    lane, operation = operation_for(stage, page)
+                    operations.append((lane, operation, number))
+                    break
         return operations
-
     def _acquire_worker_lock(self):
         # 进程生命周期内的操作系统锁可防止重复工作器，包括 uvicorn --workers。
         # 进程退出后锁会自动释放。
