@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
+from service import variant as variant_service
 from contextvars import ContextVar
 from service.wenqu_sso.session import SsoResolver, verify_service_token
 
@@ -124,6 +125,11 @@ class RebindPayload(BaseModel):
 
 class PageAnnotationUpdate(BaseModel):
     content: str = Field(default="", max_length=100_000)
+
+
+class VariantConvertPayload(BaseModel):
+    variant: str = "simplified"
+    texts: list[str] = Field(default_factory=list, max_length=5000)
 
 
 def now_iso() -> str:
@@ -1340,6 +1346,16 @@ def vacuum_storage() -> dict[str, Any]:
         return {"status": "ok", "database": str(DB_PATH), "beforeBytes": before, "afterBytes": after}
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"数据库压缩失败：{exc}") from exc
+
+
+@app.post("/api/variant")
+def convert_variant(payload: VariantConvertPayload) -> dict[str, Any]:
+    """按变体批量转换文本（简/繁），供前端“全局简繁体”切换使用。"""
+    variant = variant_service.normalize_variant(payload.variant)
+    return {
+        "variant": variant,
+        "texts": variant_service.convert_many(payload.texts, variant),
+    }
 
 
 class ProcessingSubmission(BaseModel):

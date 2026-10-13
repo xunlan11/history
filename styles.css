@@ -2437,6 +2437,10 @@ body {
   margin-bottom: 18px;
 }
 
+.settings-field + .settings-field {
+  margin-top: 14px;
+}
+
 .settings-header h2,
 .settings-field-label {
   margin: 0;

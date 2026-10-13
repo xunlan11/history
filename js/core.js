@@ -15,6 +15,7 @@ const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `w
 
 const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
+const VARIANT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.variant.schema1`;
 const DATA_SCHEMA_VERSION = 7;
 
 function endpoint(proxiedPath) {
@@ -38,6 +39,7 @@ const LLM_SERVICE_URL = endpoint("/llm/llm");
 const LLM_HEALTH_URL = endpoint("/llm/health");
 const VERSION_STATUS_URL = endpoint("/version/version");
 const VERSION_UPDATE_URL = endpoint("/version/update");
+const VARIANT_API_URL = endpoint("/data/api/variant");
 
 // —— 运行时品牌（config.js 在各页 body 末尾最先加载，可安全访问上方 DOM）——
 // 首页“大标题”元素用 id="home-site-title" 标记，随站点显示对应名称；
@@ -280,6 +282,7 @@ const saveConversationShareButton = document.querySelector("#save-conversation-s
 const deleteConversationShareButton = document.querySelector("#delete-conversation-share");
 const conversationShareLink = document.querySelector("#conversation-share-link");
 const fontOptionButtons = document.querySelectorAll("[data-font-option]");
+const variantOptionButtons = document.querySelectorAll("[data-variant-option]");
 const openSettingsButton = document.querySelector("#open-settings");
 const settingsDialog = document.querySelector("#settings-dialog");
 const closeSettingsButton = document.querySelector("#close-settings");

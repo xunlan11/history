@@ -12,6 +12,7 @@ dependencies = [
     "Pillow",
     "PyMuPDF",
     "psycopg[binary]>=3.1",
+    "opencc>=1.4.2",
 ]
 
 [tool.uv]
