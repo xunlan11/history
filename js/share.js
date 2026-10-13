@@ -34,7 +34,7 @@
 
   function render(payload) {
     title.textContent = payload.title || "分享的对话";
-    status.textContent = "只读分享 · 内容按原对话顺序展示";
+    status.textContent = "";
     turns.replaceChildren();
     (payload.turns || []).forEach((turn, index) => {
       const article = document.createElement("article");

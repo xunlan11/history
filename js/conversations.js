@@ -1521,8 +1521,6 @@ function showConversationShareLink(token) {
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(url);
-      copy.textContent = "已复制";
-      window.setTimeout(() => { copy.textContent = "复制"; }, 1200);
     } catch (_) {
       window.prompt("复制链接", url);
     }

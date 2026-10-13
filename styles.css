@@ -3728,15 +3728,26 @@ body {
 }
 
 .conversation-share-page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--line);
 }
 
+.conversation-share-page-head .eyebrow {
+  flex: 0 0 auto;
+  font-size: clamp(26px, 4vw, 38px);
+  line-height: 1.25;
+}
+
 .conversation-share-page-head h1 {
-  margin: 8px 0 0;
+  margin: 0;
   color: var(--text);
   font-size: clamp(26px, 4vw, 38px);
   line-height: 1.25;
+  text-align: right;
   overflow-wrap: anywhere;
 }
 
@@ -3744,6 +3755,10 @@ body {
   margin: 18px 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.conversation-share-page-status:empty {
+  display: none;
 }
 
 .conversation-share-page-turns {
@@ -3824,6 +3839,10 @@ body {
 
 @media (max-width: 720px) {
   .conversation-share-create {
+    flex-wrap: wrap;
+  }
+
+  .conversation-share-page-head {
     flex-wrap: wrap;
   }
 }
