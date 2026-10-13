@@ -3640,7 +3640,7 @@ body {
 .conversation-share-selection {
   display: grid;
   gap: 7px;
-  max-height: 280px;
+  max-height: 300px;
   overflow-x: hidden;
   overflow-y: auto;
 }

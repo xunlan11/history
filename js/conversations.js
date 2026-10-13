@@ -1495,7 +1495,7 @@ function updateConversationShareSelectionSummary() {
   if (conversationShareCount) conversationShareCount.textContent = `已选择 ${selected.length}/${inputs.length} 轮`;
   if (saveConversationShareButton) saveConversationShareButton.disabled = selected.length === 0;
   if (selectAllConversationShareButton) {
-    selectAllConversationShareButton.textContent = inputs.length > 0 && selected.length === inputs.length ? "清空选择" : "全选";
+    selectAllConversationShareButton.textContent = inputs.length > 0 && selected.length === inputs.length ? "清空" : "全选";
   }
 }
 
@@ -1561,7 +1561,9 @@ async function saveConversationShare() {
   try {
     persistConversations();
     await flushPendingSync();
-    const existingToken = conversation.share?.active ? conversation.share.token : "";
+    const syncedConversation = conversations.find((item) => item.id === conversation.id);
+    if (!syncedConversation) throw new Error("当前对话已不存在，无法保存分享。");
+    const existingToken = syncedConversation.share?.active ? syncedConversation.share.token : "";
     const response = await fetch(existingToken ? `${CONVERSATION_SHARE_API_URL}/${encodeURIComponent(existingToken)}` : CONVERSATION_SHARE_API_URL, {
       method: existingToken ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -1569,12 +1571,15 @@ async function saveConversationShare() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `分享保存失败（${response.status}）`);
-    conversation.share = normalizeConversationShare({ token: payload.token, selectedTurnIds: payload.selectedTurnIds, active: true, updatedAt: payload.updatedAt });
+    // 同步及网络请求期间可能替换对话对象，分享结果必须写入当前状态。
+    const currentConversation = conversations.find((item) => item.id === conversation.id);
+    if (!currentConversation) throw new Error("当前对话已不存在，无法保存分享。");
+    currentConversation.share = normalizeConversationShare({ token: payload.token, selectedTurnIds: payload.selectedTurnIds, active: true, updatedAt: payload.updatedAt });
     conversationShareSelectionIds = new Set(payload.selectedTurnIds || turnIds);
     persistConversations();
     renderConversationList();
     renderConversationShareEditor();
-    copyConversationShareLink(conversation.share.token);
+    copyConversationShareLink(currentConversation.share.token);
   } catch (error) {
     if (typeof showUploadToast === "function") showUploadToast(error.message || "分享保存失败。");
   } finally {
