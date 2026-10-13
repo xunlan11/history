@@ -1,17 +1,14 @@
 <section class="conversation-share-editor hidden" id="conversation-share-editor" role="dialog" aria-modal="true" aria-labelledby="conversation-share-title" aria-label="选择分享内容">
   <div class="conversation-share-editor-card">
     <div class="conversation-share-editor-head">
-      <div>
-        <strong id="conversation-share-title">选择要分享的对话轮次</strong>
+      <strong id="conversation-share-title"><span id="conversation-share-count" aria-live="polite">已选择 0/0 轮</span></strong>
+      <div class="confirm-actions">
+        <button class="secondary-button" id="select-all-conversation-share" type="button">全选</button>
+        <button class="ghost-link" id="close-conversation-share" type="button">取消</button>
       </div>
-      <button class="ghost-link" id="close-conversation-share" type="button">取消</button>
     </div>
     <div class="conversation-share-selection" id="conversation-share-selection"></div>
     <div class="conversation-share-editor-foot">
-      <div class="confirm-actions">
-        <span id="conversation-share-count">已选择 0 轮</span>
-        <button class="secondary-button" id="select-all-conversation-share" type="button">全选</button>
-      </div>
       <div class="conversation-share-create">
         <button class="primary-button" id="save-conversation-share" type="button">创建链接</button>
         <div class="conversation-share-link hidden" id="conversation-share-link"></div>

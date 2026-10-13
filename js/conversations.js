@@ -1492,7 +1492,7 @@ function updateConversationShareSelectionSummary() {
     ? Array.from(conversationShareSelection.querySelectorAll("input"))
     : [];
   const selected = inputs.filter((input) => input.checked);
-  if (conversationShareCount) conversationShareCount.textContent = `已选择 ${selected.length} 轮`;
+  if (conversationShareCount) conversationShareCount.textContent = `已选择 ${selected.length}/${inputs.length} 轮`;
   if (saveConversationShareButton) saveConversationShareButton.disabled = selected.length === 0;
   if (selectAllConversationShareButton) {
     selectAllConversationShareButton.textContent = inputs.length > 0 && selected.length === inputs.length ? "清空选择" : "全选";
