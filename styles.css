@@ -264,8 +264,10 @@ label {
   margin: 0;
 }
 
-.reader-detail-heading {
-  margin-bottom: 8px;
+/* 复合选择器提升优先级：文件更靠后的 .section-heading 同为单类优先级，
+   不加前缀时其 16px 会覆盖这里的值，标题与内容间距偏大 */
+.section-heading.reader-detail-heading {
+  margin-bottom: 6px;
 }
 
 .reader-detail-heading h3 {
