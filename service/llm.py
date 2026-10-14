@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import socket
+import unicodedata
 import urllib.error
 import urllib.request
 from typing import Any, Literal
@@ -108,6 +110,78 @@ class LlmServiceUnavailable(LlmServiceError):
     """无法建立连接或探测超时；区别于服务已响应但未就绪。"""
 
 
+# 用于校验“模型只加了标点”的正文比较：标点与空白都不算正文字符。
+COMPARE_IGNORED_CATEGORIES = {"P", "Z"}
+
+
+def normalize_layout_text(text: str) -> str:
+    """清理 OCR 版面文本的空白，但保留逐行、逐列的换行。
+
+    这些换行来自 OCR 版面：竖排古籍一行就是一列，需要抬头（抬格）的字词还会单独成行，
+    所以换行本身不代表自然段边界。哪一处换行该删、该留交给大模型按语义判断；代码只做
+    空白清理，并把原文里确定的段落分隔（空行）统一成一个空行。
+    """
+    if not text:
+        return ""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    kept: list[str] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def content_characters(text: str) -> str:
+    """只保留正文字符：去掉标点、空白和其它排版符号，用于校验与对齐。"""
+    return "".join(
+        char for char in text
+        if not char.isspace() and unicodedata.category(char)[:1] not in COMPARE_IGNORED_CATEGORIES
+    )
+
+
+def punctuation_count(text: str) -> int:
+    return sum(
+        1 for char in text
+        if not char.isspace() and unicodedata.category(char)[:1] == "P"
+    )
+
+
+def validate_punctuation_result(source: str, output: str) -> None:
+    """校验标点结果只增加了标点；不通过就当作处理错误，由调度器重试。
+
+    模型偶尔会整段原样抄回（一个标点都不加），或者干脆写成摘要。两种结果都不能入库。
+    """
+    if not output.strip():
+        raise LlmServiceError("标点服务没有返回正文。")
+    source_content = content_characters(source)
+    if not source_content:
+        return
+    output_content = content_characters(output)
+    ratio = difflib.SequenceMatcher(None, source_content, output_content).ratio()
+    if ratio < 0.95:
+        raise LlmServiceError(
+            f"标点结果与原文差异过大（字符相似度 {ratio:.2f}），疑似改写或摘要，已放弃本次结果。"
+        )
+    if len(source_content) >= 40 and punctuation_count(source) == 0 and punctuation_count(output) == 0:
+        raise LlmServiceError("标点服务没有给出标点：原文和结果都没有句内或句末点号。")
+
+
+def validate_finalize_result(source: str, output: str) -> None:
+    """校对允许改字，但不允许相对输入大幅缩水（缩水多半是模型写成了摘要）。"""
+    if not output.strip():
+        raise LlmServiceError("校对服务没有返回正文。")
+    source_length = len(content_characters(source))
+    output_length = len(content_characters(output))
+    if source_length >= 200 and output_length < source_length * 0.85:
+        raise LlmServiceError(
+            f"校对结果只有 {output_length} 字，原文 {source_length} 字，疑似摘要，已放弃本次结果。"
+        )
+
+
 def provider_configured() -> bool:
     return bool(LLM_PROVIDER and LLM_MODEL and LLM_API_BASE)
 
@@ -178,22 +252,31 @@ def llm_health() -> dict[str, Any]:
 
 @app.post("/llm/punctuate")
 def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
+    # 逐行、逐列的换行是 OCR 版面信息（抬头字还常单独成行），不能在这里盲目合并，
+    # 交给模型按语义判断哪些换行该删、哪些是段落分隔。
+    source_text = normalize_layout_text(payload.sourceText)
     prompt = f"""
 /no_think
-请处理一页近代军史文献整理文本。
+请给下面这一页近代军史文献（多为竖排古籍 OCR 结果）断句，并加上现代汉语标点。
+
+OCR 版面文本（每一行都是版面换行：原书的一列、一行，或为抬头（抬格）而单独排出的字词；不代表句子或自然段的边界；空行代表原文中确定的段落分隔）：
+{source_text}
 
 任务：
-1. 输入已经由 OpenCC 完成简体转换；不要再次进行简繁转换，不要改写、润色、补写或删节字词。
-2. 只做断句和现代汉语标点整理。以《标点符号用法》（GB/T 15834—2011）的基本原则为准，但只使用历史文献整理实际需要的标点；不要引入网络、编程、数学、表格或其他专业领域的符号。
-3. 除新增标点外，不增删原文字符，不改变原文语义和史实判断，保留人名、字号、笔名、地名、国名、民族名、朝代名、年号、官署名、机构名、部队番号、职务、日期、档案号和其他专名。不要把专名误拆成多个成分，也不要擅自给不确定的词语加书名号或引号。
-4. 如果输入来自竖排古籍 OCR，保持已经重排好的现代阅读顺序，不要按原版式再次逆序；保留原有段落和必要的换行，不要为了排版任意合并或拆分段落。
-5. 不能把推测内容直接写入正文；无法可靠判断的字词、句界、引文范围或标点，保持最保守的处理，并将问题简要放入 uncertainItems。
-6. 标点判断优先依据语法结构、语义关系和原文已有标点，不要仅凭停顿感或现代口语习惯断句。
-7. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段。
+1. 请对每一处换行做同一个判断——它是不是把同一句话切断了：如果这一行末尾并不是句子结束、下一行仍要接着读，就删掉这处换行，把文字连成一句话、连成一个自然段；只有确实是段落之间，才把换行留作段落分隔。判断依据只有语法和语义，不要看行数、行长、行首空格，也不要因为某个词（如官名、称谓、钦此、圣鉴等）单独成行就特殊处理。
+2. 输出里不要残留版面换行：连起来的句子直接相连，段落之间用两个换行字符（JSON 字符串中写作 \\n\\n）表示。
+3. 本次唯一允许新增的内容就是标点符号。原文的汉字、数字、字母、专名以及排列顺序必须一字不差地保留：不增字、不删字、不改字、不润色、不概括、不翻译、不补写。
+4. 容易犯的错误是“为了不改动原文而一个标点都不加”。加标点正是本次任务，标点不算增删文字；结果里必须逐句给出标点，标点过少视为处理失败。
+5. 在按上面规则合并换行的基础上，按语法结构和语义关系判断句界，通读整页后再断句。一句话可以很长，可以跨越原 OCR 的多列、多行。
+6. 必须恢复自然段：按语义把整页分成若干自然段，每段通常 2 至 5 句。不要把整页压成一个大段，也不要每句话单独成段。
+7. 输入已经由 OpenCC 完成简体转换；不要再次进行简繁转换，不要改写字形。
+8. 保留人名、字号、笔名、地名、国名、民族名、朝代名、年号、官署名、机构名、部队番号、职务、日期、档案号和其他专名。不要把专名误拆成多个成分，也不要擅自给不确定的词语加书名号或引号。
+9. 标点判断优先依据语法结构、语义关系和原文已有标点，不要仅凭停顿感或现代口语习惯断句。
+10. 不能把推测内容直接写入正文；无法可靠判断的字词、句界、引文范围或标点，保持最保守的处理，并将问题简要放入 uncertainItems。
 
 标点原则：
 1. 句末点号：陈述句用“。”；确实表示疑问才用“？”；确实表示强烈感叹、命令或强烈语气才用“！”。历史叙述通常使用“。”，不要为了强调而滥用“？！”或“！”。
-2. 句内点号：短语或分句之间的一般停顿用“，”；并列的词语或短语用“、”；多个内部已经有逗号的并列分句，用“；”分隔。不要把每个 OCR 换行都当作句号，也不要用逗号连接明显已经完整的多个句子。
+2. 句内点号：短语或分句之间的一般停顿用“，”；并列的词语或短语用“、”；多个内部已经有逗号的并列分句，用“；”分隔。不要用逗号连接明显已经完整的多个句子。
 3. 冒号：下文是解释、总说后的分说、列举，或明确引出直接引语时使用“：”；关系不明确时不要强行添加。引语中已有完整句末点号的，句末点号放在引号内；引语只是句子成分的，点号按整句结构处理。
 4. 引号：明确的原话、讲话、文件中的直接引文或需要特别指出的语句，用中文双引号“”；引号内再引用时用单引号‘’。不要把普通词语、所有专名或带有推测性质的内容随意加引号。
 5. 书名号：书籍、文章、报刊、文件、条例、地图、汇编等有明确名称的作品或文献，用《》；书名号内再有作品名称时用〈〉。人名、地名、机构名、部队番号、年号本身不用书名号。不能确认某段文字是否为作品名时不要强加。
@@ -201,9 +284,9 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 7. 破折号：只在确有转折、解释、补充、声音中断或话题突然转换时使用“——”，不要把普通停顿都写成破折号。
 8. 省略号：原文确有省略、话语未完或语意未尽时用“……”；不要用连续三个句点“...”代替，也不要用省略号掩盖无法断定的内容。
 9. 连接号和间隔号：只有原文或语义确实需要表示时间、地点、范围、对应关系时才使用合适的中文连接号；外国人名、少数民族人名等原文已有间隔符号时保留其信息。不要为了格式统一改写日期、数字、档案号或军队番号。
-10. 其他排版：统一使用中文全角标点，不在标点前后添加英文空格；除原文明确需要外，不使用项目符号、井号、@、斜杠、星号、表情符号等非历史文献整理所需符号。不要输出 Markdown、脚注或编辑说明。
+10. 其他排版：统一使用中文全角标点，不在标点前后添加英文空格；除原文明确需要外，不使用项目符号、井号、@、斜杠、星号、表情符号等非历史文献整理所需符号。不要输出 Markdown、脚注或编辑说明。原文里 OCR 误识的符号（如“−”）按原样保留，不要自行增删。
 
-处理优先级：先保证原文字符和语义不变，再判断句界，最后选择层级合适且最少的标点。拿不准时少加标点，不要通过标点替原文作历史判断。
+处理优先级：先保证原文字符一字不差，再判断句界，最后选择层级合适的标点。引号、书名号、破折号这类复杂符号宁缺毋滥；句末点号和句内停顿点号必须逐句给出，不要通过标点替原文作历史判断。
 
 返回格式：
 {{
@@ -214,14 +297,12 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
 文献信息：
 {format_metadata(payload.metadata)}
-
-原文：
-{payload.sourceText}
 """.strip()
 
     try:
         result = call_json_task(prompt)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
+        validate_punctuation_result(source_text, punctuated_text)
         uncertain_items = list_value(result.get("uncertainItems"))
         warnings = list_value(result.get("warnings"))
         response = base_response("punctuate", ready=True)
@@ -238,6 +319,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
             "pageNumber": payload.pageNumber,
             "sourceLayer": payload.sourceLayer,
             "sourceText": payload.sourceText,
+            "joinedSourceText": source_text,
             "punctuatedText": punctuated_text,
             "uncertainItems": uncertain_items,
             "warnings": warnings,
@@ -248,11 +330,14 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
 @app.post("/llm/finalize-page")
 def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
-    normalized_text = payload.normalizedText or payload.cleanText or payload.ocrText
-    punctuation_draft = payload.punctuationDraftText or payload.punctuatedText
-    source_text = punctuation_draft or normalized_text or payload.ocrText
+    # 参考层保留 OCR 的逐行版面（抬头另起一行的信息也在这里），只清理空白；
+    # 正文的换行由标点结果决定，不要照抄参考层的逐行排版。
+    ocr_text = normalize_layout_text(payload.ocrText)
+    normalized_text = normalize_layout_text(payload.normalizedText or payload.cleanText or payload.ocrText)
+    punctuation_draft = normalize_layout_text(payload.punctuationDraftText or payload.punctuatedText)
+    source_text = punctuation_draft or normalized_text or ocr_text
     previous_pages = "\n\n".join(
-        f"第 {page.pageNumber or '?'} 页：\n{page.text}"
+        f"第 {page.pageNumber or '?'} 页：\n{normalize_layout_text(page.text)}"
         for page in payload.previousPages
         if page.text.strip()
     ) or "无"
@@ -262,14 +347,14 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 
 任务：
 1. OCR 原始录文仅作为核对底本；输入文本已经由 OpenCC 完成简体转换，并已经完成一次断句和标点。
-2. 修正常见 OCR 错字、漏字、重复字、断行和明显排版噪声，但只能依据 OCR 底本、当前页文本和上下文作出有依据的修改。
+2. 修正常见 OCR 错字、漏字、重复字、断行和明显排版噪声，但只能依据 OCR 底本、当前页文本和上下文作出有依据的修改。只改确有把握的字词，不要整段改写，也不要把正文写成摘要。
 3. 保持简体输出，不要重新进行大范围简繁转换；只有在明确修正 OCR 字符时才修改个别字。
-4. 以已有标点文本为基础，只有内容修正导致句界变化时才调整相关标点。
-5. 保留原文意思和专名信息，不增补史实，不改写为摘要。
-6. 如果 OCR 原始录文来自竖排古籍，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
+4. 以已有标点文本为基础，只有内容修正导致句界变化时才调整相关标点；输入已经逐句标点，不要退回成整段无标点，也不要在行尾只补句号。
+5. 保留原文意思和专名信息，不增补史实。
+6. OCR 原始录文和简体文本是版面文本：每一行都是版面换行（原书的一列、一行，或为抬头（抬格）而单独排出的字词），不代表句子或自然段的边界。这些参考层的换行不要照抄成逐行排版，也不要按原版式逆序；正文里只保留自然段分隔，版面换行一律按“是否把同一句话切断”来判断合并或保留。
 7. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
 8. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
-9. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段。
+9. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段；输出里不要残留逐行换行。
 10. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
@@ -287,7 +372,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 {previous_pages}
 
 OCR 原始录文：
-{payload.ocrText}
+{ocr_text}
 
 OpenCC 简体文本：
 {normalized_text}
@@ -303,6 +388,7 @@ OpenCC 简体文本：
         result = call_json_task(prompt)
         clean_text = normalize_generated_text(result.get("cleanText"))
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
+        validate_finalize_result(source_text, punctuated_text or clean_text)
         warnings = list_value(result.get("warnings"))
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
@@ -868,8 +954,23 @@ def normalize_generated_text(value: Any) -> str:
     if "\n" not in text and "\\n" in text:
         text = text.replace("\\n", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
+    # 约定只用 \n\n 表示段落分隔：模型若照抄 OCR 版面形成逐行换行（单个 \n），
+    # 这里并回同一段，避免正文又变成一行一句。
+    text = merge_single_newlines(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def merge_single_newlines(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        left = text[match.start() - 1] if match.start() else ""
+        right = text[match.end()] if match.end() < len(text) else ""
+        # 两侧都是西文时保留一个空格，中文按版式习惯直接相连。
+        if left and right and left.isascii() and right.isascii() and (left.isalnum() or right.isalnum()):
+            return " "
+        return ""
+
+    return re.sub(r"(?<!\n)\n(?!\n)", replace, text)
 
 
 def string_value(value: Any) -> str:
