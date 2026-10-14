@@ -32,4 +32,4 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 6. 图表还原。
 7. 文献合并。
 8. 文献导出。
-9. 对话参考文献和用户关联。
+9. 对话参考文献私有、公开选项。
