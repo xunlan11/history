@@ -340,10 +340,13 @@ label {
 }
 
 .reader-visibility-options {
-  display: flex;
+  /* 两个选项各占一半宽度（左对齐各自那一格），于是「私密后面的空白」与
+     「公开后面的空白」恒等；原来是 width: max-content，两项挤在左侧、右侧空一大块 */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-items: start;
   align-items: center;
-  gap: 18px;
-  width: max-content;
+  width: 100%;
   border: 0;
   padding: 0;
   background: transparent;
@@ -988,9 +991,10 @@ button:focus-visible {
   white-space: normal;
 }
 
+/* 编辑态只换配色，不改内边距——原来是 padding: 14px（比只读态 18px 小），
+   内容宽因此多出 8px，进出编辑态时整段文字的换行位置会错位 */
 .reader-text.is-editing {
   min-height: 220px;
-  padding: 14px;
   border-color: var(--focus);
   background: #fffdf7;
   outline: none;
