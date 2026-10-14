@@ -28,5 +28,6 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 2. 检索：首页对话、文献库查找、阅览器目录格式。
 3. 原文高亮。
 4. 语义检索：嵌入模型把每段文本向量化建索引，检索/问答/编年按意思召回并回指原文。
-5. 图表还原。
-6. 文献合并。
+5. 失败恢复。
+6. 图表还原。
+7. 文献合并。
