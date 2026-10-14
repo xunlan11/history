@@ -48,6 +48,177 @@ function toggleReaderPanel(panel) {
 readerOriginalToggle?.addEventListener("click", () => toggleReaderPanel("original"));
 readerAnnotationToggle?.addEventListener("click", () => toggleReaderPanel("annotation"));
 applyReaderPanelState();
+const readerProgressCache = new Map();
+const readerProgressSaveStates = new Map();
+let readerProgressLoadRevision = 0;
+
+function getReaderProgressKey(documentId) {
+  const userId = typeof currentUser !== "undefined" ? currentUser?.id : "";
+  return `${userId}\u0000${documentId}`;
+}
+
+function getReaderProgressUrl(documentId) {
+  return `${DOCUMENT_ANNOTATION_API_URL}/${encodeURIComponent(documentId)}/reading-progress`;
+}
+
+function getReaderProgressLocalStorageKey(documentId) {
+  const userId = typeof currentUser !== "undefined" ? currentUser?.id : "";
+  return `${SITE_STORAGE_PREFIX}.readerProgress.user-${userId}.document-${documentId}`;
+}
+
+function loadCachedReaderProgress(documentId) {
+  try {
+    const value = JSON.parse(localStorage.getItem(getReaderProgressLocalStorageKey(documentId)) || "null");
+    return value?.pageId ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheReaderProgress(documentId, progress) {
+  if (!progress?.pageId) {
+    return;
+  }
+  readerProgressCache.set(getReaderProgressKey(documentId), progress);
+  localStorage.setItem(getReaderProgressLocalStorageKey(documentId), JSON.stringify(progress));
+}
+
+function getReaderProgressSaveState(key, documentId) {
+  if (!readerProgressSaveStates.has(key)) {
+    readerProgressSaveStates.set(key, {
+      documentId,
+      timer: null,
+      inFlight: false,
+      pendingPageId: null,
+      inFlightPageId: null,
+      lastSavedPageId: null,
+    });
+  }
+  return readerProgressSaveStates.get(key);
+}
+
+function scheduleReaderProgressSave(state, key) {
+  window.clearTimeout(state.timer);
+  state.timer = window.setTimeout(() => flushReaderProgressSave(key), 150);
+}
+
+function recordReaderProgress(item, page) {
+  if (document.body.dataset.page !== "reader" || !currentUser?.id || !item?.id || !page?.id) {
+    return;
+  }
+  const key = getReaderProgressKey(item.id);
+  const state = getReaderProgressSaveState(key, item.id);
+  if (state.lastSavedPageId === page.id && !state.pendingPageId && state.inFlightPageId !== page.id) {
+    return;
+  }
+  state.pendingPageId = page.id;
+  cacheReaderProgress(item.id, { pageId: page.id, pageNumber: page.pageNumber, updatedAt: "" });
+  scheduleReaderProgressSave(state, key);
+}
+
+async function flushReaderProgressSave(key) {
+  const state = readerProgressSaveStates.get(key);
+  if (!state || state.inFlight || !state.pendingPageId) {
+    return false;
+  }
+  window.clearTimeout(state.timer);
+  state.timer = null;
+  const pageId = state.pendingPageId;
+  state.pendingPageId = null;
+  state.inFlight = true;
+  state.inFlightPageId = pageId;
+  try {
+    const response = await fetch(getReaderProgressUrl(state.documentId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId }),
+      keepalive: true,
+    });
+    if (!response.ok) {
+      throw new Error(`Reader progress save failed: ${response.status}`);
+    }
+    const result = await response.json();
+    state.lastSavedPageId = result.pageId || pageId;
+    cacheReaderProgress(state.documentId, {
+      pageId: state.lastSavedPageId,
+      pageNumber: result.pageNumber,
+      updatedAt: result.updatedAt || "",
+    });
+    return true;
+  } catch {
+    state.pendingPageId = state.pendingPageId || pageId;
+    scheduleReaderProgressSave(state, key);
+    return false;
+  } finally {
+    state.inFlight = false;
+    state.inFlightPageId = null;
+    if (state.pendingPageId && !state.timer) {
+      scheduleReaderProgressSave(state, key);
+    }
+  }
+}
+
+async function initializeReaderProgress() {
+  if (document.body.dataset.page !== "reader" || !currentUser?.id) {
+    return;
+  }
+  const item = getSelectedDocument();
+  if (!item) {
+    return;
+  }
+  const params = new URL(window.location.href).searchParams;
+  const explicitPageId = params.get("page");
+  if (explicitPageId && item.pages.some((page) => page.id === explicitPageId)) {
+    const key = getReaderProgressKey(item.id);
+    const state = getReaderProgressSaveState(key, item.id);
+    state.lastSavedPageId = null;
+    cacheReaderProgress(item.id, { pageId: explicitPageId, updatedAt: "" });
+    return;
+  }
+
+  const revision = ++readerProgressLoadRevision;
+  const cached = readerProgressCache.get(getReaderProgressKey(item.id)) || loadCachedReaderProgress(item.id);
+  let persistedPageId = null;
+  try {
+    const response = await fetch(getReaderProgressUrl(item.id));
+    if (!response.ok) {
+      throw new Error(`Reader progress load failed: ${response.status}`);
+    }
+    const result = await response.json();
+    if (revision !== readerProgressLoadRevision) {
+      return;
+    }
+    const savedPageById = item.pages.find((page) => page.id === result.pageId);
+    const savedPage = savedPageById || item.pages.find((page) => Number(page.pageNumber) === Number(result.pageNumber));
+    const fallbackPage = savedPage || (cached && item.pages.find((page) => page.id === cached.pageId));
+    if (fallbackPage) {
+      selectedPageId = fallbackPage.id;
+    }
+    if (savedPage) {
+      cacheReaderProgress(item.id, { ...result, pageId: savedPage.id });
+      if (savedPageById) {
+        persistedPageId = savedPage.id;
+      }
+    }
+  } catch {
+    const fallbackPage = cached && item.pages.find((page) => page.id === cached.pageId);
+    if (fallbackPage) {
+      selectedPageId = fallbackPage.id;
+    }
+  }
+
+  const key = getReaderProgressKey(item.id);
+  const state = getReaderProgressSaveState(key, item.id);
+  state.lastSavedPageId = persistedPageId;
+}
+
+window.addEventListener("pagehide", () => {
+  readerProgressSaveStates.forEach((_, key) => flushReaderProgressSave(key));
+});
+window.addEventListener("online", () => {
+  readerProgressSaveStates.forEach((_, key) => flushReaderProgressSave(key));
+});
+
 const readerAnnotationCache = new Map();
 const readerAnnotationSaveStates = new Map();
 let readerAnnotationLoadRevision = 0;

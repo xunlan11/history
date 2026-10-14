@@ -127,6 +127,10 @@ class PageAnnotationUpdate(BaseModel):
     content: str = Field(default="", max_length=100_000)
 
 
+class ReadingProgressUpdate(BaseModel):
+    pageId: str = Field(min_length=1, max_length=200)
+
+
 class VariantConvertPayload(BaseModel):
     variant: str = "simplified"
     texts: list[str] = Field(default_factory=list, max_length=5000)
@@ -249,6 +253,15 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             content TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL,
             PRIMARY KEY (user_id, page_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_progress (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            page_id TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, document_id)
         );
 
         CREATE TABLE IF NOT EXISTS conversations (
@@ -2055,6 +2068,53 @@ def put_page_annotation(
                     (user["id"], page_id),
                 )
     return {"status": "ok", "content": payload.content, "updatedAt": timestamp}
+
+@app.get("/api/documents/{document_id}/reading-progress")
+def get_reading_progress(document_id: str) -> dict[str, Any]:
+    user = current_user()
+    with database() as connection:
+        document = connection.execute(
+            "SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL "
+            "AND (visibility = 'public' OR owner_id = ?)",
+            (document_id, user["id"]),
+        ).fetchone()
+        if not document:
+            raise HTTPException(status_code=404, detail="\u6587\u732e\u4e0d\u5b58\u5728\u6216\u4e0d\u53ef\u89c1")
+        row = connection.execute(
+            "SELECT page_id, page_number, updated_at FROM reading_progress "
+            "WHERE user_id = ? AND document_id = ?",
+            (user["id"], document_id),
+        ).fetchone()
+    return {
+        "pageId": row["page_id"] if row else "",
+        "pageNumber": row["page_number"] if row else None,
+        "updatedAt": row["updated_at"] if row else "",
+    }
+
+
+@app.put("/api/documents/{document_id}/reading-progress")
+def put_reading_progress(document_id: str, payload: ReadingProgressUpdate) -> dict[str, Any]:
+    user = current_user()
+    timestamp = now_iso()
+    with database() as connection, connection:
+        require_visible_document_page(connection, user, document_id, payload.pageId)
+        page = connection.execute(
+            "SELECT page_number FROM document_pages WHERE id = ? AND document_id = ?",
+            (payload.pageId, document_id),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO reading_progress(user_id, document_id, page_id, page_number, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, document_id) DO UPDATE SET
+                page_id = excluded.page_id,
+                page_number = excluded.page_number,
+                updated_at = excluded.updated_at
+            """,
+            (user["id"], document_id, payload.pageId, page["page_number"], timestamp),
+        )
+    return {"pageId": payload.pageId, "pageNumber": page["page_number"], "updatedAt": timestamp}
+
 
 @app.get("/api/bootstrap")
 def bootstrap() -> dict[str, Any]:

@@ -30,9 +30,6 @@ function setView(name) {
   if (name === "reader" && selectedDocumentId) {
     url.searchParams.set("document", selectedDocumentId);
   }
-  if (name === "reader" && selectedPageId) {
-    url.searchParams.set("page", selectedPageId);
-  }
 
   const currentFrom = new URL(window.location.href).searchParams.get("from");
   const returnView = name === "reader" ? readerReturnView : currentFrom;
@@ -763,6 +760,9 @@ function renderReader() {
   exportDocumentPdfButton.disabled = false;
   editDocumentButton.disabled = !page || !canEdit;
 
+  if (typeof recordReaderProgress === "function") {
+    recordReaderProgress(item, page);
+  }
   renderReaderOriginal(page);
   renderReaderText(page);
   if (typeof renderReaderAnnotation === "function") {

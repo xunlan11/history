@@ -477,6 +477,9 @@ async function initializeApplication() {
     startPeriodicSync();
     return;
   }
+  if (typeof initializeReaderProgress === "function") {
+    await initializeReaderProgress();
+  }
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
   renderAll();
   renderSmartModeButtons();
