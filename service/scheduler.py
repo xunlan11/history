@@ -18,7 +18,6 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 from urllib import error, request
 
 from service.variant import to_simplified
@@ -65,18 +64,6 @@ def ensure_schema(connection):
 
 def metadata(document):
     return {key: str(document.get(key) or "") for key in ("title", "author", "year", "publisher")}
-
-
-def upgrade_checkpoint(checkpoint):
-    """升级旧检查点，同时为四阶段正文处理补齐默认状态。"""
-    if checkpoint.get("registrationStep") in {"cover_candidate", "cover"}:
-        checkpoint["registrationStep"] = "metadata_candidate"
-    for key in ("coverCandidate", "cover"):
-        checkpoint.pop(key, None)
-    checkpoint.setdefault("stageRetries", {})
-    checkpoint.setdefault("stageErrors", {})
-    checkpoint.setdefault("stageWaiting", {})
-    return checkpoint
 
 
 class HttpServices:
@@ -270,7 +257,7 @@ class Scheduler:
         document = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
         if not row or not document or row["status"] in TERMINAL:
             return None
-        return dict(row), json.loads(document["payload"]), upgrade_checkpoint(json.loads(row["checkpoint"]))
+        return dict(row), json.loads(document["payload"]), json.loads(row["checkpoint"])
 
 
 
@@ -594,10 +581,13 @@ class Scheduler:
     @classmethod
     def _body_complete(cls, doc, cp, total):
         omitted = set(cp.get("omittedPages", []))
+        pages = {}
+        for page in doc.get("pages", []):
+            pages.setdefault(page.get("pageNumber"), page)
         for number in range(1, total + 1):
             if number in omitted:
                 continue
-            page = next((item for item in doc.get("pages", []) if item.get("pageNumber") == number), None)
+            page = pages.get(number)
             if not page or not cls._stage_terminal(page, "proofreading"):
                 return False
         return True
@@ -606,9 +596,12 @@ class Scheduler:
     def _body_operations(cls, job, doc, cp, total):
         """选择依赖就绪的阶段；串行逐页完成， 并行跨页形成四阶段流水线。"""
         omitted = set(cp.get("omittedPages", []))
+        pages = {}
+        for page in doc.get("pages", []):
+            pages.setdefault(page.get("pageNumber"), page)
 
         def page_for(number):
-            return next((item for item in doc.get("pages", []) if item.get("pageNumber") == number), None)
+            return pages.get(number)
 
         def ready(stage, page):
             if cls._stage_terminal(page, stage):

@@ -51,18 +51,25 @@ function getReferenceScopeReport(conversation = getSelectedConversation()) {
   const documentsById = new Map(documents.map((item) => [item.id, item]));
   const selectedDocuments = referenceIds.map((id) => documentsById.get(id)).filter(Boolean);
   const missingCount = referenceIds.length - selectedDocuments.length;
-  const usableDocuments = selectedDocuments.filter((item) => {
-    return item.pages.some((page) => getPageProcessedText(page).trim());
-  });
-  const emptyDocuments = selectedDocuments.filter((item) => {
-    return !item.pages.some((page) => getPageProcessedText(page).trim());
-  });
-  const partialDocuments = usableDocuments.filter((item) => {
+  const usableDocuments = [];
+  const emptyDocuments = [];
+  const partialDocuments = [];
+  for (const item of selectedDocuments) {
+    let processedPages = 0;
+    for (const page of item.pages) {
+      if (getPageProcessedText(page).trim()) processedPages += 1;
+    }
+    if (!processedPages) {
+      emptyDocuments.push(item);
+      continue;
+    }
+    usableDocuments.push(item);
     const task = item.processingTask;
     const expectedPages = Number(task?.totalPages) || item.pages.length;
-    const processedPages = item.pages.filter((page) => getPageProcessedText(page).trim()).length;
-    return Boolean(task && processedPages < expectedPages);
-  });
+    if (task && processedPages < expectedPages) {
+      partialDocuments.push(item);
+    }
+  }
   const warnings = [];
 
   if (missingCount) {
@@ -701,11 +708,6 @@ function findConversationAttachment(attachmentId, title = "") {
   }) || null;
 }
 
-function openConversationAttachment(attachment) {
-  if (attachment?.fileUrl) {
-    window.open(attachment.fileUrl, "_blank", "noopener");
-  }
-}
 
 uploadConversationFilesButton?.addEventListener("click", () => conversationFileInput?.click());
 conversationFileInput?.addEventListener("change", () => {
@@ -1339,9 +1341,6 @@ function renderConversationTurns() {
   const turns = conversation?.turns || [];
   const busy = conversationTurnRequests.has(conversation?.id);
   const feedScroll = messageFeed.scrollTop;
-  const editingInput = searchResults.querySelector(".conversation-prompt-editor textarea");
-  const editingFocus = editingInput && document.activeElement === editingInput
-    ? [editingInput.selectionStart, editingInput.selectionEnd] : null;
   searchResults.replaceChildren();
   searchResults.classList.remove("empty-result-list");
   searchResults.classList.add("conversation-history");

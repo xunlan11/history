@@ -9,14 +9,13 @@ import os
 import re
 import secrets
 import sqlite3
-import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Header, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -184,24 +183,63 @@ def database():
         connection.close()
 
 
-def _ensure_users_sso_columns(connection: sqlite3.Connection) -> None:
-    # 全新数据库此时 users 表尚未创建，ALTER 会报错；等建表后再迁移。
-    if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone():
-        return
-    cols = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-    if "sso_account_id" not in cols:
-        connection.execute("ALTER TABLE users ADD COLUMN sso_account_id TEXT")
-    if "deleted_at" not in cols:
-        connection.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
 
+_REQUIRED_SCHEMA_COLUMNS = {
+    "app_meta": {"key", "value"},
+    "documents": {"id", "payload", "sort_order", "updated_at", "deleted_at", "version", "owner_id", "visibility"},
+    "users": {"id", "username", "password_hash", "is_admin", "created_at", "sso_account_id", "deleted_at"},
+    "roles": {"account_id", "username", "role"},
+    "document_pages": {"id", "document_id", "page_number", "payload", "updated_at", "deleted_at", "version"},
+    "page_annotations": {"user_id", "document_id", "page_id", "content", "updated_at"},
+    "reading_progress": {"user_id", "document_id", "page_id", "page_number", "updated_at"},
+    "conversations": {"id", "owner_id", "payload", "sort_order", "updated_at", "deleted_at", "version"},
+    "document_files": {"id", "document_id", "page_id", "role", "original_name", "storage_path", "public_url", "sha256", "size_bytes", "mime_type", "created_at", "updated_at", "deleted_at"},
+    "conversation_files": {"id", "conversation_id", "original_name", "storage_path", "public_url", "sha256", "size_bytes", "mime_type", "kind", "extracted_text", "extraction_status", "warnings", "created_at", "updated_at", "deleted_at"},
+    "conversation_shares": {"id", "token", "conversation_id", "selected_turn_ids", "content", "active", "created_at", "updated_at", "deleted_at"},
+    "processing_jobs": {"sequence", "document_id", "mode", "phase", "status", "source_path", "checkpoint", "retry_at", "created_at", "updated_at"},
+}
+
+def _require_current_schema(connection: sqlite3.Connection) -> None:
+    missing_tables = []
+    missing_columns = []
+    for table, required_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        table_info = connection.execute(f"PRAGMA table_info({table})").fetchall()
+        if not table_info:
+            missing_tables.append(table)
+            continue
+        actual_columns = {row[1] for row in table_info}
+        missing = sorted(required_columns - actual_columns)
+        if missing:
+            missing_columns.append(f"{table}: {', '.join(missing)}")
+    if missing_tables or missing_columns:
+        details = []
+        if missing_tables:
+            details.append(f"missing tables {', '.join(missing_tables)}")
+        if missing_columns:
+            details.append(f"missing columns {'; '.join(missing_columns)}")
+        raise RuntimeError(f"Database schema {SCHEMA_VERSION} is incomplete: {'; '.join(details)}")
 
 def ensure_schema(connection: sqlite3.Connection) -> None:
-    documents_exists = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'").fetchone()
-    if documents_exists:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)").fetchall()}
-        if "owner_id" not in columns:
-            connection.executescript("DROP TABLE IF EXISTS page_annotations; DROP TABLE IF EXISTS document_files; DROP TABLE IF EXISTS document_pages; DROP TABLE IF EXISTS documents; DROP TABLE IF EXISTS conversations; DROP TABLE IF EXISTS conversation_files; DROP TABLE IF EXISTS users;")
-    _ensure_users_sso_columns(connection)
+    existing_tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    if existing_tables:
+        schema_row = connection.execute(
+            "SELECT value FROM app_meta WHERE key = 'schema_version'"
+        ).fetchone() if "app_meta" in existing_tables else None
+        if schema_row is None:
+            raise RuntimeError(f"Database schema_version is missing; only schema {SCHEMA_VERSION} is supported")
+        try:
+            schema_version = int(schema_row["value"])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Database schema_version is invalid; only schema {SCHEMA_VERSION} is supported") from exc
+        if schema_version != SCHEMA_VERSION:
+            raise RuntimeError(f"Database schema {schema_version} is unsupported; only schema {SCHEMA_VERSION} is supported")
+        _require_current_schema(connection)
+        return
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS app_meta (
@@ -328,6 +366,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON page_annotations(document_id, page_id, user_id);
         CREATE INDEX IF NOT EXISTS idx_conversations_active_order
             ON conversations(deleted_at, sort_order, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_conversations_owner_order
+            ON conversations(owner_id, deleted_at, sort_order, updated_at);
         CREATE INDEX IF NOT EXISTS idx_document_files_document_role
             ON document_files(document_id, role, page_id, deleted_at);
         CREATE INDEX IF NOT EXISTS idx_document_files_hash
@@ -341,13 +381,14 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
-    share_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_shares)").fetchall()}
-    if "content" not in share_columns:
-        connection.execute("ALTER TABLE conversation_shares ADD COLUMN content TEXT NOT NULL DEFAULT '[]'")
-
     processing_scheduler.ensure_schema(connection)
+    _require_current_schema(connection)
     connection.execute(
-        "INSERT OR IGNORE INTO app_meta(key, value) VALUES('sync_version', '0')"
+        "INSERT INTO app_meta(key, value) VALUES('sync_version', '0')"
+    )
+    connection.execute(
+        "INSERT INTO app_meta(key, value) VALUES('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
     )
     # 新数据库只初始化一名管理员。凭据属于部署配置，不能使用代码仓库中的默认值。
     if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None:
@@ -370,38 +411,6 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
                 f"password={admin_password}",
                 flush=True,
             )
-    connection.commit()
-    connection.execute("BEGIN IMMEDIATE")
-    schema_row = connection.execute(
-        "SELECT value FROM app_meta WHERE key = 'schema_version'"
-    ).fetchone()
-    conversation_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversations)")}
-    if "owner_id" not in conversation_columns or (schema_row and int(schema_row["value"]) < 7):
-        connection.execute("DELETE FROM conversation_shares")
-        connection.execute("DELETE FROM conversation_files")
-        for conversation_asset_dir in FILE_STORAGE_DIR.glob("conversation-*"):
-            if conversation_asset_dir.is_dir():
-                shutil.rmtree(conversation_asset_dir)
-        connection.execute("DROP TABLE conversations")
-        connection.execute(
-            "CREATE TABLE conversations ("
-            "id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
-            "payload TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, "
-            "deleted_at TEXT, version INTEGER NOT NULL DEFAULT 1)"
-        )
-        bump_sync_version(connection)
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_conversations_owner_order "
-        "ON conversations(owner_id, deleted_at, sort_order, updated_at)"
-    )
-    if schema_row is None:
-        connection.execute(
-            "INSERT INTO app_meta(key, value) VALUES('schema_version', ?)",
-            (str(SCHEMA_VERSION),),
-        )
-    elif int(schema_row["value"]) != SCHEMA_VERSION:
-        connection.execute("UPDATE app_meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),))
-
     connection.commit()
 
 def get_or_create_local_account(connection, account: dict[str, Any]) -> dict[str, Any]:
@@ -449,17 +458,6 @@ def ensure_admin_remains(connection: sqlite3.Connection) -> None:
     admin_count = connection.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=1").fetchone()["n"]
     if admin_count <= 1:
         raise HTTPException(status_code=400, detail="至少需要保留一名管理员")
-
-
-def insert_user(connection: sqlite3.Connection, username: str, password: str, is_admin: bool) -> dict[str, Any]:
-    connection.execute("BEGIN IMMEDIATE")
-    user_id = next_available_user_id(connection)
-    with connection:
-        connection.execute(
-            "INSERT INTO users(id,username,password_hash,is_admin,created_at) VALUES(?,?,?,?,?)",
-            (user_id, username, hash_password(password), int(is_admin), now_iso()),
-        )
-    return {"id": user_id, "username": username, "isAdmin": bool(is_admin)}
 
 
 def get_sync_version(connection: sqlite3.Connection) -> int:
@@ -886,21 +884,26 @@ def rehydrate_document_assets(connection: sqlite3.Connection, document: dict[str
 
 
 def active_payloads(connection: sqlite3.Connection, table: Literal["documents", "conversations"], user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    where = "deleted_at IS NULL"
+    where = f"{table}.deleted_at IS NULL"
     params: tuple[Any, ...] = ()
     if table == "documents" and user:
-        where += " AND (visibility = 'public' OR owner_id = ?)"
+        where += " AND (documents.visibility = 'public' OR documents.owner_id = ?)"
         params = (user["id"],)
     if table == "conversations":
         if not user:
             return []
-        where += " AND owner_id = ?"
+        where += " AND conversations.owner_id = ?"
         params = (user["id"],)
     columns = "payload, owner_id"
+    if table == "documents":
+        columns = "documents.payload, documents.owner_id, users.username AS owner_username"
+        table_expression = "documents LEFT JOIN users ON users.id = documents.owner_id"
+    else:
+        table_expression = table
     rows = connection.execute(
         f"""
         SELECT {columns}
-        FROM {table}
+        FROM {table_expression}
         WHERE {where}
         ORDER BY sort_order ASC, updated_at DESC
         """, params).fetchall()
@@ -908,18 +911,14 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     if table == "documents":
         result = []
         for row, payload in zip(rows, payloads):
-            owner = connection.execute(
-                "SELECT username FROM users WHERE id = ?",
-                (row["owner_id"],),
-            ).fetchone()
             payload.pop("creator", None)
             payload.pop("ownerId", None)
             payload.pop("canEdit", None)
             is_owner = bool(user and row["owner_id"] == user.get("id"))
             payload["ownerId"] = row["owner_id"] if is_owner else None
             payload["canEdit"] = is_owner
-            if owner:
-                payload["creator"] = {"username": owner["username"]}
+            if row["owner_username"]:
+                payload["creator"] = {"username": row["owner_username"]}
             result.append(rehydrate_document_assets(connection, payload))
         return result
     result = []
@@ -942,7 +941,6 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
             payload["share"] = None
         result.append(payload)
     return result
-
 
 def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
     for sort_order, document in enumerate(documents):
@@ -1265,7 +1263,9 @@ def get_schema_version(connection: sqlite3.Connection) -> int:
     row = connection.execute(
         "SELECT value FROM app_meta WHERE key = 'schema_version'"
     ).fetchone()
-    return int(row["value"]) if row else SCHEMA_VERSION
+    if row is None:
+        raise RuntimeError(f"Database schema_version is missing; only schema {SCHEMA_VERSION} is supported")
+    return int(row["value"])
 
 
 def count_storage_files() -> int:

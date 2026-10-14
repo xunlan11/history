@@ -66,10 +66,10 @@ class FinalizePageRequest(LlmTaskRequest):
     ocrText: str = ""
     normalizedText: str = ""
     punctuationDraftText: str = ""
-    # 兼容旧调用方；新调度器使用 normalizedText / punctuationDraftText。
-    cleanText: str = ""
-    punctuatedText: str = ""
     previousPages: list[PreviousPageContext] = Field(default_factory=list)
+
+    class Config:
+        extra = "forbid"
 
 
 class ExtractMetadataRequest(LlmTaskRequest):
@@ -330,8 +330,8 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
     # 参考层保留 OCR 的逐行版面（抬头另起一行的信息也在这里），只清理空白；
     # 正文的换行由标点结果决定，不要照抄参考层的逐行排版。
     ocr_text = normalize_layout_text(payload.ocrText)
-    normalized_text = normalize_layout_text(payload.normalizedText or payload.cleanText or payload.ocrText)
-    punctuation_draft = normalize_layout_text(payload.punctuationDraftText or payload.punctuatedText)
+    normalized_text = normalize_layout_text(payload.normalizedText or payload.ocrText)
+    punctuation_draft = normalize_layout_text(payload.punctuationDraftText)
     source_text = punctuation_draft or normalized_text or ocr_text
     previous_pages = "\n\n".join(
         f"第 {page.pageNumber or '?'} 页：\n{normalize_layout_text(page.text)}"

@@ -24,7 +24,6 @@ function endpoint(proxiedPath) {
 
 const DATA_PROCESSING_URL = endpoint("/data/api/documents");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
-const OCR_METADATA_SERVICE_URL = endpoint("/ocr/ocr/metadata-candidate");
 const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
@@ -296,8 +295,6 @@ const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.dele
 // 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
 const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema4`;
 
-localStorage.removeItem(`${SITE_STORAGE_PREFIX}.conversations.schema4`);
-localStorage.removeItem(`${SITE_STORAGE_PREFIX}.deletedConversations.schema4`);
 
 function getConversationStorageKey() {
   const userId = typeof currentUser !== "undefined" ? currentUser?.id : null;
@@ -547,7 +544,7 @@ function normalizeConversations(items) {
       attachments: normalizeConversationAttachments(item.attachments),
       share: normalizeConversationShare(item.share),
       result: normalizeConversationResult(item.result),
-      turns: normalizeConversationTurns(item.turns, item.result, item.id),
+      turns: normalizeConversationTurns(item.turns, item.id),
       createdAt: item.createdAt || "",
       updatedAt: item.updatedAt || "",
     }));
@@ -576,13 +573,8 @@ function normalizeConversationResult(value) {
   };
 }
 
-function normalizeConversationTurns(values, legacyResult, conversationId) {
+function normalizeConversationTurns(values, conversationId) {
   const items = Array.isArray(values) ? values.slice() : [];
-  const legacy = normalizeConversationResult(legacyResult);
-  if (!items.length && legacy) {
-    items.push({ id: conversationId + "-legacy", mode: legacy.mode, prompt: legacy.prompt,
-      status: "completed", result: legacy, createdAt: legacy.generatedAt });
-  }
   return items.filter((turn) => turn?.id).map((turn) => {
     const running = typeof isConversationTurnRunning === "function" &&
       isConversationTurnRunning(conversationId, turn.id);
@@ -1169,9 +1161,6 @@ function summarizeDocumentStatus(item) {
   return "已保存文字";
 }
 
-function normalizePageStatus(status) {
-  return status || "待整理";
-}
 
 // 页图片地址：优先用服务端地址（跨页面/跨设备都有效）。
 // `blob:` 只在创建它的那个页面里有效，上传页 createObjectURL 出来的地址存进快照后必然失效，
@@ -1292,10 +1281,10 @@ function getProcessingTaskLabel(item) {
   if (task.pausedForRegistration) return "登记准备优先，正文暂缓调度";
   const total = task.totalPages || 0;
   const stageProgress = task.stageProgress || {};
-  const ocrDone = stageProgress.ocr?.done ?? task.completedPages ?? 0;
+  const ocrDone = stageProgress.ocr?.done || 0;
   const variantDone = stageProgress.variant?.done ?? 0;
   const punctuationDone = stageProgress.punctuation?.done ?? 0;
-  const finalized = stageProgress.proofreading?.done ?? (task.backendManaged ? task.finalizedPages || 0 : countFinalizedPages(item));
+  const finalized = stageProgress.proofreading?.done || 0;
 
   // 登记阶段（后端元数据识别）也计入同一条进度显示。
   if (total === 0 && isDocumentRegistrationPending(item)) {
@@ -1316,9 +1305,6 @@ function getProcessingTaskLabel(item) {
   return task.status || "等待处理";
 }
 
-function countFinalizedPages(item) {
-  return item.pages.filter((page) => page.cleanText || page.status === "已生成整理稿").length;
-}
 
 // 只保留 OCR 摘要字段，避免大型版面坐标数据占用 localStorage。
 function normalizeStoredOcr(ocr) {
@@ -1337,47 +1323,5 @@ function normalizeStoredOcr(ocr) {
     upstream: ocr.upstream || null,
     warnings: Array.isArray(ocr.warnings) ? ocr.warnings : [],
     recognizedAt: ocr.recognizedAt || "",
-  };
-}
-
-// 页面对象会整体同步到数据服务并写入 localStorage，因此 OCR 只保存轻量摘要：
-// 版面块与行的坐标体量很大（一本书可达上万行），详情留在 OCR 服务的任务记录里。
-function buildOcrSummary(result) {
-  const source = result || {};
-  const blocks = Array.isArray(source.blocks) ? source.blocks : [];
-  const blockTypes = Array.from(
-    new Set(blocks.map((block) => block && block.type).filter(Boolean)),
-  );
-
-  return {
-    confidence: source.confidence ?? null,
-    engine: source.engine || "识别服务",
-    width: source.width ?? null,
-    height: source.height ?? null,
-    blockCount: blocks.length,
-    blockTypes,
-    hasMarkdown: Boolean(source.markdown),
-    upstream: source.upstream || null,
-    warnings: Array.isArray(source.warnings) ? source.warnings : [],
-    recognizedAt: source.recognizedAt || new Date().toISOString(),
-  };
-}
-
-function normalizeProcessingPage(page, index) {
-  const text = page.text || "";
-
-  return {
-    id: page.id || newId(),
-    pageNumber: Number(page.pageNumber) || index + 1,
-    ocrText: text,
-    cleanText: "",
-    punctuatedText: "",
-    notes: page.notes || "",
-    status: normalizePageStatus(page.status || (text ? "已识别" : "待整理")),
-    imageDataUrl: page.imageDataUrl || "",
-    imageUrl: page.imageUrl || "",
-    imageName: page.imageName || `第 ${Number(page.pageNumber) || index + 1} 页`,
-    ocr: buildOcrSummary(page),
-    updatedAt: page.updatedAt || new Date().toISOString(),
   };
 }

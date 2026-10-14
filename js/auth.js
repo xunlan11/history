@@ -3,7 +3,6 @@ const AUTH_TOKEN_KEY = `${SITE_STORAGE_PREFIX}.authToken`;
 // 其余站点（如 literature）走问渠统一登录（wenqu_session Cookie，跳转 /login）。
 const USE_SSO = (typeof SITE_ID === "string" ? SITE_ID : "history") !== "history";
 let currentUser = null;
-let authReady = false;
 
 const originalFetch = window.fetch.bind(window);
 if (!USE_SSO) {
@@ -120,7 +119,6 @@ async function submitAuth() {
     }
     localStorage.setItem(AUTH_TOKEN_KEY, result.token);
     currentUser = result.user;
-    authReady = true;
     document.querySelector(".auth-modal")?.classList.add("hidden");
     updateAuthUi();
     window.location.reload();
@@ -178,13 +176,11 @@ async function ensureAuthenticated() {
       const data = await response.json();
       if (data.user) {
         currentUser = data.user;
-        authReady = true;
         updateAuthUi();
         return true;
       }
     }
     // 未登录：首页（library）以未登录状态停留在本模块；受保护页才跳转 SSO 登录。
-    authReady = true;
     updateAuthUi();
     if (document.body?.dataset.page !== "library") {
       loginRedirect();
@@ -200,7 +196,6 @@ async function ensureAuthenticated() {
   const response = await originalFetch(endpoint("/data/api/auth/me"), { headers: { Authorization: `Bearer ${token}` } });
   if (response.ok) {
     currentUser = (await response.json()).user;
-    authReady = true;
     updateAuthUi();
     return true;
   }

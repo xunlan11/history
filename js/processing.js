@@ -255,13 +255,7 @@ function renderStreamProgress(item) {
     return;
   }
   const total = Number(task.totalPages) || 0;
-  const legacyProgress = {
-    ocr: { done: Number(task.completedPages) || 0, total },
-    variant: { done: 0, total },
-    punctuation: { done: 0, total },
-    proofreading: { done: Number(task.finalizedPages) || countFinalizedPages(item), total },
-  };
-  const progress = task.stageProgress || legacyProgress;
+  const progress = task.stageProgress || {};
   const finished = task.status === "已完成";
   streamProgress?.classList.remove("hidden");
   if (progressTotalNode) progressTotalNode.textContent = `${total}`;
@@ -269,7 +263,7 @@ function renderStreamProgress(item) {
   for (const stage of PROCESSING_STAGE_CONFIG) {
     const nodes = progressStageNodes.get(stage.key);
     const fill = progressStageFills.get(stage.key);
-    const entry = progress[stage.key] || legacyProgress[stage.key];
+    const entry = progress[stage.key] || {};
     const done = Math.min(total, Number(entry?.done) || 0);
     const percent = total > 0 ? done / total * 100 : 0;
     const active = Boolean(task.activeStages?.[stage.key]);
