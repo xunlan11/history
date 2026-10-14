@@ -217,7 +217,10 @@ function renderFailedProcessingPages(item) {
     button.type = "button";
     button.className = `processing-failed-page is-${entry.stage || "proofreading"}`;
     button.textContent = `${stage?.short || "处理"} ${entry.pageNumber}`;
-    button.title = `${stage?.label || "处理"}失败：第 ${entry.pageNumber} 页${entry.message ? `（${entry.message}）` : ""}；左键跳转，右键删除失败页`;
+    // 悬停只显示失败原因（阶段名/页码看 chip 本身、跳转与删除看操作）；无原因则不设提示
+    if (entry.message) {
+      button.title = entry.message;
+    }
     button.addEventListener("click", () => {
       const current = getLiveDocument(item.id);
       const page = current?.pages.find((pageEntry) => pageEntry.pageNumber === entry.pageNumber);
