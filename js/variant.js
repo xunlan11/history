@@ -1,11 +1,6 @@
-// —— 全局简繁体切换 ——
-// 设置项像“字体”一样存于 localStorage（按站点隔离），默认简体。
-// 源文本即简体，所以“简体”为直出（不转换）；切到“繁体”时，把页面上所有文本
-// （文本节点、document.title、placeholder/title/aria-label 属性）批量发到
-// 数据端 /api/variant，由后端 Python OpenCC 转换后回填。
-//
-// 动态内容（对话、检索结果、阅览页等）由 MutationObserver 捕获并增量转换；
-// 切回简体时直接用保存的原文还原，不再请求后端。
+// Global simplified/traditional switching. OCR and user-entered text may use either form.
+// All visible text is converted to the current target variant and dynamic content is
+// converted incrementally by the MutationObserver.
 (() => {
   const SIMPLIFIED = "simplified";
   const TRADITIONAL = "traditional";
@@ -14,7 +9,16 @@
   const MAX_BATCH = 4000;
   const TRADITIONAL_ALIASES = new Set(["traditional", "t", "hant", "zh-hant", "zh-tw", "zh-hk", "tw", "hk"]);
 
-  const converted = new Map();        // 原文 -> 繁体
+  const convertedByVariant = new Map(); // target variant -> (raw text -> converted text)
+
+  function convertedFor(variant) {
+    let converted = convertedByVariant.get(variant);
+    if (!converted) {
+      converted = new Map();
+      convertedByVariant.set(variant, converted);
+    }
+    return converted;
+  }
   const textOrigins = new WeakMap();  // Text -> 原文
   const textApplied = new WeakMap();  // Text -> 我最后写入的值（用于忽略自身写入）
   const attrOrigins = new WeakMap();  // Element -> { attr: 原文 }
@@ -39,7 +43,7 @@
   function applyText(node) {
     const raw = textOrigins.get(node);
     if (raw == null) return;
-    const target = current === SIMPLIFIED ? raw : converted.get(raw);
+    const target = convertedFor(current).get(raw);
     if (target == null || node.data === target) return;
     textApplied.set(node, target);
     node.data = target;
@@ -52,7 +56,7 @@
     CONVERTED_ATTRS.forEach((attr) => {
       const raw = origins[attr];
       if (raw == null) return;
-      const target = current === SIMPLIFIED ? raw : converted.get(raw);
+      const target = convertedFor(current).get(raw);
       if (target == null || element.getAttribute(attr) === target) return;
       applied[attr] = target;
       element.setAttribute(attr, target);
@@ -66,7 +70,7 @@
       titleOrigin = document.title;
     }
     if (titleOrigin == null) return;
-    const target = current === SIMPLIFIED ? titleOrigin : converted.get(titleOrigin);
+    const target = convertedFor(current).get(titleOrigin);
     if (target == null || document.title === target) return;
     titleApplied = target;
     document.title = target;
@@ -78,7 +82,7 @@
     if (parent && parent.closest(SKIP_SELECTOR)) return;
     textOrigins.set(node, node.data);
     trackedText.add(node);
-    if (current === TRADITIONAL) queueText(node);
+    queueText(node);
   }
 
   function registerElement(element) {
@@ -96,7 +100,7 @@
     if (!changed) return;
     attrOrigins.set(element, origins);
     trackedElements.add(element);
-    if (current === TRADITIONAL) queueAttr(element);
+    queueAttr(element);
   }
 
   function scan(node) {
@@ -141,14 +145,15 @@
     window.setTimeout(run, 0);
   }
 
-  async function fetchConverted(raws) {
+  async function fetchConverted(variant, raws) {
     const list = [...raws];
+    const converted = convertedFor(variant);
     for (let index = 0; index < list.length; index += MAX_BATCH) {
       const chunk = list.slice(index, index + MAX_BATCH);
       const response = await fetch(VARIANT_API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variant: TRADITIONAL, texts: chunk }),
+        body: JSON.stringify({ variant, texts: chunk }),
       });
       if (!response.ok) throw new Error(`variant convert failed: ${response.status}`);
       const data = await response.json();
@@ -160,6 +165,8 @@
   }
 
   async function flush() {
+    const targetVariant = current;
+    const converted = convertedFor(targetVariant);
     const nodes = [...pendingText];
     const elements = [...pendingElements];
     pendingText = new Set();
@@ -180,9 +187,9 @@
     });
     if (titleOrigin && !converted.has(titleOrigin)) raws.add(titleOrigin);
 
-    if (current === TRADITIONAL && raws.size) {
+    if (raws.size) {
       try {
-        await fetchConverted(raws);
+        await fetchConverted(targetVariant, raws);
       } catch (error) {
         console.warn("简繁转换请求失败，保留原文", error);
       }
@@ -224,10 +231,8 @@
     current = normalize(value);
     if (persist) localStorage.setItem(VARIANT_STORAGE_KEY, current);
     updateButtons();
-    if (current === TRADITIONAL) {
-      trackedText.forEach(queueText);
-      trackedElements.forEach(queueAttr);
-    }
+    trackedText.forEach(queueText);
+    trackedElements.forEach(queueAttr);
     applyAll();
   }
 
@@ -240,7 +245,7 @@
           if (textApplied.get(node) === node.data) return; // 自身写入
           textOrigins.set(node, node.data);
           trackedText.add(node);
-          if (current === TRADITIONAL) queueText(node);
+          queueText(node);
         } else if (record.type === "attributes") {
           const element = record.target;
           const attr = record.attributeName;
@@ -251,7 +256,7 @@
           origins[attr] = value;
           attrOrigins.set(element, origins);
           trackedElements.add(element);
-          if (current === TRADITIONAL) queueAttr(element);
+          queueAttr(element);
         } else if (record.type === "childList") {
           record.addedNodes.forEach(scan);
         }
@@ -272,10 +277,8 @@
     updateButtons();
     scan(document.body);
     startObserver();
-    if (current === TRADITIONAL) {
-      trackedText.forEach(queueText);
-      trackedElements.forEach(queueAttr);
-    }
+    trackedText.forEach(queueText);
+    trackedElements.forEach(queueAttr);
   }
 
   variantOptionButtons.forEach((button) => {
