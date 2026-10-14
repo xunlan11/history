@@ -24,12 +24,10 @@ function applyReaderPanelState() {
   if (readerOriginalToggle) {
     readerOriginalToggle.setAttribute("aria-expanded", String(!originalCollapsed));
     readerOriginalToggle.setAttribute("aria-label", originalCollapsed ? "展开原始资料" : "折叠原始资料");
-    readerOriginalToggle.title = originalCollapsed ? "展开原始资料" : "折叠原始资料";
   }
   if (readerAnnotationToggle) {
     readerAnnotationToggle.setAttribute("aria-expanded", String(!annotationCollapsed));
     readerAnnotationToggle.setAttribute("aria-label", annotationCollapsed ? "展开笺注" : "折叠笺注");
-    readerAnnotationToggle.title = annotationCollapsed ? "展开笺注" : "折叠笺注";
   }
 }
 
