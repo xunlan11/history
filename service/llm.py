@@ -183,12 +183,27 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 请处理一页近代军史文献整理文本。
 
 任务：
-1. 输入已经由 OpenCC 完成简体转换；不要再次进行简繁转换或改写字词。
-2. 在不增删、不改写、不概括原文内容的前提下，进行断句和添加现代标点。
-3. 保留人名、地名、机构名、军队番号、年号、日期等专名信息。
-4. 如果输入来自竖排古籍 OCR，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
-5. 不能把推测内容直接写入正文；不确定处放入 uncertainItems。
-6. 输出必须是 JSON，不要输出解释文字。
+1. 输入已经由 OpenCC 完成简体转换；不要再次进行简繁转换，不要改写、润色、补写或删节字词。
+2. 只做断句和现代汉语标点整理。以《标点符号用法》（GB/T 15834—2011）的基本原则为准，但只使用历史文献整理实际需要的标点；不要引入网络、编程、数学、表格或其他专业领域的符号。
+3. 除新增标点外，不增删原文字符，不改变原文语义和史实判断，保留人名、字号、笔名、地名、国名、民族名、朝代名、年号、官署名、机构名、部队番号、职务、日期、档案号和其他专名。不要把专名误拆成多个成分，也不要擅自给不确定的词语加书名号或引号。
+4. 如果输入来自竖排古籍 OCR，保持已经重排好的现代阅读顺序，不要按原版式再次逆序；保留原有段落和必要的换行，不要为了排版任意合并或拆分段落。
+5. 不能把推测内容直接写入正文；无法可靠判断的字词、句界、引文范围或标点，保持最保守的处理，并将问题简要放入 uncertainItems。
+6. 标点判断优先依据语法结构、语义关系和原文已有标点，不要仅凭停顿感或现代口语习惯断句。
+7. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段。
+
+标点原则：
+1. 句末点号：陈述句用“。”；确实表示疑问才用“？”；确实表示强烈感叹、命令或强烈语气才用“！”。历史叙述通常使用“。”，不要为了强调而滥用“？！”或“！”。
+2. 句内点号：短语或分句之间的一般停顿用“，”；并列的词语或短语用“、”；多个内部已经有逗号的并列分句，用“；”分隔。不要把每个 OCR 换行都当作句号，也不要用逗号连接明显已经完整的多个句子。
+3. 冒号：下文是解释、总说后的分说、列举，或明确引出直接引语时使用“：”；关系不明确时不要强行添加。引语中已有完整句末点号的，句末点号放在引号内；引语只是句子成分的，点号按整句结构处理。
+4. 引号：明确的原话、讲话、文件中的直接引文或需要特别指出的语句，用中文双引号“”；引号内再引用时用单引号‘’。不要把普通词语、所有专名或带有推测性质的内容随意加引号。
+5. 书名号：书籍、文章、报刊、文件、条例、地图、汇编等有明确名称的作品或文献，用《》；书名号内再有作品名称时用〈〉。人名、地名、机构名、部队番号、年号本身不用书名号。不能确认某段文字是否为作品名时不要强加。
+6. 括号：补充说明、异名、时间说明或编者可确认的必要信息用中文括号（）；不要用括号写入推测、解释性评论或原文没有的史实。
+7. 破折号：只在确有转折、解释、补充、声音中断或话题突然转换时使用“——”，不要把普通停顿都写成破折号。
+8. 省略号：原文确有省略、话语未完或语意未尽时用“……”；不要用连续三个句点“...”代替，也不要用省略号掩盖无法断定的内容。
+9. 连接号和间隔号：只有原文或语义确实需要表示时间、地点、范围、对应关系时才使用合适的中文连接号；外国人名、少数民族人名等原文已有间隔符号时保留其信息。不要为了格式统一改写日期、数字、档案号或军队番号。
+10. 其他排版：统一使用中文全角标点，不在标点前后添加英文空格；除原文明确需要外，不使用项目符号、井号、@、斜杠、星号、表情符号等非历史文献整理所需符号。不要输出 Markdown、脚注或编辑说明。
+
+处理优先级：先保证原文字符和语义不变，再判断句界，最后选择层级合适且最少的标点。拿不准时少加标点，不要通过标点替原文作历史判断。
 
 返回格式：
 {{
@@ -206,7 +221,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
     try:
         result = call_json_task(prompt)
-        punctuated_text = string_value(result.get("punctuatedText"))
+        punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         uncertain_items = list_value(result.get("uncertainItems"))
         warnings = list_value(result.get("warnings"))
         response = base_response("punctuate", ready=True)
@@ -254,7 +269,8 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 6. 如果 OCR 原始录文来自竖排古籍，保持已经重排好的现代阅读顺序，不要再按原版式逆序处理。
 7. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
 8. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
-9. 输出必须是 JSON，不要输出解释文字。
+9. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段。
+10. 输出必须是 JSON，不要输出解释文字。
 
 返回格式：
 {{
@@ -285,8 +301,8 @@ OpenCC 简体文本：
 
     try:
         result = call_json_task(prompt)
-        clean_text = string_value(result.get("cleanText"))
-        punctuated_text = string_value(result.get("punctuatedText"))
+        clean_text = normalize_generated_text(result.get("cleanText"))
+        punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         warnings = list_value(result.get("warnings"))
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
@@ -670,6 +686,7 @@ def call_json_task(prompt: str) -> dict[str, Any]:
                 "content": (
                     "你是近代军史文献整理助手。你必须忠于原文，只输出合法 JSON，"
                     "不得输出 Markdown，不得输出解释。"
+                    "正文文本字段必须保留自然段，段落换行用 \\n\\n 表示，不要把正文压成一个大段。"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -840,6 +857,19 @@ def format_metadata(metadata: DocumentMetadata) -> str:
             f"出版社：{metadata.publisher}",
         ]
     )
+
+
+def normalize_generated_text(value: Any) -> str:
+    """统一模型返回的换行，保留自然段，不改变正文内容。"""
+    if not isinstance(value, str):
+        return ""
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    # 少数模型会把 JSON 字符串中的换行再次写成字面量 \n；仅在没有真实换行时恢复。
+    if "\n" not in text and "\\n" in text:
+        text = text.replace("\\n", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def string_value(value: Any) -> str:

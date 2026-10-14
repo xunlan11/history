@@ -30,4 +30,3 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 4. 原文高亮。
 5. 图表还原。
 6. 语义检索：嵌入模型把每段文本向量化建索引，检索/问答/编年按意思召回并回指原文。
-7. 分离简繁转换和句读。

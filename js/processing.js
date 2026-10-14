@@ -1,4 +1,4 @@
-// 后端调度正文；浏览器轮询只用于显示，不触发 OCR/LLM 执行。
+﻿// 后端调度正文；浏览器轮询只用于显示，不触发 OCR/LLM 执行。
 const PROCESSING_POLL_INTERVAL_MS = 1500;
 const processingPollTimers = new Map();
 const processingPollInFlight = new Set();
@@ -181,7 +181,6 @@ function setupCombinedProgress() {
   streamStatus?.remove();
   progressStageNodes = new Map([...streamProgress.querySelectorAll("[data-progress-stage]")].map((node) => [node.dataset.progressStage, {
     root: node,
-    fill: node.querySelector("[data-progress-fill]"),
     pages: node.querySelector("[data-progress-pages]"),
     total: node.querySelector("[data-progress-total]"),
     ring: node.querySelector("[data-progress-ring]"),
@@ -258,6 +257,7 @@ function renderStreamProgress(item) {
   };
   const progress = task.stageProgress || legacyProgress;
   const finished = task.status === "已完成";
+  let combinedDone = 0;
   streamProgress?.classList.remove("hidden");
   for (const stage of PROCESSING_STAGE_CONFIG) {
     const nodes = progressStageNodes.get(stage.key);
@@ -266,11 +266,17 @@ function renderStreamProgress(item) {
     const done = Math.min(total, Number(entry?.done) || 0);
     const percent = total > 0 ? done / total * 100 : 0;
     const active = Boolean(task.activeStages?.[stage.key]);
-    if (nodes.fill) nodes.fill.style.width = `${clampPercent(percent)}%`;
+    combinedDone += done;
+    const combinedFill = streamProgress?.querySelector(`[data-progress-fill="${stage.key}"]`);
+    if (combinedFill) combinedFill.style.width = `${clampPercent(percent)}%`;
     if (nodes.pages) nodes.pages.textContent = `${done}`;
     if (nodes.total) nodes.total.textContent = `${total}`;
     setRingProgress(nodes.ring, finished ? 100 : active ? 5 : percent);
   }
+  const combinedDoneNode = streamProgress?.querySelector("[data-progress-combined-done]");
+  const combinedTotalNode = streamProgress?.querySelector("[data-progress-combined-total]");
+  if (combinedDoneNode) combinedDoneNode.textContent = `${combinedDone}`;
+  if (combinedTotalNode) combinedTotalNode.textContent = `${total * PROCESSING_STAGE_CONFIG.length}`;
   if (backendProgressStatus) {
     const mode = task.mode === "parallel" ? "并行流水线" : "串行逐页";
     backendProgressStatus.textContent = `${mode} · ${getProcessingTaskLabel(item)}${task.status === "等候中" ? "（后端自动续跑，无需保持浏览器打开）" : ""}`;
