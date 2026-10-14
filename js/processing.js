@@ -168,13 +168,14 @@ async function requestLlmTask(path, payload, options = {}) {
 }
 
 const PROCESSING_STAGE_CONFIG = [
-  { key: "ocr", label: "文字识别", color: "ocr" },
-  { key: "variant", label: "简繁转换", color: "variant" },
-  { key: "punctuation", label: "标点符号", color: "punctuation" },
-  { key: "proofreading", label: "校对", color: "proofreading" },
+  { key: "ocr", label: "文字识别", short: "识别", color: "ocr" },
+  { key: "variant", label: "简繁转换", short: "简繁", color: "variant" },
+  { key: "punctuation", label: "标点符号", short: "标点", color: "punctuation" },
+  { key: "proofreading", label: "校对", short: "校对", color: "proofreading" },
 ];
 let progressStageNodes = new Map();
-let backendProgressStatus, failedPageMarkers;
+let progressStageFills = new Map();
+let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
@@ -182,15 +183,13 @@ function setupCombinedProgress() {
   progressStageNodes = new Map([...streamProgress.querySelectorAll("[data-progress-stage]")].map((node) => [node.dataset.progressStage, {
     root: node,
     pages: node.querySelector("[data-progress-pages]"),
-    total: node.querySelector("[data-progress-total]"),
     ring: node.querySelector("[data-progress-ring]"),
   }]));
-  backendProgressStatus = document.createElement("p");
-  backendProgressStatus.className = "backend-processing-status";
-  backendProgressStatus.setAttribute("aria-live", "polite");
-  failedPageMarkers = document.createElement("div");
-  failedPageMarkers.className = "processing-failed-pages";
-  streamProgress.append(backendProgressStatus, failedPageMarkers);
+  progressStageFills = new Map([...streamProgress.querySelectorAll("[data-progress-fill]")].map((node) => [node.dataset.progressFill, node]));
+  progressTotalNode = streamProgress.querySelector("[data-progress-total]");
+  progressModeNode = streamProgress.querySelector("[data-progress-mode]");
+  progressFailedNode = streamProgress.querySelector("[data-progress-failed]");
+  failedPageMarkers = streamProgress.querySelector("[data-progress-failed-pages]");
 }
 setupCombinedProgress();
 
@@ -205,19 +204,23 @@ function setRingProgress(node, percent) {
   node.style.strokeDashoffset = `${length * (1 - clampPercent(percent) / 100)}`;
 }
 
+// 失败页统一用一个标题，条目只写两字阶段名 + 页码；完整报错在 title 提示里。
 function renderFailedProcessingPages(item) {
-  if (!failedPageMarkers) return;
-  const labels = Object.fromEntries(PROCESSING_STAGE_CONFIG.map((stage) => [stage.key, stage.label]));
+  if (!failedPageMarkers || !progressFailedNode) return;
+  const stages = Object.fromEntries(PROCESSING_STAGE_CONFIG.map((stage) => [stage.key, stage]));
+  const failed = item.processingTask?.failedPages || [];
   failedPageMarkers.replaceChildren();
-  for (const failed of item.processingTask?.failedPages || []) {
+  progressFailedNode.classList.toggle("hidden", failed.length === 0);
+  for (const entry of failed) {
+    const stage = stages[entry.stage];
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `processing-failed-page is-${failed.stage || "proofreading"}`;
-    button.textContent = `${labels[failed.stage] || "处理"}失败：第 ${failed.pageNumber} 页`;
-    button.title = `${failed.message || "处理失败"}；左键跳转，右键删除失败页`;
+    button.className = `processing-failed-page is-${entry.stage || "proofreading"}`;
+    button.textContent = `${stage?.short || "处理"} ${entry.pageNumber}`;
+    button.title = `${stage?.label || "处理"}失败：第 ${entry.pageNumber} 页${entry.message ? `（${entry.message}）` : ""}；左键跳转，右键删除失败页`;
     button.addEventListener("click", () => {
       const current = getLiveDocument(item.id);
-      const page = current?.pages.find((entry) => entry.pageNumber === failed.pageNumber);
+      const page = current?.pages.find((pageEntry) => pageEntry.pageNumber === entry.pageNumber);
       if (!page) return;
       selectedDocumentId = current.id;
       selectedPageId = page.id;
@@ -226,11 +229,11 @@ function renderFailedProcessingPages(item) {
     button.addEventListener("contextmenu", async (event) => {
       event.preventDefault();
       if (!canEditDocument(getLiveDocument(item.id))) return;
-      if (!window.confirm(`确认删除第 ${failed.pageNumber} 页的失败页记录？该页已保存的识别和整理文字将被删除，归档原件不受影响。`)) return;
+      if (!window.confirm(`确认删除第 ${entry.pageNumber} 页的失败页记录？该页已保存的识别和整理文字将被删除，归档原件不受影响。`)) return;
       try {
         await flushPendingSync();
         if (syncDirty) throw new Error("本地修改尚未同步，请稍后再删除。");
-        const result = await requestBackendProcessing(item.id, { method: "DELETE", suffix: `/failed-pages/${failed.pageNumber}` });
+        const result = await requestBackendProcessing(item.id, { method: "DELETE", suffix: `/failed-pages/${entry.pageNumber}` });
         const current = applyBackendProcessingDocument(item.id, result);
         if (current) ensureSelectedPage(current);
         renderAll();
@@ -257,29 +260,21 @@ function renderStreamProgress(item) {
   };
   const progress = task.stageProgress || legacyProgress;
   const finished = task.status === "已完成";
-  let combinedDone = 0;
   streamProgress?.classList.remove("hidden");
+  if (progressTotalNode) progressTotalNode.textContent = `${total}`;
+  if (progressModeNode) progressModeNode.textContent = task.mode === "parallel" ? "并行" : "串行";
   for (const stage of PROCESSING_STAGE_CONFIG) {
     const nodes = progressStageNodes.get(stage.key);
-    if (!nodes) continue;
+    const fill = progressStageFills.get(stage.key);
     const entry = progress[stage.key] || legacyProgress[stage.key];
     const done = Math.min(total, Number(entry?.done) || 0);
     const percent = total > 0 ? done / total * 100 : 0;
     const active = Boolean(task.activeStages?.[stage.key]);
-    combinedDone += done;
-    const combinedFill = streamProgress?.querySelector(`[data-progress-fill="${stage.key}"]`);
-    if (combinedFill) combinedFill.style.width = `${clampPercent(percent)}%`;
-    if (nodes.pages) nodes.pages.textContent = `${done}`;
-    if (nodes.total) nodes.total.textContent = `${total}`;
-    setRingProgress(nodes.ring, finished ? 100 : active ? 5 : percent);
-  }
-  const combinedDoneNode = streamProgress?.querySelector("[data-progress-combined-done]");
-  const combinedTotalNode = streamProgress?.querySelector("[data-progress-combined-total]");
-  if (combinedDoneNode) combinedDoneNode.textContent = `${combinedDone}`;
-  if (combinedTotalNode) combinedTotalNode.textContent = `${total * PROCESSING_STAGE_CONFIG.length}`;
-  if (backendProgressStatus) {
-    const mode = task.mode === "parallel" ? "并行流水线" : "串行逐页";
-    backendProgressStatus.textContent = `${mode} · ${getProcessingTaskLabel(item)}${task.status === "等候中" ? "（后端自动续跑，无需保持浏览器打开）" : ""}`;
+    if (fill) fill.style.width = `${clampPercent(percent)}%`;
+    if (nodes) {
+      if (nodes.pages) nodes.pages.textContent = `${done}`;
+      setRingProgress(nodes.ring, finished ? 100 : active ? 5 : percent);
+    }
   }
   renderFailedProcessingPages(item);
 }

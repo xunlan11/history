@@ -42,48 +42,37 @@
                 <div class="reader-progress-area">
                   <div class="progress-stack hidden" id="reader-stream-progress">
                     <div class="progress-header">
-                      <span class="progress-title">处理进度</span>
-                      <span class="progress-mode-hint">四阶段处理</span>
-                    </div>
-                    <div class="progress-stage-rings" aria-label="各阶段每页处理进度">
-                      <div class="progress-stage-ring-item" data-progress-stage="ocr">
-                        <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-ocr" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg></div>
-                        <span class="progress-stage-label">文字识别</span>
-                        <span class="progress-stage-count"><b data-progress-pages>0</b>/<span data-progress-total>0</span> 页</span>
+                      <div class="progress-heading">
+                        <span class="progress-title">处理进度</span>
+                        <span class="progress-mode" data-progress-mode>串行</span>
                       </div>
-                      <div class="progress-stage-ring-item" data-progress-stage="variant">
-                        <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-variant" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg></div>
-                        <span class="progress-stage-label">简繁转换</span>
-                        <span class="progress-stage-count"><b data-progress-pages>0</b>/<span data-progress-total>0</span> 页</span>
-                      </div>
-                      <div class="progress-stage-ring-item" data-progress-stage="punctuation">
-                        <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-punctuation" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg></div>
-                        <span class="progress-stage-label">标点符号</span>
-                        <span class="progress-stage-count"><b data-progress-pages>0</b>/<span data-progress-total>0</span> 页</span>
-                      </div>
-                      <div class="progress-stage-ring-item" data-progress-stage="proofreading">
-                        <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-proofreading" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg></div>
-                        <span class="progress-stage-label">校对</span>
-                        <span class="progress-stage-count"><b data-progress-pages>0</b>/<span data-progress-total>0</span> 页</span>
+                      <div class="progress-header-tools" aria-label="各阶段每页处理进度">
+                        <div class="progress-stage-ring-item" data-progress-stage="ocr" title="文字识别">
+                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-ocr" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">识别</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                        </div>
+                        <div class="progress-stage-ring-item" data-progress-stage="variant" title="简繁转换">
+                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-variant" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">简繁</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                        </div>
+                        <div class="progress-stage-ring-item" data-progress-stage="punctuation" title="标点符号">
+                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-punctuation" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">标点</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                        </div>
+                        <div class="progress-stage-ring-item" data-progress-stage="proofreading" title="校对">
+                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-proofreading" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">校对</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                        </div>
                       </div>
                     </div>
-                    <div class="progress-combined" aria-label="四阶段合并进度">
-                      <div class="progress-combined-heading">
-                        <span>合并进度</span>
-                        <span class="progress-combined-count"><b data-progress-combined-done>0</b>/<span data-progress-combined-total>0</span> 阶段页</span>
+                    <div class="progress-bar-row">
+                      <div class="progress-track progress-track-main" aria-label="四阶段合并进度">
+                        <div class="progress-fill progress-fill-ocr" data-progress-fill="ocr"></div>
+                        <div class="progress-fill progress-fill-variant" data-progress-fill="variant"></div>
+                        <div class="progress-fill progress-fill-punctuation" data-progress-fill="punctuation"></div>
+                        <div class="progress-fill progress-fill-proofreading" data-progress-fill="proofreading"></div>
                       </div>
-                      <div class="progress-track progress-track-main progress-combined-track">
-                        <div class="progress-combined-segment progress-combined-segment-ocr"><div class="progress-fill progress-fill-ocr" data-progress-fill="ocr"></div></div>
-                        <div class="progress-combined-segment progress-combined-segment-variant"><div class="progress-fill progress-fill-variant" data-progress-fill="variant"></div></div>
-                        <div class="progress-combined-segment progress-combined-segment-punctuation"><div class="progress-fill progress-fill-punctuation" data-progress-fill="punctuation"></div></div>
-                        <div class="progress-combined-segment progress-combined-segment-proofreading"><div class="progress-fill progress-fill-proofreading" data-progress-fill="proofreading"></div></div>
-                      </div>
-                      <div class="progress-combined-legend" aria-hidden="true">
-                        <span><i class="progress-legend-swatch progress-legend-swatch-ocr"></i>文字识别</span>
-                        <span><i class="progress-legend-swatch progress-legend-swatch-variant"></i>简繁转换</span>
-                        <span><i class="progress-legend-swatch progress-legend-swatch-punctuation"></i>标点符号</span>
-                        <span><i class="progress-legend-swatch progress-legend-swatch-proofreading"></i>校对</span>
-                      </div>
+                      <span class="progress-total" title="总页数"><b data-progress-total>0</b></span>
+                    </div>
+                    <div class="processing-failed hidden" data-progress-failed>
+                      <span class="processing-failed-title">失败页</span>
+                      <div class="processing-failed-pages" data-progress-failed-pages></div>
                     </div>
                   </div>
                 </div>

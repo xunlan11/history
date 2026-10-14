@@ -1130,172 +1130,110 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 28px;
-  margin: -2px -4px 0 0;
+  margin: -6px -4px 0 0;
 }
 
-.progress-header-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* 左栏：标题 + 处理方式（串行 / 并行）两行；环固定在右上角 */
+.progress-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .progress-title {
   color: var(--text);
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 700;
-}
-
-.progress-mode-hint {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.progress-stage-rings {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 12px;
-  padding: 0 2px;
-}
-
-.progress-stage-ring-item {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  min-width: 0;
-  text-align: center;
-}
-
-.progress-stage-ring-item .progress-ring {
-  width: 42px;
-  height: 42px;
-}
-
-.progress-stage-label {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.progress-stage-count {
+.progress-mode {
   color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+  font-size: 13px;
   line-height: 1.2;
   white-space: nowrap;
 }
 
-.progress-stage-count b {
-  color: var(--text);
-}
-
+/* 各阶段（环 / 进度条段）统一用色 */
 .progress-ring-fill-variant { stroke: #6d8fbd; }
 .progress-ring-fill-punctuation { stroke: #b27a42; }
 .progress-ring-fill-proofreading { stroke: var(--accent); }
 
-.progress-combined {
+/* 四个阶段环固定在右上角（环内上排两字简称、下排页数） */
+.progress-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 环尺寸：必须给环项显式宽度——只写 flex-basis 时，父容器按 max-content 计算会退回 min-width，
+   环会缩到 30px、环内文字被环线压住。显式 width 后 300px 侧栏下环为 52px，变窄按比例收缩不溢出 */
+.progress-header-tools .progress-stage-ring-item {
+  flex: 0 1 auto;
+  width: 52px;
+  min-width: 30px;
+}
+
+.progress-bar-row {
   display: grid;
-  gap: 6px;
-  margin-top: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
 }
 
-.progress-combined-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.progress-combined-count {
+/* 总页数固定在进度条右侧（与条同行） */
+.progress-total {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 15px;
   font-variant-numeric: tabular-nums;
-  font-weight: 400;
+  white-space: nowrap;
 }
 
-.progress-combined-count b {
+.progress-total b {
   color: var(--text);
   font-weight: 700;
 }
 
+/* 四阶段合并进度条：单条轨道，各阶段按流水线顺序分层叠加（沿用旧版两层叠加的做法） */
 .progress-track-main {
-  display: flex;
+  position: relative;
   height: 12px;
   overflow: hidden;
   border-radius: 999px;
   background: #edf2ef;
 }
 
-.progress-combined-segment {
-  flex: 1 1 25%;
-  min-width: 0;
-  overflow: hidden;
-  border-right: 2px solid #fbfdfc;
-  background: #edf2ef;
-}
-
-.progress-combined-segment:last-child {
-  border-right: 0;
-}
-
-.progress-combined-segment .progress-fill {
+.progress-track-main .progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
   width: 0;
   height: 100%;
   border-radius: 0;
   transition: width 0.35s ease;
 }
 
-.progress-fill-ocr { background: linear-gradient(90deg, var(--primary), #3e8f76); }
-.progress-fill-variant { background: #6d8fbd; }
-.progress-fill-punctuation { background: #b27a42; }
-.progress-fill-proofreading { background: linear-gradient(90deg, var(--accent), #c7775f); }
+.progress-fill-ocr { z-index: 1; background: linear-gradient(90deg, var(--primary), #3e8f76); }
+.progress-fill-variant { z-index: 2; background: #6d8fbd; }
+.progress-fill-punctuation { z-index: 3; background: #b27a42; }
+.progress-fill-proofreading { z-index: 4; background: linear-gradient(90deg, var(--accent), #c7775f); }
 
-.progress-combined-legend {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.2;
-}
-
-.progress-combined-legend span {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  gap: 4px;
-  white-space: nowrap;
-}
-
-.progress-legend-swatch {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 50%;
-}
-
-.progress-legend-swatch-ocr { background: var(--primary); }
-.progress-legend-swatch-variant { background: #6d8fbd; }
-.progress-legend-swatch-punctuation { background: #b27a42; }
-.progress-legend-swatch-proofreading { background: var(--accent); }
-
+/* 环：SVG 铺满做底（z-index 0，不能被环线遮挡文字），环内文字居中竖排（简称 / 页数） */
 .progress-ring {
   position: relative;
-  width: 46px;
-  height: 46px;
-  flex: none;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 1px;
+  width: 100%;
+  aspect-ratio: 1 / 1;
 }
 
 .progress-ring svg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   width: 100%;
   height: 100%;
   transform: rotate(-90deg);
@@ -1318,19 +1256,25 @@ body {
   stroke: var(--primary);
 }
 
-.progress-ring-fill-llm {
-  stroke: var(--accent);
+.progress-ring-label {
+  position: relative;
+  z-index: 1;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
-.progress-ring-label {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
+.progress-ring-count {
+  position: relative;
+  z-index: 1;
+  color: var(--text);
+  font-size: 12px;
   font-weight: 700;
-  color: var(--muted);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .reader-progress-area {
@@ -3588,11 +3532,31 @@ body {
   overflow-wrap: anywhere;
 }
 
-.backend-processing-status { margin: 10px 0 0; font-size: 12px; color: var(--muted, #737373); }
-.processing-failed-pages { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.processing-failed-page { padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; background: transparent; cursor: pointer; font-size: 12px; }
+/* 失败页：统一标题 + 两字阶段 chip（有失败页才显示） */
+.processing-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+/* 注意：.hidden 定义在本文件更早处，同优先级下会被上面的 display 覆盖，必须写成复合选择器 */
+.processing-failed.hidden {
+  display: none;
+}
+
+.processing-failed-title {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.processing-failed-pages { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.processing-failed-page { padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; background: transparent; cursor: pointer; font-size: 12px; font-variant-numeric: tabular-nums; }
 .processing-failed-page.is-ocr { color: var(--primary); }
-.processing-failed-page.is-llm { color: var(--accent); }
+.processing-failed-page.is-variant { color: #6d8fbd; }
+.processing-failed-page.is-punctuation { color: #b27a42; }
+.processing-failed-page.is-proofreading { color: var(--accent); }
 
 .startup-error {
   position: fixed;

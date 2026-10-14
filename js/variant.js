@@ -82,6 +82,7 @@
   }
 
   function registerElement(element) {
+    if (element.closest(SKIP_SELECTOR)) return;
     const origins = attrOrigins.get(element) || {};
     let changed = false;
     CONVERTED_ATTRS.forEach((attr) => {
