@@ -846,7 +846,6 @@ function renderReaderDetailActions(item, canEdit, editing) {
     saveButton.type = "button";
     saveButton.className = "ghost-link icon-text-button";
     saveButton.id = "reader-detail-save";
-    saveButton.title = "保存文献信息";
     saveButton.innerHTML =
       '<span>保存</span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg>';
     saveButton.addEventListener("click", () => saveReaderDetailEdits(item.id));
@@ -859,7 +858,6 @@ function renderReaderDetailActions(item, canEdit, editing) {
   editButton.type = "button";
   editButton.className = "ghost-link icon-text-button";
   editButton.id = "reader-detail-edit";
-  editButton.title = "编辑文献信息";
   editButton.setAttribute("aria-label", "编辑文献信息");
   editButton.innerHTML =
     '<span>修改</span><svg aria-hidden="true" viewBox="0 0 24 24">' +
