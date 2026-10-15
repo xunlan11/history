@@ -74,7 +74,16 @@ button {
   overflow: hidden;
 }
 
+.reader-layout.is-sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.reader-sidebar-stack[hidden] {
+  display: none;
+}
+
 .reader-main {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   gap: 14px;
@@ -919,6 +928,14 @@ button:focus-visible {
   color: var(--primary);
 }
 
+.reader-sidebar-toggle.icon-button {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 2;
+  transform: translateY(-50%);
+}
+
 .reader-panel-toggle.icon-button:hover {
   background: #e3ebe7;
   color: var(--primary-dark);
@@ -936,6 +953,7 @@ button:focus-visible {
   display: none;
 }
 
+.reader-layout.is-sidebar-collapsed .reader-sidebar-toggle svg,
 .reader-compare.is-original-collapsed .reader-original-heading .reader-panel-toggle svg,
 .reader-compare.is-annotation-collapsed .reader-annotation-heading .reader-panel-toggle svg {
   transform: rotate(180deg);

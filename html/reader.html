@@ -28,8 +28,8 @@
             </div>
           </header>
 
-          <div class="reader-layout">
-            <div class="reader-sidebar-stack">
+          <div class="reader-layout" id="reader-layout">
+            <div class="reader-sidebar-stack" id="reader-sidebar-stack">
               <aside class="panel reader-sidebar" aria-label="文献信息">
                 <div class="section-heading reader-detail-heading">
                   <h3>文献信息</h3>
@@ -80,6 +80,9 @@
               <section class="panel reader-sidebar-reserved" aria-hidden="true"></section>
             </div>
             <section class="reader-main">
+              <button class="icon-button reader-panel-toggle reader-sidebar-toggle" id="reader-sidebar-toggle" type="button" aria-label="折叠工具栏" title="折叠工具栏" aria-controls="reader-sidebar-stack" aria-expanded="true">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+              </button>
               <section class="panel reader-combined-panel">
                 <div class="reader-compare" id="reader-compare">
                   <div class="section-heading reader-original-heading">

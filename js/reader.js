@@ -4,18 +4,27 @@ function loadReaderPanelState() {
   try {
     const value = JSON.parse(localStorage.getItem(READER_PANEL_STATE_STORAGE_KEY)) || {};
     return {
+      sidebarCollapsed: value.sidebarCollapsed === true,
       originalCollapsed: value.originalCollapsed === true,
       annotationCollapsed: value.annotationCollapsed === true,
     };
   } catch {
-    return { originalCollapsed: false, annotationCollapsed: false };
+    return { sidebarCollapsed: false, originalCollapsed: false, annotationCollapsed: false };
   }
 }
 
 let readerPanelState = loadReaderPanelState();
 
 function applyReaderPanelState() {
-  const { originalCollapsed, annotationCollapsed } = readerPanelState;
+  const { sidebarCollapsed, originalCollapsed, annotationCollapsed } = readerPanelState;
+  readerLayout?.classList.toggle("is-sidebar-collapsed", sidebarCollapsed);
+  if (readerSidebarStack) readerSidebarStack.hidden = sidebarCollapsed;
+  if (readerSidebarToggle) {
+    const label = sidebarCollapsed ? "展开工具栏" : "折叠工具栏";
+    readerSidebarToggle.setAttribute("aria-expanded", String(!sidebarCollapsed));
+    readerSidebarToggle.setAttribute("aria-label", label);
+    readerSidebarToggle.title = label;
+  }
   readerCompare?.classList.toggle("is-original-collapsed", originalCollapsed);
   readerCompare?.classList.toggle("is-annotation-collapsed", annotationCollapsed);
   readerOriginalPanel?.classList.toggle("reader-panel-collapsed", originalCollapsed);
@@ -32,7 +41,9 @@ function applyReaderPanelState() {
 }
 
 function toggleReaderPanel(panel) {
-  if (panel === "original") {
+  if (panel === "sidebar") {
+    readerPanelState.sidebarCollapsed = !readerPanelState.sidebarCollapsed;
+  } else if (panel === "original") {
     readerPanelState.originalCollapsed = !readerPanelState.originalCollapsed;
   } else if (panel === "annotation") {
     readerPanelState.annotationCollapsed = !readerPanelState.annotationCollapsed;
@@ -43,6 +54,7 @@ function toggleReaderPanel(panel) {
   applyReaderPanelState();
 }
 
+readerSidebarToggle?.addEventListener("click", () => toggleReaderPanel("sidebar"));
 readerOriginalToggle?.addEventListener("click", () => toggleReaderPanel("original"));
 readerAnnotationToggle?.addEventListener("click", () => toggleReaderPanel("annotation"));
 applyReaderPanelState();
