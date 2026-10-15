@@ -3357,6 +3357,106 @@ body {
   overflow-wrap: anywhere;
 }
 
+.conversation-retrieval {
+  min-width: 0;
+  width: 100%;
+}
+
+.conversation-retrieval-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.conversation-retrieval summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.conversation-retrieval-group {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.conversation-retrieval-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.conversation-match-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.conversation-match-table th,
+.conversation-match-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.conversation-match-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.conversation-match-table th:first-child,
+.conversation-match-table td:first-child {
+  width: 3.5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.conversation-match-table th:last-child,
+.conversation-match-table td:last-child {
+  width: 28%;
+}
+
+.conversation-match-table td:nth-child(2) {
+  white-space: pre-wrap;
+}
+
+.conversation-match-table td a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.conversation-match-table td a:hover {
+  text-decoration: underline;
+}
+
+.conversation-match-row {
+  cursor: pointer;
+}
+
+.conversation-match-row:hover,
+.conversation-match-row:focus-within {
+  background: var(--surface-2);
+}
+
+.conversation-match-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+@media (max-width: 600px) {
+  .conversation-match-table th,
+  .conversation-match-table td {
+    padding: 7px 5px;
+  }
+
+  .conversation-match-table th:first-child,
+  .conversation-match-table td:first-child {
+    width: 2.75rem;
+  }
+}
+
 .conversation-answer-text {
   margin: 0;
   line-height: 1.75;

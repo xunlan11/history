@@ -80,19 +80,30 @@ def fit_prompt_budget(query: str, mode: str, evidence: list[dict], history: list
     budget = config.context_tokens - config.output_tokens - config.template_margin
     if count_tokens(evidence_messages(query, mode, [], []), config) > budget:
         raise EvidenceError("固定提示词和问题超出模型上下文，请缩短问题或联系管理员调整配置")
-    while True:
+    messages = evidence_messages(query, mode, evidence, history)
+    tokens = count_tokens(messages, config)
+    while tokens > budget and history:
+        history.pop(0)
+        warnings.append("已按上下文预算裁剪较早对话")
         messages = evidence_messages(query, mode, evidence, history)
         tokens = count_tokens(messages, config)
-        if tokens <= budget:
-            break
-        if history:
-            history.pop(0)
-            warnings.append("已按上下文预算裁剪较早对话")
-        elif len(evidence) > 1:
-            evidence.pop()
-            warnings.append("已按上下文预算缩减低排名材料")
-        else:
+    if tokens > budget:
+        # Find the longest fitting prefix without reserializing every smaller list.
+        low, high, best = 1, len(evidence) - 1, None
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = evidence_messages(query, mode, evidence[:middle], history)
+            candidate_tokens = count_tokens(candidate, config)
+            if candidate_tokens <= budget:
+                best = (middle, candidate, candidate_tokens)
+                low = middle + 1
+            else:
+                high = middle - 1
+        if best is None:
             raise EvidenceError("当前模型无法容纳完整材料片段，请缩小材料范围或联系管理员调整配置")
+        length, messages, tokens = best
+        evidence = evidence[:length]
+        warnings.append("已按上下文预算缩减低排名材料")
     return BudgetedRequest(messages, evidence, history, tokens, list(dict.fromkeys(warnings)))
 
 

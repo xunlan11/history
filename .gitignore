@@ -7,4 +7,5 @@ __pycache__/
 .agents
 /.codegraph/
 /docs
+/tests
 测试文件

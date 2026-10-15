@@ -93,14 +93,14 @@ class SupplementChronicleRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
     query: str
     documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
-    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
     prompt: str
     context: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)

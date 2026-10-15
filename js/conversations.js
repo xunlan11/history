@@ -681,66 +681,79 @@ conversationFileInput?.addEventListener("change", () => {
   uploadSelectedConversationFiles(conversationFileInput.files);
   conversationFileInput.value = "";
 });
-function renderLlmSearchResults(matches, warnings = [], query = "", container = searchResults) {
+function renderLlmSearchResults(matches, warnings = [], query = "", container = searchResults, startNumber = 1) {
   container.innerHTML = "";
   container.classList.remove("empty-result-list");
-
   if (!matches.length) {
     renderResultState(container, "未找到匹配内容");
     if (warnings.length) container.append(formatWarnings(warnings));
     return;
   }
-
+  const table = document.createElement("table");
+  table.className = "conversation-match-table";
+  const head = document.createElement("thead");
+  const headings = document.createElement("tr");
+  for (const label of ["序号", "匹配文本", "出处"]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headings.append(cell);
+  }
+  head.append(headings);
+  const body = document.createElement("tbody");
   matches.forEach((match, index) => {
     const target = resolveSearchMatch(match);
     const attachment = target?.attachment || null;
     const item = target?.item || {};
     const page = target?.page || null;
-    const result = document.createElement("article");
-    const content = document.createElement("div");
-    const title = document.createElement("h4");
-    const meta = document.createElement("p");
-    const excerpt = document.createElement("p");
-    const reason = document.createElement("p");
-    const action = document.createElement("button");
-
-    result.className = "result-item";
-    title.textContent = attachment
-      ? attachment.fileName
-      : page
-      ? `${getDocumentDisplayTitle(item)} · 第 ${page.pageNumber} 页`
-      : match.title || "匹配结果";
-    meta.textContent = [
-      attachment ? "当前对话上传文件（快速读取）" : match.author || item.author || "著者未录",
-      match.year || item.year || "年份未录",
-      match.matchedAs ? `按“${match.matchedAs}”匹配` : "",
-      match.sourceLayer === "notes" ? "笔记（非正文）" : "",
-      match.matchType || "",
-    ].filter(Boolean).join(" · ");
-    excerpt.innerHTML = highlightIfLiteral(match.quote || match.snippet || match.summary || "", query);
-    reason.textContent = match.reason ? `判断：${match.reason}` : "";
-    reason.className = "meta-line";
-    action.className = "secondary-button";
-    action.type = "button";
-    action.textContent = attachment ? "打开文件" : "打开原文";
-    const actionHref = match.chunkId && match.sourceType === "document-page" ? buildEvidenceHref(match) : searchResultHref(attachment, item, page);
-    action.disabled = !actionHref;
-    action.addEventListener("click", () => {
-      if (actionHref) {
-        window.open(actionHref, "_blank", "noopener");
-      }
-    });
-
-    content.append(title, meta, excerpt);
-    if (reason.textContent) {
-      content.append(reason);
+    const row = document.createElement("tr");
+    const number = document.createElement("td");
+    const excerpt = document.createElement("td");
+    const source = document.createElement("td");
+    number.textContent = String(startNumber + index);
+    const quote = match.quote || match.snippet || match.summary || "";
+    if (Number.isInteger(match.matchStart) && Number.isInteger(match.contextStart)) {
+      const points = Array.from(quote);
+      const start = match.matchStart - match.contextStart, end = match.matchEnd - match.contextStart;
+      excerpt.innerHTML = escapeHtml(points.slice(0, start).join("")) + "<mark>" +
+        escapeHtml(points.slice(start, end).join("")) + "</mark>" + escapeHtml(points.slice(end).join(""));
+    } else {
+      excerpt.innerHTML = highlightIfLiteral(quote, query);
     }
-    if (Array.isArray(warnings) && warnings.length && index === matches.length - 1) {
-      content.append(formatWarnings(warnings));
+    const title = attachment?.fileName || (item.id ? getDocumentDisplayTitle(item) : match.title) || "未命名文献";
+    const pageNumber = match.pageNumber ?? page?.pageNumber;
+    const location = match.sourceType === "conversation-file" ? "对话附件"
+      : pageNumber != null ? `第 ${pageNumber} 页` : "页码未录";
+    const sourceLabel = `${title} · ${location}` + (match.sourceLayer === "notes" ? " · 笔记" : "");
+    const href = match.chunkId && match.sourceType === "document-page"
+      ? buildEvidenceHref(match) : searchResultHref(attachment, item, page);
+    if (href) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = sourceLabel;
+      source.append(link);
+      row.tabIndex = 0;
+      row.className = "conversation-match-row";
+      row.setAttribute("aria-label", `打开 ${sourceLabel}`);
+      row.addEventListener("click", (event) => {
+        if (!event.target?.closest?.("a")) window.open(href, "_blank", "noopener");
+      });
+      row.addEventListener("keydown", (event) => {
+        if (event.target?.closest?.("a") || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        window.open(href, "_blank", "noopener");
+      });
+    } else {
+      source.textContent = sourceLabel;
     }
-    result.append(content, action);
-    container.append(result);
+    row.append(number, excerpt, source);
+    body.append(row);
   });
+  table.append(head, body);
+  container.append(table);
+  if (warnings.length) container.append(formatWarnings(warnings));
 }
 
 function highlightIfLiteral(text, query) {
@@ -928,16 +941,21 @@ async function captureConversationTurnRequest(conversation, mode, prompt, before
     documentIds: getSmartScopeDocuments(conversation).map((item) => item.id),
     textPolicy: isReferenceScopeActive(conversation) ? "processed" : "primary",
   };
-  const attachments = previousRequest
+  const fullMatches = mode === "chat" || mode === "search";
+  const attachmentSources = fullMatches ? JSON.parse(JSON.stringify(previousRequest?.attachmentSources ||
+    report.attachments.ready.map(({ id, fileName, extractedText }) => ({ id, fileName, extractedText })))) : null;
+  const attachments = fullMatches ? [] : previousRequest
     ? JSON.parse(JSON.stringify((previousRequest.body.evidence || []).filter((e) => e.sourceType === "conversation-file")))
     : attachmentEvidence(prompt, conversation);
   const history = JSON.parse(JSON.stringify(getConversationTurnHistory(conversation, beforeTurnId)));
-  const result = await fetchRetrievalEvidence({ query: prompt, mode, ...retrieval });
-  const evidence = mergeRetrievalMaterials(result.hits, attachments);
+  const result = await fetchRetrievalEvidence({ query: prompt, mode, ...retrieval,
+    ...(fullMatches ? { attachments: attachmentSources } : {}) });
+  const evidence = mergeRetrievalMaterials(result.hits.filter((hit) => hit.sourceType !== "conversation-file"),
+    [...result.hits.filter((hit) => hit.sourceType === "conversation-file"), ...attachments]);
   const key = mode === "chat" ? "prompt" : mode === "search" ? "query" : "topic";
-  return { path: "/" + mode, body: { [key]: prompt, evidence, options: { history } }, retrieval,
+  return { path: "/" + mode, body: { [key]: prompt, evidence, options: { history } }, retrieval, attachmentSources,
     warnings: [...new Set([...(previousRequest?.warnings || report.warnings), ...result.warnings])],
-    coverage: result.coverage, sourceDocumentIds: [...new Set(result.hits.map((e) => e.documentId))] };
+    coverage: result.coverage, sourceDocumentIds: [...new Set(result.hits.filter((e) => e.sourceType === "document-page").map((e) => e.documentId))] };
 }
 
 async function sendConversationTurn(mode) {
@@ -976,10 +994,52 @@ async function sendConversationTurn(mode) {
   await generateConversationTurn(conversationId, turn.id, true);
 }
 
+function conversationRetrievalMatches(request) {
+  return (request?.body?.evidence || []).map(({ text, ...source }) => {
+    const level = source.level || (source.matchedBy?.includes("semantic") ? "semantic" : "partial");
+    const matchStart = source.matchStart ?? source.start;
+    const matchEnd = source.matchEnd ?? source.end;
+    const sentence = typeof source.sentenceText === "string" ? source : {
+      sentenceText: text, sentenceStart: source.start || 0,
+      sentenceEnd: source.end ?? (source.start || 0) + Array.from(text).length,
+    };
+    return { ...source, level, quote: sentence.sentenceText, contextStart: sentence.sentenceStart,
+      start: sentence.sentenceStart, end: sentence.sentenceEnd, matchStart, matchEnd,
+      matchType: RETRIEVAL_LEVEL_LABELS[level] };
+  });
+}
+
+function renderConversationRetrieval(matches, query, container, collapsible = false) {
+  const section = document.createElement(collapsible ? "details" : "section");
+  section.className = "conversation-retrieval";
+  if (collapsible) section.open = true;
+  const title = document.createElement(collapsible ? "summary" : "p");
+  title.className = "conversation-retrieval-title";
+  title.textContent = `匹配内容 · 共 ${matches.length} 条`;
+  section.append(title);
+  let nextNumber = 1;
+  for (const [level, label] of Object.entries(RETRIEVAL_LEVEL_LABELS)) {
+    const items = matches.filter((match) => (match.level ||
+      (match.matchedBy?.includes("semantic") || /语义|嵌入/.test(match.matchType || "") ? "semantic" : "partial")) === level);
+    const group = document.createElement("details");
+    group.className = "conversation-retrieval-group";
+    group.open = items.length > 0;
+    const heading = document.createElement("summary");
+    heading.className = `reader-search-level-${level}`;
+    heading.textContent = `${label} · ${items.length} 条`;
+    const list = document.createElement("div");
+    list.className = "conversation-retrieval-list";
+    if (items.length) renderLlmSearchResults(items, [], query, list, nextNumber);
+    nextNumber += items.length;
+    group.append(heading, list);
+    section.append(group);
+  }
+  container.append(section);
+}
+
 function literalConversationTurnResult(turn) {
-  const matches = (turn.request.body.evidence || []).map(({ text, ...source }) =>
-    ({ ...source, quote: text, matchType: source.matchedBy?.includes("semantic") ? "语义召回" : "字面匹配" }));
-  return { ready: true, matches, warnings: ["生成模型暂不可用，以下为程序召回的原文片段。"] };
+  return { ready: true, matches: conversationRetrievalMatches(turn.request),
+    warnings: ["生成模型暂不可用，以下为程序召回的原文片段。"] };
 }
 
 async function generateConversationTurn(conversationId, turnId, scrollToTurn = false) {
@@ -1018,13 +1078,16 @@ async function generateConversationTurn(conversationId, turnId, scrollToTurn = f
     ({ conversation, turn } = getConversationTurn(conversationId, turnId));
     if (!conversation || !turn || conversationTurnRequests.get(conversationId) !== token) return;
     if (Array.isArray(response.usedEvidence)) {
-      request.body.evidence = response.usedEvidence;
-      request.body.options.history = response.usedHistory || request.body.options.history;
-      request.sourceDocumentIds = [...new Set(response.usedEvidence.filter((e) => e.sourceType === "document-page").map((e) => e.documentId))];
+      // Keep complete retrieval results for display/retry; generation has its own budget.
+      request.usedEvidence = response.usedEvidence;
+      request.usedHistory = response.usedHistory || request.body.options.history;
       turn.request = request;
     }
-    const payload = turn.mode === "chat" ? { answer: response.answer || "未生成回答。", sources: response.sources || [] }
-      : turn.mode === "search" ? { matches: response.matches || [], expandedTerms: response.expandedTerms || [] }
+    const matches = conversationRetrievalMatches(request);
+    const reasons = new Map((response.matches || []).map((match) => [match.chunkId, match.reason]));
+    for (const match of matches) if (reasons.get(match.chunkId)) match.reason = reasons.get(match.chunkId);
+    const payload = turn.mode === "chat" ? { answer: response.answer || "未生成回答。", sources: response.sources || [], matches }
+      : turn.mode === "search" ? { matches, expandedTerms: response.expandedTerms || [] }
       : { entries: response.entries || [] };
     turn.result = { mode: turn.mode, prompt: turn.prompt, payload,
       warnings: [...new Set([...(request.warnings || []), ...(response.warnings || [])])],
@@ -1196,10 +1259,14 @@ function renderConversationTurns() {
         if (turn.result.payload.sources?.length) answer.append(buildCitationMarkers({ sources: turn.result.payload.sources }));
         if (turn.result.warnings.length) answer.append(formatWarnings(turn.result.warnings));
       } else if (turn.mode === "search") {
-        renderLlmSearchResults(turn.result.payload.matches || [], turn.result.warnings, turn.prompt, answer);
+        if (turn.result.warnings.length) answer.append(formatWarnings(turn.result.warnings));
       } else {
         renderChronicleLlmEntries(turn.result.payload.entries || [], turn.result.warnings, answer);
       }
+    }
+    if (turn.mode === "chat" || turn.mode === "search") {
+      const matches = turn.result?.payload.matches || conversationRetrievalMatches(turn.request);
+      renderConversationRetrieval(matches, turn.prompt, answer, turn.mode === "chat");
     }
     if (turn.status === "pending" || turn.error) {
       const status = document.createElement("p");
@@ -1214,7 +1281,7 @@ function renderConversationTurns() {
     if (turn.result) {
       const sources = document.createElement("span");
       sources.className = "conversation-turn-meta";
-      sources.textContent = "依据 " + turn.result.sourceDocumentIds.length + " 篇文献";
+      sources.textContent = (turn.mode === "chronicle" ? "依据 " : "匹配 ") + turn.result.sourceDocumentIds.length + " 篇文献";
       footer.append(sources);
     }
     article.append(question, answer, footer);

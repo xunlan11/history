@@ -1,4 +1,6 @@
 /* Shared retrieval and Unicode source anchors. Loaded after core/auth. */
+const RETRIEVAL_LEVEL_LABELS = { exact: "严格匹配", partial: "部分匹配", semantic: "嵌入匹配" };
+
 async function retrievalJson(path, body) {
   const response = await fetch(endpoint("/data/api/retrieval/" + path), {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -17,15 +19,24 @@ function fetchRetrievalEvidence(request) {
 async function validateFrozenEvidence(request) {
   const library = (request.body.evidence || []).filter((e) => e.sourceType === "document-page");
   if (!library.length) return request;
-  const result = await retrievalJson("validate", { evidence: library.map(({chunkId, documentId, pageId, sourceLayer, sourceHash}) =>
-    ({chunkId, documentId, pageId, sourceLayer, sourceHash})) });
-  const allowed = new Set(result.allowedChunkIds);
+  const allowed = new Set();
+  const warnings = [...(request.warnings || [])];
+  // The API accepts at most 200 locators per request; all matches still get checked.
+  for (let offset = 0; offset < library.length; offset += 200) {
+    const result = await retrievalJson("validate", {
+      evidence: library.slice(offset, offset + 200).map(({chunkId, documentId, pageId, sourceLayer, sourceHash}) =>
+        ({chunkId, documentId, pageId, sourceLayer, sourceHash})),
+    });
+    for (const id of result.allowedChunkIds) allowed.add(id);
+    warnings.push(...(result.warnings || []));
+  }
   request.body.evidence = request.body.evidence.filter((e) => e.sourceType === "conversation-file" || allowed.has(e.chunkId));
   request.sourceDocumentIds = [...new Set(request.body.evidence.filter((e) => e.sourceType === "document-page").map((e) => e.documentId))];
-  request.warnings = [...new Set([...(request.warnings || []), ...(result.warnings || [])])];
+  request.warnings = [...new Set(warnings)];
   return request;
 }
 
+// Chronicle keeps its existing bounded attachment context; search/chat match on the server.
 function attachmentEvidence(query, conversation) {
   return buildConversationAttachmentDocumentsForLlm(query, 8, 500, conversation).flatMap((item) => item.pages.map((page) => ({
     chunkId: `attachment:${item.attachmentId}:${page.pageNumber}`,
@@ -161,16 +172,24 @@ async function showReaderEvidence(page, readerIndex = null) {
   label.textContent = "引用来自：" + labels[anchor.sourceLayer];
   panel.append(label);
   const source = page[anchor.sourceLayer];
-  // Show the exact cited layer separately from the editable/variant-converted
-  // reading text. Variant conversion must never change the anchored quotation.
-  const target = document.createElement("div");
-  target.className = "reader-evidence-text";
-  target.setAttribute("data-variant-skip", "");
-  target.textContent = source;
-  panel.append(target);
-  const mark = markEvidenceRange(target, anchor.start, anchor.end);
+  let mark;
+  if (source === getPagePrimaryText(page) && readerText.textContent === source) {
+    mark = markEvidenceRange(readerText, anchor.start, anchor.end);
+    mark?.setAttribute("data-variant-skip", "");
+  } else {
+    // A hit in OCR/notes may belong to a different layer than the displayed body.
+    const target = document.createElement("div");
+    target.className = "reader-evidence-text";
+    target.setAttribute("data-variant-skip", "");
+    target.textContent = source;
+    panel.append(target);
+    mark = markEvidenceRange(target, anchor.start, anchor.end);
+  }
   if (readerIndex?.displayedText === source && source === getPagePrimaryText(page)) {
-    const sentence = readerIndex.sentences.find((s) => s.end > anchor.start && s.start < anchor.end);
+    const points = Array.from(source);
+    const start = points.slice(0, anchor.start).join("").length;
+    const end = points.slice(0, anchor.end).join("").length;
+    const sentence = readerIndex.sentences.find((s) => s.end > start && s.start < end);
     if (sentence) setReaderLinkActive(sentence.id, { scrollImage: true });
   }
   mark?.scrollIntoView({ block: "center" });

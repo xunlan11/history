@@ -7,7 +7,7 @@ const readerSearchMarkAll = document.querySelector("#reader-search-mark-all");
 const readerSearchPageFrom = document.querySelector("#reader-search-page-from");
 const readerSearchPageTo = document.querySelector("#reader-search-page-to");
 const readerSearchNavButtons = [...document.querySelectorAll("[data-reader-search-nav]")];
-const READER_SEARCH_LABELS = { exact: "严格匹配", partial: "部分匹配", semantic: "嵌入匹配" };
+const READER_SEARCH_LABELS = RETRIEVAL_LEVEL_LABELS;
 // 结果表列标题；第 1、3 列是纯数字，内容居中（reader-search-col-center）
 const READER_SEARCH_COLUMNS = [
   { title: "序号", center: true },
@@ -19,12 +19,12 @@ const READER_SEARCH_TEXT_LIMIT = 100;
 const readerSearchState = {
   documentId: null, snapshot: "", query: "", matches: [], levels: new Set(["exact", "partial", "semantic"]),
   pageFrom: null, pageTo: null,
-  activeId: "", markAll: false, loading: false, warnings: [], semanticError: "",
+  activeId: "", markAll: false, loading: false, warnings: [], semanticError: "", searchError: "",
   revision: 0, scrollPending: false,
 };
 
 function getReaderSearchText(page) {
-  return page?.punctuatedText || page?.cleanText || "";
+  return [page?.punctuatedText, page?.cleanText].find((text) => typeof text === "string" && text.trim()) || "";
 }
 
 function readerSearchSnapshot(item) {
@@ -32,115 +32,42 @@ function readerSearchSnapshot(item) {
     [page.id, page.pageNumber, getReaderSearchText(page)])]);
 }
 
-function readerSearchOccurrences(text, query) {
-  const ranges = [];
-  if (!query) return ranges;
-  let position = text.indexOf(query);
-  while (position !== -1) {
-    ranges.push({ start: position, end: position + query.length });
-    position = text.indexOf(query, position + 1);
-  }
-  return ranges;
-}
-
-function readerSearchNormalize(text) {
-  let value = "";
-  const starts = [], ends = [];
-  let offset = 0;
-  for (const point of text) {
-    if (!/[\s\p{P}]/u.test(point)) {
-      const folded = point.toLowerCase();
-      value += folded;
-      for (let i = 0; i < folded.length; i += 1) {
-        starts.push(offset);
-        ends.push(offset + point.length);
-      }
-    }
-    offset += point.length;
-  }
-  return { value, starts, ends };
-}
-
-function readerSearchPartialRanges(text, query, exact) {
-  const normalized = readerSearchNormalize(text);
-  const needle = readerSearchNormalize(query).value;
-  if (!needle) return [];
-  const terms = new Set([needle]);
-  // Chinese has no mandatory word separators: contiguous bigrams provide a
-  // deterministic literal fallback. Latin words are matched as complete words.
-  for (const run of needle.match(/[\p{Script=Han}]+/gu) || []) {
-    const points = Array.from(run);
-    for (let i = 0; i + 1 < points.length; i += 1) terms.add(points.slice(i, i + 2).join(""));
-  }
-  for (const word of query.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []) {
-    if (!/\p{Script=Han}/u.test(word)) terms.add(word);
-  }
-  const ranges = [];
-  for (const term of terms) {
-    const wholeWord = /^[\p{Script=Latin}\p{N}]+$/u.test(term);
-    for (const range of readerSearchOccurrences(normalized.value, term)) {
-      const start = normalized.starts[range.start], end = normalized.ends[range.end - 1];
-      if (wholeWord && (/[\p{Script=Latin}\p{N}]/u.test(text[start - 1] || "") ||
-          /[\p{Script=Latin}\p{N}]/u.test(text[end] || ""))) continue;
-      if (!exact.some((hit) => hit.start < end && hit.end > start)) ranges.push({ start, end });
-    }
-  }
-  ranges.sort((a, b) => a.start - b.start || b.end - a.end);
-  const merged = [];
-  for (const range of ranges) {
-    const previous = merged.at(-1);
-    if (previous && range.start < previous.end) previous.end = Math.max(previous.end, range.end);
-    else if (!previous || previous.start !== range.start || previous.end !== range.end) merged.push({ ...range });
-  }
-  return merged;
-}
-
 function createReaderSearchMatch(page, pageIndex, level, range) {
   return { ...range, pageId: page.id, pageIndex, pageNumber: page.pageNumber, level,
     id: JSON.stringify([page.id, level, range.start, range.end]), text: getReaderSearchText(page) };
-}
-
-function findReaderLiteralMatches(item, query) {
-  const matches = [];
-  const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
-  pages.forEach((page, pageIndex) => {
-    const text = getReaderSearchText(page);
-    const exact = readerSearchOccurrences(text, query);
-    for (const range of exact) matches.push(createReaderSearchMatch(page, pageIndex, "exact", range));
-    for (const range of readerSearchPartialRanges(text, query, exact)) {
-      matches.push(createReaderSearchMatch(page, pageIndex, "partial", range));
-    }
-  });
-  return sortReaderSearchMatches(matches);
 }
 
 function sortReaderSearchMatches(matches) {
   return matches.sort((a, b) => a.pageIndex - b.pageIndex || a.start - b.start || a.end - b.end || a.level.localeCompare(b.level));
 }
 
-async function resolveReaderSemanticMatches(item, hits, literalMatches) {
-  const matches = [], hashes = new Map(), seen = new Set();
+async function resolveReaderMatches(item, hits) {
+  const matches = [], pagesById = new Map(), seen = new Set();
   const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
   for (const hit of hits || []) {
-    if (hit.documentId !== item.id || !hit.matchedBy?.includes("semantic")) continue;
-    const pageIndex = pages.findIndex((page) => page.id === hit.pageId);
-    const page = pages[pageIndex];
-    if (!page) continue;
-    const text = getReaderSearchText(page);
-    const layer = page.punctuatedText ? "punctuatedText" : "cleanText";
-    if (!text || hit.sourceLayer !== layer) continue;
-    if (!hashes.has(page.id)) hashes.set(page.id, await hashEvidenceText(text));
-    if (hashes.get(page.id) !== hit.sourceHash) continue;
-    const points = Array.from(text);
-    if (!Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 || hit.end <= hit.start || hit.end > points.length) continue;
-    const start = points.slice(0, hit.start).join("").length;
-    const end = start + points.slice(hit.start, hit.end).join("").length;
-    if (text.slice(start, end) !== hit.text || literalMatches.some((match) =>
-      match.pageId === page.id && match.start < end && match.end > start)) continue;
-    const match = createReaderSearchMatch(page, pageIndex, "semantic", { start, end });
+    if (hit.documentId !== item.id || !Object.hasOwn(READER_SEARCH_LABELS, hit.level)) continue;
+    if (!pagesById.has(hit.pageId)) {
+      const pageIndex = pages.findIndex((page) => page.id === hit.pageId);
+      const page = pages[pageIndex], text = getReaderSearchText(page);
+      if (!page || !text) continue;
+      const points = Array.from(text), offsets = [0];
+      for (const point of points) offsets.push(offsets.at(-1) + point.length);
+      pagesById.set(page.id, { page, pageIndex, text, points, offsets, hash: await hashEvidenceText(text),
+        layer: page.punctuatedText?.trim() ? "punctuatedText" : "cleanText" });
+    }
+    const cached = pagesById.get(hit.pageId);
+    if (!cached || hit.sourceLayer !== cached.layer || hit.sourceHash !== cached.hash) continue;
+    if (!Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 ||
+        hit.end <= hit.start || hit.end > cached.points.length ||
+        cached.points.slice(hit.start, hit.end).join("") !== hit.text) continue;
+    const first = hit.level === "semantic" ? hit.start : hit.matchStart;
+    const last = hit.level === "semantic" ? hit.end : hit.matchEnd;
+    if (!Number.isInteger(first) || !Number.isInteger(last) || first < hit.start || last > hit.end || last <= first) continue;
+    const match = createReaderSearchMatch(cached.page, cached.pageIndex, hit.level,
+      { start: cached.offsets[first], end: cached.offsets[last] });
     if (!seen.has(match.id)) { matches.push(match); seen.add(match.id); }
   }
-  return matches;
+  return sortReaderSearchMatches(matches);
 }
 
 function syncReaderSearch(item) {
@@ -148,7 +75,7 @@ function syncReaderSearch(item) {
   const snapshot = readerSearchSnapshot(item);
   if (readerSearchState.documentId !== (item?.id || null)) {
     Object.assign(readerSearchState, { documentId: item?.id || null, snapshot, query: "", matches: [],
-      activeId: "", loading: false, warnings: [], semanticError: "",
+      activeId: "", loading: false, warnings: [], semanticError: "", searchError: "",
       scrollPending: false, revision: readerSearchState.revision + 1 });
     readerSearchInput.value = "";
   } else if (snapshot !== readerSearchState.snapshot) {
@@ -158,6 +85,7 @@ function syncReaderSearch(item) {
     readerSearchState.activeId = "";
     readerSearchState.loading = false;
     readerSearchState.semanticError = "";
+    readerSearchState.searchError = "";
     if (item && readerSearchState.query) runReaderSearch(readerSearchState.query);
   }
   renderReaderSearchPanel();
@@ -170,25 +98,24 @@ async function runReaderSearch(query) {
   const revision = ++readerSearchState.revision;
   const snapshot = readerSearchSnapshot(item);
   Object.assign(readerSearchState, { documentId: item.id, snapshot, query,
-    matches: query ? findReaderLiteralMatches(item, query) : [], activeId: "", scrollPending: false,
+    matches: [], activeId: "", scrollPending: false,
     loading: Boolean(query && item.pages.some((page) => getReaderSearchText(page).trim())),
     warnings: [], semanticError: "" });
   renderReaderSearchPanel();
   refreshReaderSearchText();
   if (!readerSearchState.loading) return;
   try {
-    const literalMatches = readerSearchState.matches;
     const response = await fetchRetrievalEvidence({ query, mode: "reader", documentIds: [item.id], textPolicy: "reader" });
     if (revision !== readerSearchState.revision) return;
-    const semantic = await resolveReaderSemanticMatches(item, response.hits, literalMatches);
+    const matches = await resolveReaderMatches(item, response.hits);
     if (revision !== readerSearchState.revision || getSelectedDocument()?.id !== item.id ||
         snapshot !== readerSearchSnapshot(getSelectedDocument())) return;
-    readerSearchState.matches = sortReaderSearchMatches([...readerSearchState.matches, ...semantic]);
+    readerSearchState.matches = matches;
     readerSearchState.warnings = response.warnings || [];
+    readerSearchState.semanticError = response.semanticError || "";
   } catch (error) {
     if (revision !== readerSearchState.revision) return;
-    // 不单独写提示句：失败状态由「嵌入」计数格显示为「失败」（悬停看原因）
-    readerSearchState.semanticError = error.message;
+    readerSearchState.searchError = error.message;
   } finally {
     if (revision === readerSearchState.revision) {
       readerSearchState.loading = false;
@@ -231,12 +158,13 @@ function renderReaderSearchPanel() {
   for (const level of Object.keys(READER_SEARCH_LABELS)) {
     const node = document.querySelector(`[data-reader-search-count="${level}"]`);
     // 嵌入检索失败时不显示 0（会被误读成「没有相近段落」），改为「失败」并悬停提示原因
-    const failed = level === "semantic" && Boolean(readerSearchState.semanticError);
+    const error = readerSearchState.searchError || (level === "semantic" ? readerSearchState.semanticError : "");
+    const failed = Boolean(error);
     node.textContent = failed
       ? "失败"
       : String(readerSearchState.matches.filter((match) => match.level === level).length);
     node.classList.toggle("is-failed", failed);
-    if (failed) node.title = `嵌入检索失败：${readerSearchState.semanticError}`;
+    if (failed) node.title = `检索失败：${error}`;
     else node.removeAttribute("title");
   }
   // 只在「已检索且确实一条都没匹配上」时提示；未检索、无整理文本、层级未选、编辑态等一律不提示
@@ -244,7 +172,8 @@ function renderReaderSearchPanel() {
     Boolean(item && item.pages.some((page) => getReaderSearchText(page).trim()));
   if (readerSearchStatus) {
     readerSearchStatus.textContent =
-      searched && !readerSearchState.loading && !readerSearchState.matches.length ? "未找到匹配项。" : "";
+      readerSearchState.searchError ||
+      (searched && !readerSearchState.loading && !readerSearchState.matches.length ? "未找到匹配项。" : "");
   }
   readerSearchResults.setAttribute("aria-busy", String(readerSearchState.loading));
   readerSearchResults.replaceChildren();

@@ -19,6 +19,7 @@ from service.embedding import EmbeddingError, semantic_enabled
 from service.evidence import NO_RELEVANT_MATERIAL
 from service.retrieval_types import CHUNKER_VERSION, Chunk, RetrievalRequest, SourceText, TextPolicy
 from service.variant import to_simplified
+from service.match import match_text, normalize_literal, sentence_boundaries, sentence_excerpt
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,8 @@ def _evidence(chunk, row, metadata):
 def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client, *, enabled: bool | None = None) -> dict:
     import numpy as np
     reader_mode = request.mode == "reader"
+    full_mode = request.mode in {"search", "chat", "reader"}
+    literal_hits, literal_ranges = [], {}
     scope, params = _scope(user, request.documentIds)
     metadata_by_document = {}
     for row in connection.execute(f"""SELECT d.id,d.payload FROM documents d WHERE EXISTS
@@ -248,18 +251,40 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         sources = {primary.sourceLayer: primary} if reader_mode else page_sources(row["document_id"], page)
         if request.textPolicy == "processed":
             sources.pop("ocrText", None)
+        if full_mode:
+            # Prefer the selected source when identical layers contain the same text.
+            sources = {primary.sourceLayer: primary, **sources}
+            seen_sources = set()
+            for source in sources.values():
+                matches = match_text(source.text, request.query)
+                literal_ranges[(source.pageId, source.sourceLayer)] = matches
+                source_key = normalize_literal(source.text)[0]
+                if source_key in seen_sources:
+                    continue
+                seen_sources.add(source_key)
+                for ordinal, match in enumerate(matches):
+                    identity = [source.documentId, source.pageId, source.sourceLayer, source.sourceHash,
+                                match["matchStart"], match["matchEnd"], "literal-v1"]
+                    chunk = Chunk(text_hash(json.dumps(identity, ensure_ascii=False)), source.documentId,
+                                  source.pageId, source.sourceLayer, source.sourceHash,
+                                  match["start"], match["end"], match["text"], ordinal)
+                    literal_hits.append(_evidence(chunk, row, metadata) | match)
         metadata_text = "\n".join(str(metadata.get(k) or "") for k in ("title", "author", "year", "publisher", "tags", "fileName"))
         metadata_score = 0.0 if reader_mode else 0.3 * literal_score(metadata_text, request.query)
         for source in sources.values():
+            boundaries = sentence_boundaries(source.text) if full_mode else None
             stored = connection.execute("SELECT * FROM semantic_chunks WHERE page_id=? AND source_layer=? AND source_hash=? ORDER BY ordinal", (row["id"], source.sourceLayer, source.sourceHash)).fetchall()
             chunks = stored or chunk_source(source)
             for chunk in chunks:
                 hit = _evidence(chunk, row, metadata)
-                hit["literalScore"] = 0.0 if reader_mode else literal_score(hit["text"], request.query) + metadata_score
+                if full_mode:
+                    hit.update(sentence_excerpt(source.text, hit["start"], hit["end"], boundaries))
+                hit["literalScore"] = 0.0 if reader_mode or full_mode else literal_score(hit["text"], request.query) + metadata_score
                 candidates[hit["chunkId"]] = hit
                 if hit["sourceLayer"] == primary.sourceLayer and hit["sourceHash"] == primary.sourceHash:
                     expected_counts[row["id"]] += 1
     warnings = []
+    semantic_error = ""
     fingerprint = None
     vector_top = []
     indexed_counts = Counter()
@@ -298,13 +323,14 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
                     if float(score) <= minimum:
                         continue
                     item = (float(score), entry["chunk_id"])
-                    if reader_mode:
+                    if reader_mode or full_mode:
                         vector_top.append(item)
                     elif len(vector_top) < 60:
                         heapq.heappush(vector_top, item)
                     elif item > vector_top[0]:
                         heapq.heapreplace(vector_top, item)
         except (EmbeddingError, ValueError) as exc:
+            semantic_error = str(exc)
             vector_top.clear()
             logger.warning("Semantic retrieval unavailable: %s", exc)
             warnings.append("语义检索暂不可用，已使用字面检索")
@@ -317,19 +343,26 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             record = rankings.setdefault(cid, {"score": 0.0, "matchedBy": []})
             record["score"] += 1 / (60 + rank)
             record["matchedBy"].append(kind)
-    limit = len(rankings) if reader_mode else request.limit or {"search": 20, "chat": 12, "chronicle": 30}[request.mode]
+    limit = len(rankings) if reader_mode or full_mode else request.limit or {"search": 20, "chat": 12, "chronicle": 30}[request.mode]
     hits, per_page, seen_ranges = [], Counter(), set()
     for cid, rank in sorted(rankings.items(), key=lambda pair: (-pair[1]["score"], pair[0])):
         hit = candidates[cid]
+        if full_mode and any(match["matchStart"] < hit["end"] and match["matchEnd"] > hit["start"]
+                             for match in literal_ranges.get((hit["pageId"], hit["sourceLayer"]), [])):
+            continue
         # Identical text in clean/punctuated layers must not take every slot.
-        key = (hit["pageId"], hit["start"], hit["end"]) if reader_mode else (hit["pageId"], normalized(hit["text"]))
-        if key in seen_ranges or (not reader_mode and per_page[hit["pageId"]] >= 3):
+        key = (hit["pageId"], hit["start"], hit["end"]) if reader_mode or full_mode else (hit["pageId"], normalized(hit["text"]))
+        if key in seen_ranges or (not reader_mode and not full_mode and per_page[hit["pageId"]] >= 3):
             continue
         seen_ranges.add(key)
         per_page[hit["pageId"]] += 1
-        hits.append({k: v for k, v in hit.items() if k != "literalScore"} | rank)
+        hits.append({k: v for k, v in hit.items() if k != "literalScore"} | rank | ({"level": "semantic"} if full_mode else {}))
         if len(hits) >= limit:
             break
+    if full_mode:
+        levels = {"exact": 0, "partial": 1, "semantic": 2}
+        hits = sorted(literal_hits + hits, key=lambda hit: (levels[hit["level"]], -hit["score"],
+                      hit["documentId"], hit["pageNumber"], hit.get("matchStart", hit["start"]), hit["chunkId"]))
     if not hits and candidates and not reader_mode:
         # 有材料但无一条过相关下限：明确告知，避免下游把“没检索到”当成“材料已用尽”。
         warnings.append(NO_RELEVANT_MATERIAL)
@@ -389,8 +422,18 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
     if len(current_hits) != len(hits):
         warnings.append("部分材料在检索时发生变更，已排除，请重新检索获取最新材料")
     hits = current_hits
+    if request.mode in {"chat", "search"}:
+        for attachment in request.attachments:
+            digest = text_hash(attachment.extractedText)
+            for match in match_text(attachment.extractedText, request.query):
+                hits.append(match | {
+                    "chunkId": f"attachment:{attachment.id}:{digest[:16]}:{match['matchStart']}:{match['matchEnd']}:{match['level']}",
+                    "sourceType": "conversation-file", "attachmentId": attachment.id,
+                    "documentId": attachment.id, "pageId": "", "title": attachment.fileName,
+                    "author": "当前对话上传文件（快速读取）", "year": "",
+                })
     return {"hits": hits, "retrievalMode": "hybrid" if vector_top else "literal" if hits else "empty",
-            "warnings": warnings, "modelFingerprint": fingerprint,
+            "warnings": warnings, "semanticError": semantic_error, "modelFingerprint": fingerprint,
             "coverage": {"totalPages": total, "indexedPages": indexed, "pendingPages": max(0, total - indexed - len(failed_pages)), "failedPages": len(failed_pages)}}
 
 

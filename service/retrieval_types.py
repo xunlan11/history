@@ -35,11 +35,18 @@ class Chunk:
         return asdict(self)
 
 
+class AttachmentSource(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    fileName: str = ""
+    extractedText: str = Field(max_length=60000)
+
+
 class RetrievalRequest(BaseModel):
     query: str = Field(max_length=2000)
     mode: Literal["search", "chat", "chronicle", "reader"] = "search"
     documentIds: list[str] | None = Field(default=None, max_length=1000)
     textPolicy: TextPolicy = "primary"
+    attachments: list[AttachmentSource] = Field(default_factory=list, max_length=12)
     limit: int | None = Field(default=None, ge=1, le=40)
 
     @model_validator(mode="after")
