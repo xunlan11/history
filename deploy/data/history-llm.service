@@ -11,6 +11,7 @@ Environment=LLM_PROVIDER=ollama
 Environment=LLM_MODEL=qwen3:8b
 Environment=LLM_API_BASE=http://127.0.0.1:11435/v1
 Environment=LLM_TIMEOUT_SECONDS=600
+EnvironmentFile=-/etc/history-generation.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
 Restart=always
 RestartSec=5

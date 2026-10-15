@@ -24,18 +24,6 @@ function getSmartScopeDocuments(conversation = getSelectedConversation()) {
   return documents.filter((item) => referenceIdSet.has(item.id));
 }
 
-function getSmartPagePrimaryText(page, conversation = getSelectedConversation()) {
-  return isReferenceScopeActive(conversation)
-    ? getPageProcessedText(page)
-    : getPagePrimaryText(page);
-}
-
-function getSmartPageSearchText(page, conversation = getSelectedConversation()) {
-  return isReferenceScopeActive(conversation)
-    ? getPageProcessedSearchText(page)
-    : getPageSearchText(page);
-}
-
 function getReferenceScopeReport(conversation = getSelectedConversation()) {
   const referenceIds = getConversationReferenceDocumentIds(conversation);
   if (!referenceIds.length) {
@@ -636,27 +624,6 @@ function splitConversationAttachmentText(text, maxLength = 1600) {
   return chunks;
 }
 
-function collectConversationAttachmentChatEntries(prompt, conversation = getSelectedConversation()) {
-  const entries = [];
-  getConversationAttachmentReport(conversation).ready.forEach((attachment, attachmentIndex) => {
-    splitConversationAttachmentText(attachment.extractedText, 1200).forEach((text, chunkIndex) => {
-      entries.push({
-        sourceType: "conversation-file",
-        attachmentId: attachment.id,
-        documentId: attachment.id,
-        documentTitle: attachment.fileName,
-        pageId: `${attachment.id}-part-${chunkIndex + 1}`,
-        pageNumber: chunkIndex + 1,
-        text,
-        score: scoreTextRelevance(`${attachment.fileName}\n${text}`, prompt),
-        documentIndex: -10000 + attachmentIndex,
-        pageIndex: chunkIndex,
-      });
-    });
-  });
-  return entries;
-}
-
 function buildConversationAttachmentDocumentsForLlm(query, maxChunks = 10, chunkLength = 1600, conversation = getSelectedConversation()) {
   const records = [];
   getConversationAttachmentReport(conversation).ready.forEach((attachment, attachmentIndex) => {
@@ -714,79 +681,13 @@ conversationFileInput?.addEventListener("change", () => {
   uploadSelectedConversationFiles(conversationFileInput.files);
   conversationFileInput.value = "";
 });
-function collectSearchDocumentsForLlm(query, conversation = getSelectedConversation()) {
-  const records = [];
-  const attachmentDocuments = buildConversationAttachmentDocumentsForLlm(query, 12, 1600, conversation);
-  const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
-
-  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
-    const metadata = buildSearchMetadata(item);
-
-    item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPageSearchText(page, conversation).trim();
-      if (!text) {
-        return;
-      }
-
-      records.push({
-        item,
-        page,
-        documentIndex,
-        pageIndex,
-        score: scoreTextRelevance(`${metadata}\n${text}`, query),
-      });
-    });
-  });
-
-  const grouped = new Map();
-  records
-    .sort((a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex)
-    .slice(0, Math.max(20, 40 - attachmentPageCount))
-    .forEach(({ item, page }) => {
-      if (!grouped.has(item.id)) {
-        grouped.set(item.id, {
-          documentId: item.id,
-          title: getDocumentDisplayTitle(item),
-          author: item.author || "",
-          year: item.year || "",
-          publisher: item.publisher || "",
-          tags: item.tags || "",
-          fileName: item.fileName || "",
-          pages: [],
-        });
-      }
-
-      grouped.get(item.id).pages.push({
-        pageId: page.id,
-        pageNumber: page.pageNumber,
-        text: getSmartPageSearchText(page, conversation).slice(0, 1600),
-        notes: (page.notes || "").slice(0, 400),
-      });
-    });
-
-  return [
-    ...Array.from(grouped.values()).filter((item) => item.pages.length),
-    ...attachmentDocuments,
-  ];
-}
-
-function buildSearchMetadata(item) {
-  return [
-    item.title,
-    item.author,
-    item.year,
-    item.publisher,
-    item.tags,
-    item.fileName,
-  ].filter(Boolean).join("\n");
-}
-
 function renderLlmSearchResults(matches, warnings = [], query = "", container = searchResults) {
   container.innerHTML = "";
   container.classList.remove("empty-result-list");
 
   if (!matches.length) {
     renderResultState(container, "未找到匹配内容");
+    if (warnings.length) container.append(formatWarnings(warnings));
     return;
   }
 
@@ -813,6 +714,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "", container = 
       attachment ? "当前对话上传文件（快速读取）" : match.author || item.author || "著者未录",
       match.year || item.year || "年份未录",
       match.matchedAs ? `按“${match.matchedAs}”匹配` : "",
+      match.sourceLayer === "notes" ? "笔记（非正文）" : "",
       match.matchType || "",
     ].filter(Boolean).join(" · ");
     excerpt.innerHTML = highlightIfLiteral(match.quote || match.snippet || match.summary || "", query);
@@ -821,7 +723,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "", container = 
     action.className = "secondary-button";
     action.type = "button";
     action.textContent = attachment ? "打开文件" : "打开原文";
-    const actionHref = searchResultHref(attachment, item, page);
+    const actionHref = match.chunkId && match.sourceType === "document-page" ? buildEvidenceHref(match) : searchResultHref(attachment, item, page);
     action.disabled = !actionHref;
     action.addEventListener("click", () => {
       if (actionHref) {
@@ -857,91 +759,13 @@ function resolveSearchMatch(match) {
   }
   return target;
 }
-function collectChronicleDocumentsForLlm(topic, options = {}, conversation = getSelectedConversation()) {
-  const records = [];
-  const includeAttachments = options.includeAttachments !== false;
-  const attachmentDocuments = includeAttachments ? buildConversationAttachmentDocumentsForLlm(topic, 10, 1800, conversation) : [];
-  const attachmentPageCount = attachmentDocuments.reduce((total, item) => total + item.pages.length, 0);
-  const onlyDocumentIds = options.onlyDocumentIds ? new Set(options.onlyDocumentIds) : null;
-
-  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
-    if (onlyDocumentIds && !onlyDocumentIds.has(item.id)) {
-      return;
-    }
-    item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPagePrimaryText(page, conversation).trim();
-      if (!text) {
-        return;
-      }
-
-      records.push({
-        item,
-        page,
-        documentIndex,
-        pageIndex,
-        score: scoreChroniclePageForLlm(item, page, text, topic),
-      });
-    });
-  });
-
-  const sortedRecords = records.sort(
-    (a, b) => b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex,
-  );
-  const limit = options.limit === undefined ? Math.max(18, 36 - attachmentPageCount) : options.limit;
-  const selectedRecords = limit > 0 ? sortedRecords.slice(0, limit) : sortedRecords;
-
-  const grouped = new Map();
-  selectedRecords.forEach(({ item, page }) => {
-      if (!grouped.has(item.id)) {
-        grouped.set(item.id, {
-          documentId: item.id,
-          title: getDocumentDisplayTitle(item),
-          author: item.author || "",
-          year: item.year || "",
-          publisher: item.publisher || "",
-          tags: item.tags || "",
-          pages: [],
-        });
-      }
-
-      grouped.get(item.id).pages.push({
-        pageId: page.id,
-        pageNumber: page.pageNumber,
-        text: getSmartPagePrimaryText(page, conversation).slice(0, 1800),
-        notes: (page.notes || "").slice(0, 500),
-      });
-    });
-
-  return [
-    ...Array.from(grouped.values()),
-    ...attachmentDocuments,
-  ];
-}
-
-function scoreChroniclePageForLlm(item, page, text, topic) {
-  if (!topic) {
-    return 1;
-  }
-
-  const normalizedTopic = topic.toLowerCase();
-  const haystack = [
-    item.title,
-    item.author,
-    item.publisher,
-    item.tags,
-    page.notes,
-    text,
-  ].join("\n").toLowerCase();
-
-  return haystack.includes(normalizedTopic) ? 3 : 1;
-}
-
 function renderChronicleLlmEntries(entries, warnings = [], container = chronicleResults) {
   container.innerHTML = "";
   container.classList.remove("empty-result-list");
 
   if (!entries.length) {
     renderResultState(container, "未找到可生成编年的日期条目。");
+    if (warnings.length) container.append(formatWarnings(warnings));
     return;
   }
 
@@ -1014,6 +838,7 @@ function buildCitationMarker(source, number, conflictText = "") {
 }
 
 function citationHref(source) {
+  if (source.chunkId && source.sourceType === "document-page") return buildEvidenceHref(source);
   if (source.sourceType === "conversation-file" || source.attachmentId) {
     const attachment = findConversationAttachment(source.attachmentId || source.documentId, source.title);
     return attachment?.fileUrl || "";
@@ -1043,6 +868,7 @@ function formatCitationTooltip(source, conflictText = "") {
       : `第 ${source.pageNumber} 页`
     : "";
   const lines = [`${author}：《${title}》`, `${publisher}，${year}${page ? `，${page}` : ""}`];
+  if (source.sourceLayer === "notes") lines.push("来源层：笔记（非正文）");
   if (source.quote) {
     lines.push(`原文：${source.quote}`);
   }
@@ -1094,58 +920,24 @@ function getConversationTurnHistory(conversation, beforeTurnId = "") {
   }));
 }
 
-function captureConversationTurnRequest(conversation, mode, prompt, beforeTurnId = "") {
+async function captureConversationTurnRequest(conversation, mode, prompt, beforeTurnId = "", previousRequest = null) {
   const report = getConversationContextReport(conversation);
-  if (report.error) throw new Error(report.error);
-  const options = { source: "conversation-context", history: getConversationTurnHistory(conversation, beforeTurnId) };
-  let body;
-  if (mode === "chat") {
-    body = { prompt, context: buildLibraryChatContext(prompt, conversation), options };
-  } else {
-    const documents = mode === "search"
-      ? collectSearchDocumentsForLlm(prompt, conversation)
-      : collectChronicleDocumentsForLlm(prompt, {}, conversation);
-    if (!documents.length) throw new Error("暂无可用于" + (mode === "search" ? "检索" : "生成编年") + "的整理文本。");
-    const totalPageCount = getSmartScopeDocuments(conversation).reduce((total, item) => total +
-      item.pages.filter((page) => (mode === "search" ? getSmartPageSearchText(page, conversation) :
-        getSmartPagePrimaryText(page, conversation)).trim()).length, 0) +
-      documents.filter((item) => item.sourceType === "conversation-file").reduce((total, item) => total + item.pages.length, 0);
-    body = mode === "search"
-      ? { query: prompt, documents, options: { ...options, maxMatches: 50, totalPageCount } }
-      : { topic: prompt, documents, options: { ...options, maxEntries: 40, totalPageCount } };
-  }
-  const sources = mode === "chat" ? body.context : body.documents;
-  const sourceDocumentIds = [...new Set(sources.filter((item) => item.sourceType !== "conversation-file").map((item) => item.documentId))];
-  const request = { path: "/" + mode, body, warnings: report.warnings, sourceDocumentIds };
-  if (mode === "search") {
-    // Keep the offline fallback independent of future library/reference changes too.
-    request.literalSources = getSmartScopeDocuments(conversation).flatMap((item) => [
-      { documentId: item.id, title: getDocumentDisplayTitle(item), author: item.author, year: item.year,
-        text: buildSearchMetadata(item) },
-      ...item.pages.map((page) => ({ documentId: item.id, title: getDocumentDisplayTitle(item),
-        author: item.author, year: item.year, pageId: page.id, pageNumber: page.pageNumber,
-        text: getSmartPageSearchText(page, conversation) })),
-    ]);
-    getConversationAttachmentReport(conversation).ready.forEach((attachment) => {
-      splitConversationAttachmentText(attachment.extractedText, 1600).forEach((text, index) => {
-        request.literalSources.push({ sourceType: "conversation-file", attachmentId: attachment.id,
-          documentId: attachment.id, title: attachment.fileName, pageNumber: index + 1, text });
-      });
-    });
-  }
-  return JSON.parse(JSON.stringify(request));
-}
-
-function getLegacyTurnRequest(conversation, turn) {
-  const ids = turn.result?.sourceDocumentIds || [];
-  const scope = { ...conversation, referenceDocumentIds: ids, materialDocumentIds: ids };
-  // Legacy records did not store request materials. Restrict their first retry to recorded sources.
-  if (!scope.referenceDocumentIds.length) {
-    scope.referenceDocumentIds = ["__no_recorded_source__"];
-  }
-  const request = captureConversationTurnRequest(scope, turn.mode, turn.prompt, turn.id);
-  request.warnings.push("此旧记录未保存当时的材料；本次重试使用已记录文献的现有文本。");
-  return request;
+  if (!previousRequest && report.error) throw new Error(report.error);
+  // Capture IDs, policy, history and attachments before the first await.
+  const retrieval = previousRequest ? JSON.parse(JSON.stringify(previousRequest.retrieval)) : {
+    documentIds: getSmartScopeDocuments(conversation).map((item) => item.id),
+    textPolicy: isReferenceScopeActive(conversation) ? "processed" : "primary",
+  };
+  const attachments = previousRequest
+    ? JSON.parse(JSON.stringify((previousRequest.body.evidence || []).filter((e) => e.sourceType === "conversation-file")))
+    : attachmentEvidence(prompt, conversation);
+  const history = JSON.parse(JSON.stringify(getConversationTurnHistory(conversation, beforeTurnId)));
+  const result = await fetchRetrievalEvidence({ query: prompt, mode, ...retrieval });
+  const evidence = mergeRetrievalMaterials(result.hits, attachments);
+  const key = mode === "chat" ? "prompt" : mode === "search" ? "query" : "topic";
+  return { path: "/" + mode, body: { [key]: prompt, evidence, options: { history } }, retrieval,
+    warnings: [...new Set([...(previousRequest?.warnings || report.warnings), ...result.warnings])],
+    coverage: result.coverage, sourceDocumentIds: [...new Set(result.hits.map((e) => e.documentId))] };
 }
 
 async function sendConversationTurn(mode) {
@@ -1154,32 +946,40 @@ async function sendConversationTurn(mode) {
   let conversation = getSelectedConversation();
   if (conversationTurnRequests.has(conversation?.id)) return;
   mode = conversation?.locked ? conversation.mode : mode;
-  conversation = conversation || createConversation("新对话", mode);
+  conversation = upsertConversationFromPrompt(prompt, mode);
+  const conversationId = conversation.id;
+  const preparing = { turnId: "preparing" };
+  conversationTurnRequests.set(conversationId, preparing);
+  refreshConversationTurnView(conversationId);
   let request;
   try {
-    request = captureConversationTurnRequest(conversation, mode, prompt);
+    request = await captureConversationTurnRequest(conversation, mode, prompt);
   } catch (error) {
     showUploadToast(error.message);
     return;
+  } finally {
+    if (conversationTurnRequests.get(conversationId) === preparing) conversationTurnRequests.delete(conversationId);
+    refreshConversationTurnView(conversationId);
   }
-  conversation = upsertConversationFromPrompt(prompt, mode);
+  conversation = conversations.find((item) => item.id === conversationId);
+  if (!conversation) return;
   conversation.turns = conversation.turns || [];
   const timestamp = new Date().toISOString();
   const turn = { id: newId(), mode, prompt, request, status: "pending", error: "", result: null,
     createdAt: timestamp, updatedAt: timestamp };
   conversation.turns.push(turn);
-  searchInput.value = "";
-  chronicleTopic.value = "";
-  conversationPromptEditor = null;
-  await generateConversationTurn(conversation.id, turn.id, true);
+  if (selectedConversationId === conversationId) {
+    searchInput.value = "";
+    chronicleTopic.value = "";
+    conversationPromptEditor = null;
+  }
+  await generateConversationTurn(conversationId, turn.id, true);
 }
 
 function literalConversationTurnResult(turn) {
-  const matches = (turn.request.literalSources || []).flatMap(({ text, ...source }) => {
-    const quote = buildSnippet(text, turn.prompt);
-    return quote ? [{ ...source, quote, matchType: "字面匹配" }] : [];
-  });
-  return { ready: true, matches, warnings: ["未连接大模型，已使用字面检索；异称、字号、别名可能无法召回。"] };
+  const matches = (turn.request.body.evidence || []).map(({ text, ...source }) =>
+    ({ ...source, quote: text, matchType: source.matchedBy?.includes("semantic") ? "语义召回" : "字面匹配" }));
+  return { ready: true, matches, warnings: ["生成模型暂不可用，以下为程序召回的原文片段。"] };
 }
 
 async function generateConversationTurn(conversationId, turnId, scrollToTurn = false) {
@@ -1194,22 +994,36 @@ async function generateConversationTurn(conversationId, turnId, scrollToTurn = f
   persistConversations();
   refreshConversationTurnView(conversationId, scrollToTurn);
   try {
-    if (!turn.request) turn.request = getLegacyTurnRequest(conversation, turn);
+    if (!turn.request) throw new Error("本轮材料缺失，请重新发送问题。");
     // Persist before sending so a page interruption still leaves a retryable request.
     persistConversations();
-    const request = JSON.parse(JSON.stringify(turn.request));
+    const request = await validateFrozenEvidence(JSON.parse(JSON.stringify(turn.request)));
+    turn.request = request;
+    persistConversations();
     if (request.path !== "/" + turn.mode) throw new Error("无法重试此记录，请编辑提示词后重新发送。");
     let response;
     if (!isLlmServiceConnected() && turn.mode === "search") {
-      response = literalConversationTurnResult(turn);
+      response = literalConversationTurnResult({ request });
     } else {
       if (!isLlmServiceConnected()) throw new Error("未连接大模型，请连接后点击重新生成。");
-      response = await requestLlmTask(request.path, request.body);
+      try {
+        response = await requestLlmTask(request.path, request.body);
+      } catch (error) {
+        if (turn.mode !== "search") throw error;
+        response = literalConversationTurnResult({ request });
+      }
+      if (!response.ready && turn.mode === "search") response = literalConversationTurnResult({ request });
     }
     if (!response.ready) throw new Error(response.message || "暂时无法调用大模型服务，请重新生成。");
     ({ conversation, turn } = getConversationTurn(conversationId, turnId));
     if (!conversation || !turn || conversationTurnRequests.get(conversationId) !== token) return;
-    const payload = turn.mode === "chat" ? { answer: response.answer || "未生成回答。" }
+    if (Array.isArray(response.usedEvidence)) {
+      request.body.evidence = response.usedEvidence;
+      request.body.options.history = response.usedHistory || request.body.options.history;
+      request.sourceDocumentIds = [...new Set(response.usedEvidence.filter((e) => e.sourceType === "document-page").map((e) => e.documentId))];
+      turn.request = request;
+    }
+    const payload = turn.mode === "chat" ? { answer: response.answer || "未生成回答。", sources: response.sources || [] }
       : turn.mode === "search" ? { matches: response.matches || [], expandedTerms: response.expandedTerms || [] }
       : { entries: response.entries || [] };
     turn.result = { mode: turn.mode, prompt: turn.prompt, payload,
@@ -1251,17 +1065,22 @@ function startConversationPromptEdit(conversationId, turnId) {
 
 async function saveConversationPromptEdit(conversationId, turnId, value) {
   const prompt = value.trim();
-  const { conversation, turn } = getConversationTurn(conversationId, turnId);
+  let { conversation, turn } = getConversationTurn(conversationId, turnId);
   if (!prompt || !turn || conversationTurnRequests.has(conversationId)) return;
+  if (!turn.request?.retrieval || conversationTurnRequests.has(conversationId)) return;
+  const preparing = { turnId };
+  conversationTurnRequests.set(conversationId, preparing);
   let request;
   try {
-    request = JSON.parse(JSON.stringify(turn.request || getLegacyTurnRequest(conversation, turn)));
+    request = await captureConversationTurnRequest(conversation, turn.mode, prompt, turn.id, turn.request);
   } catch (error) {
     showUploadToast(error.message);
     return;
+  } finally {
+    if (conversationTurnRequests.get(conversationId) === preparing) conversationTurnRequests.delete(conversationId);
   }
-  const promptKey = turn.mode === "chat" ? "prompt" : turn.mode === "search" ? "query" : "topic";
-  request.body[promptKey] = prompt;
+  ({ conversation, turn } = getConversationTurn(conversationId, turnId));
+  if (!turn) return;
   const index = conversation.turns.findIndex((item) => item.id === turnId);
   conversation.turns = conversation.turns.slice(0, index + 1);
   turn.prompt = prompt;
@@ -1374,6 +1193,7 @@ function renderConversationTurns() {
         text.className = "conversation-answer-text";
         text.textContent = turn.result.payload.answer;
         answer.append(text);
+        if (turn.result.payload.sources?.length) answer.append(buildCitationMarkers({ sources: turn.result.payload.sources }));
         if (turn.result.warnings.length) answer.append(formatWarnings(turn.result.warnings));
       } else if (turn.mode === "search") {
         renderLlmSearchResults(turn.result.payload.matches || [], turn.result.warnings, turn.prompt, answer);

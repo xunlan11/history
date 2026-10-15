@@ -1084,6 +1084,7 @@ function renderReaderOriginal(page, readerIndex = null) {
 
 function renderReaderText(page, readerIndex = null) {
   const text = getPagePrimaryText(page);
+  if (typeof showReaderEvidence === "function") showReaderEvidence(page, readerIndex);
 
   if (!text) {
     readerText.classList.add("is-empty");

@@ -24,6 +24,10 @@ from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
 from service import reader_index
+from service import retrieval_store, retrieval
+from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
+from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
+from service.retrieval_worker import SemanticWorker
 from contextvars import ContextVar
 from service.wenqu_sso import SsoResolver, verify_service_token
 
@@ -33,7 +37,7 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 SESSIONS: dict[str, dict[str, Any]] = {}
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
@@ -202,6 +206,11 @@ _REQUIRED_SCHEMA_COLUMNS = {
     "document_files": {"id", "document_id", "page_id", "role", "original_name", "storage_path", "public_url", "sha256", "size_bytes", "mime_type", "created_at", "updated_at", "deleted_at"},
     "conversation_files": {"id", "conversation_id", "original_name", "storage_path", "public_url", "sha256", "size_bytes", "mime_type", "kind", "extracted_text", "extraction_status", "warnings", "created_at", "updated_at", "deleted_at"},
     "conversation_shares": {"id", "token", "conversation_id", "selected_turn_ids", "content", "active", "created_at", "updated_at", "deleted_at"},
+    "semantic_models": {"fingerprint", "payload", "created_at"},
+    "semantic_sources": {"document_id", "page_id", "policy", "source_layer", "source_hash", "updated_at"},
+    "semantic_chunks": {"chunk_id", "document_id", "page_id", "source_layer", "source_hash", "ordinal", "start", "end", "text", "chunker_version"},
+    "semantic_vectors": {"chunk_id", "model_fingerprint", "dimensions", "vector"},
+    "semantic_jobs": {"id", "page_id", "source_layer", "source_hash", "model_fingerprint", "status", "attempts", "retry_at", "lease_until", "lease_token", "error"},
     "processing_jobs": {"sequence", "document_id", "mode", "phase", "status", "source_path", "checkpoint", "retry_at", "created_at", "updated_at"},
 }
 
@@ -387,6 +396,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
+    retrieval_store.ensure_schema(connection)
     processing_scheduler.ensure_schema(connection)
     reader_index.ensure_schema(connection)
     _require_current_schema(connection)
@@ -1034,6 +1044,8 @@ def upsert_document_pages(
                 (page_id, document_id, page_number, payload, timestamp),
             )
 
+        retrieval_store.reconcile_page(connection, document_id, page, timestamp)
+
     rows = connection.execute(
         "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
         (document_id,),
@@ -1045,6 +1057,8 @@ def upsert_document_pages(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?",
                 (timestamp, timestamp, page_id),
             )
+
+    retrieval_store.cleanup_deleted(connection)
 
 
 def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
@@ -1150,6 +1164,9 @@ def soft_delete_entities(
                 "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE conversation_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
             )
+
+    if table == "documents":
+        retrieval_store.cleanup_deleted(connection)
 
 
 def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1525,21 +1542,28 @@ def retry_document_processing(document_id: str):
 
 
 _scheduler_worker = None
+_semantic_worker = None
+_embedding_client = EmbeddingClient()
 
 
 @app.on_event("startup")
 def start_document_scheduler():
-    global _scheduler_worker
+    global _scheduler_worker, _semantic_worker
     import sys
+    with database():
+        pass
+    if semantic_enabled():
+        _semantic_worker = SemanticWorker(database, _embedding_client)
+        _semantic_worker.start()
     if os.getenv("PROCESSING_SCHEDULER_ENABLED", "true").lower() not in {"0", "false", "no"}:
-        with database():
-            pass
         _scheduler_worker = processing_scheduler.Scheduler(sys.modules[__name__])
         _scheduler_worker.start()
 
 
 @app.on_event("shutdown")
 def stop_document_scheduler():
+    if _semantic_worker:
+        _semantic_worker.stop()
     if _scheduler_worker:
         _scheduler_worker.stop()
 
@@ -1908,6 +1932,7 @@ def delete_user(user_id: int) -> dict[str, str]:
             ensure_admin_remains(connection)
         with connection:
             connection.execute("DELETE FROM users WHERE id=?", (user_id,))
+            retrieval_store.cleanup_deleted(connection)
     purge_sessions_for(user_id)
     return {"status": "ok"}
 
@@ -2190,3 +2215,22 @@ def push(payload: SyncPayload) -> dict[str, Any]:
         return snapshot
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"数据库保存失败：{exc}") from exc
+
+
+@app.get("/api/embedding/health")
+def embedding_health() -> dict[str, Any]:
+    return probe_embedding_health()
+
+
+@app.post("/api/retrieval/query")
+def query_retrieval(payload: RetrievalRequest) -> dict[str, Any]:
+    user = current_user()
+    with database() as connection:
+        return retrieval.retrieve(connection, user, payload, _embedding_client)
+
+
+@app.post("/api/retrieval/validate")
+def validate_retrieval(payload: EvidenceValidationRequest) -> dict[str, Any]:
+    user = current_user()
+    with database() as connection:
+        return retrieval.validate_evidence(connection, user, payload.evidence)
