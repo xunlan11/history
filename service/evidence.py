@@ -12,6 +12,10 @@ class EvidenceError(ValueError):
     pass
 
 
+# 检索无足够相关材料时的统一提示：retrieval 与 llm 两侧同文，前端按字符串去重。
+NO_RELEVANT_MATERIAL = "文献库中未检索到与问题足够相关的材料"
+
+
 @dataclass(frozen=True)
 class BudgetConfig:
     context_tokens: int = 4096

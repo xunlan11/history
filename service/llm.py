@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from service.chronology import normalize_chronicle_entries
-from service.evidence import BudgetConfig, EvidenceError, fit_prompt_budget, validate_result_citations
+from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, validate_result_citations
 
 
 # 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
@@ -800,6 +800,34 @@ def normalize_entries(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+# 本轮没有可用材料时的对话出口：允许模型正常回应寒暄，但不得陈述史料。
+# 与 evidence.py 的“只按证据回答”不冲突——这条路径只产出纯文本回答，从不产生引用，
+# 也不会进入用材料作答的分支。
+DIALOGUE_SYSTEM = (
+    "/no_think\n你是近代军史史料书库的助手。本轮没有检索到可用材料。"
+    "若用户只是寒暄、致谢或提出与史料无关的请求，用一句话礼貌回应即可。"
+    "若用户在询问史料或史实，只说明当前材料不足以确认，并提示先在文献库中选定材料或换个问法；"
+    "绝对不得凭记忆陈述任何历史内容、人物、年代、事件或文献信息。"
+    "只输出 JSON，不要输出 [1] 之类的引用标记。格式：{\"reply\":\"一句话回应\"}"
+)
+
+
+def dialogue_messages(query: str) -> list[dict[str, Any]]:
+    return [{"role": "system", "content": DIALOGUE_SYSTEM}, {"role": "user", "content": query}]
+
+
+def conversational_reply(query: str, config: BudgetConfig) -> str:
+    fallback = "当前材料不足以确认。"
+    try:
+        content = call_chat_completion(dialogue_messages(query), temperature=0.1, json_response=True,
+                                       context_tokens=config.context_tokens, output_tokens=256)
+        reply = string_value(parse_json_object(content).get("reply"))
+    except (LlmServiceError, ValueError, TypeError):
+        return fallback
+    # 无材料时不允许出现引用标记，模型若越界就抹掉。
+    return re.sub(r"\[\d+\]", "", reply).strip() or fallback
+
+
 def run_evidence_task(payload, mode: str) -> dict[str, Any]:
     query = getattr(payload, "query", getattr(payload, "prompt", getattr(payload, "topic", "")))
     try:
@@ -809,13 +837,16 @@ def run_evidence_task(payload, mode: str) -> dict[str, Any]:
                 raise EvidenceError("证据缺少 chunkId 或原文")
         config = BudgetConfig.from_env()
         budgeted = fit_prompt_budget(query, mode, evidence, payload.options.get("history", []), config)
-        if not budgeted.evidence:
-            result = {}
-        else:
+        if budgeted.evidence:
             content = call_chat_completion(budgeted.messages, temperature=0.1, json_response=True,
                                            context_tokens=config.context_tokens, output_tokens=config.output_tokens)
-            result = parse_json_object(content)
-        checked = validate_result_citations(result, budgeted.evidence, mode)
+            checked = validate_result_citations(parse_json_object(content), budgeted.evidence, mode)
+        else:
+            # 没有材料时不进“按证据作答”分支：搜索/编年返回空列表，对话走寒暄出口。
+            checked = validate_result_citations({}, [], mode)
+            checked["warnings"].append(NO_RELEVANT_MATERIAL)
+            if mode == "chat":
+                checked["answer"] = conversational_reply(query, config)
         if mode == "chronicle":
             checked["entries"], date_warnings = normalize_chronicle_entries(checked["entries"])
             checked["warnings"].extend(date_warnings)

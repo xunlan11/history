@@ -16,10 +16,20 @@ import time
 from collections import Counter
 
 from service.embedding import EmbeddingError, semantic_enabled
+from service.evidence import NO_RELEVANT_MATERIAL
 from service.retrieval_types import CHUNKER_VERSION, Chunk, RetrievalRequest, SourceText, TextPolicy
 from service.variant import to_simplified
 
 logger = logging.getLogger(__name__)
+
+# 语义召回的绝对相关性下限。
+# Qwen3-embedding 对中文存在约 0.2~0.35 的“基线相似度”：任何输入（寒暄、致谢、乱码）
+# 都能对库内任意切片取得 >0 的余弦，阈值取 0 等于不设门槛、召回率恒为 100%。
+# 2026-10-15 实测（《宫中档光绪朝奏折》）：真实问题 0.61~0.79，无关输入 0.21~0.35。
+DEFAULT_MIN_COSINE = 0.45
+
+# 字面打分视为“长查询”的二字片段个数：达到该长度后，只重合一个片段不再算命中。
+LONG_QUERY_GRAM_COUNT = 6
 
 
 # Source selection and lossless chunking.
@@ -176,9 +186,14 @@ def literal_score(text: str, query: str) -> float:
     exact = 5.0 if query in text else 0.0
     terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]{1,2}", query))
     grams = {query[i:i + 2] for i in range(len(query) - 1)} if len(query) > 1 else {query}
+    matched_grams = sum(gram in text for gram in grams)
+    # 长查询里只重合一个二字片段是噪声：查询里的“18”会撞上文献年份“1898”，
+    # 据此判定命中会让无关提问也拿到材料。短查询片段本就少，维持原行为以免损失词面召回。
+    if not exact and matched_grams < (2 if len(grams) >= LONG_QUERY_GRAM_COUNT else 1):
+        return 0.0
+    overlap = matched_grams / len(grams)
     matched = sum(term in text for term in terms)
-    overlap = sum(gram in text for gram in grams) / len(grams)
-    return exact + overlap + (matched / max(1, len(terms))) * 0.2 if overlap else exact
+    return exact + overlap + (matched / max(1, len(terms))) * 0.2
 
 
 def _scope(user: dict, document_ids: list[str] | None):
@@ -256,7 +271,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             if len(query) != identity.dimensions or not np.isfinite(query).all() or np.linalg.norm(query) == 0:
                 raise EmbeddingError("查询嵌入维数或数值无效")
             query /= np.linalg.norm(query)
-            minimum = float(os.getenv("SEMANTIC_MIN_COSINE", "0"))
+            minimum = float(os.getenv("SEMANTIC_MIN_COSINE", str(DEFAULT_MIN_COSINE)))
             if not -1 <= minimum <= 1:
                 raise EmbeddingError("SEMANTIC_MIN_COSINE 必须在 -1 到 1 之间")
             cursor = connection.execute(f"""SELECT c.chunk_id,c.page_id,c.source_layer,c.source_hash,v.vector,v.dimensions
@@ -310,6 +325,9 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         hits.append({k: v for k, v in hit.items() if k != "literalScore"} | rank)
         if len(hits) >= limit:
             break
+    if not hits and candidates:
+        # 有材料但无一条过相关下限：明确告知，避免下游把“没检索到”当成“材料已用尽”。
+        warnings.append(NO_RELEVANT_MATERIAL)
     if request.mode == "chronicle":
         # Reserve space for neighboring context without exceeding the hard limit.
         # Select one hit from each page before taking repeated-page hits.

@@ -432,7 +432,7 @@ EMBEDDING_MODEL=qwen3-embedding:0.6b-q8_0
 EMBEDDING_TIMEOUT_SECONDS=60
 EMBEDDING_BATCH_SIZE=8
 SEMANTIC_SCAN_INTERVAL_SECONDS=30
-SEMANTIC_MIN_COSINE=0
+SEMANTIC_MIN_COSINE=0.45
 EMBEDDING_DOCUMENT_PREFIX=
 # 保持 EMBEDDING_QUERY_PREFIX 未定义；空值会禁用代码默认的查询指令。
 # EMBEDDING_API_KEY=...
@@ -443,7 +443,7 @@ ENV
 done
 ```
 
-`EMBEDDING_API_BASE` 是 Ollama 根地址。默认查询指令为 `Instruct: Given a question about historical documents, retrieve relevant passages that answer the question`，随后真实换行，再接 `Query: 用户问题`；正文不加前缀。不要将旧配置里的空 `EMBEDDING_QUERY_PREFIX=` 原样带入。digest、维数、前缀或分段版本改变后旧向量不参与新召回，后台会重新生成；恢复相同模型及配置可复用向量。`SEMANTIC_MIN_COSINE` 是候选过滤下限，不是答案可信度。
+`EMBEDDING_API_BASE` 是 Ollama 根地址。默认查询指令为 `Instruct: Given a question about historical documents, retrieve relevant passages that answer the question`，随后真实换行，再接 `Query: 用户问题`；正文不加前缀。不要将旧配置里的空 `EMBEDDING_QUERY_PREFIX=` 原样带入。digest、维数、前缀或分段版本改变后旧向量不参与新召回，后台会重新生成；恢复相同模型及配置可复用向量。`SEMANTIC_MIN_COSINE` 是候选过滤下限，不是答案可信度。该模型对中文有约 0.2~0.35 的基线相似度，设为 0 等于不设门槛：任何输入（含寒暄、乱码）都能凑满候选并被当成材料，模型随之据无关材料作答。2026-10-15 实测（《宫中档光绪朝奏折》）：真实提问 0.61~0.79，无关输入 0.21~0.35，故取 0.45；语料或问题风格差异大时应重测后再调。降低该值会放宽召回，提高则更严格。
 
 ### 7.3 直连覆盖与启动
 
