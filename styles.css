@@ -291,6 +291,8 @@ label {
 .reader-search-filters { display: flex; flex-wrap: wrap; gap: 8px 10px; padding: 0; margin: 0; border: 0; }
 .reader-search-filters label { display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 400; white-space: nowrap; }
 .reader-search-filters [data-reader-search-count] { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 嵌入检索失败：计数格显示「失败」（替代数字），悬停 title 给出原因 */
+.reader-search-filters [data-reader-search-count].is-failed { color: var(--red); }
 /* 类别筛选 + 页码筛选同一行；页码筛选 flex-basis 为 0，所以优先被压缩而不是换行
    （行宽不够时两个页码输入框等比变窄，最低 24px），只有类别筛选自己都放不下时才换行 */
 .reader-search-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }

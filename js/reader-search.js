@@ -19,7 +19,8 @@ const READER_SEARCH_TEXT_LIMIT = 100;
 const readerSearchState = {
   documentId: null, snapshot: "", query: "", matches: [], levels: new Set(["exact", "partial", "semantic"]),
   pageFrom: null, pageTo: null,
-  activeId: "", markAll: false, loading: false, warnings: [], revision: 0, scrollPending: false,
+  activeId: "", markAll: false, loading: false, warnings: [], semanticError: "",
+  revision: 0, scrollPending: false,
 };
 
 function getReaderSearchText(page) {
@@ -147,7 +148,8 @@ function syncReaderSearch(item) {
   const snapshot = readerSearchSnapshot(item);
   if (readerSearchState.documentId !== (item?.id || null)) {
     Object.assign(readerSearchState, { documentId: item?.id || null, snapshot, query: "", matches: [],
-      activeId: "", loading: false, warnings: [], scrollPending: false, revision: readerSearchState.revision + 1 });
+      activeId: "", loading: false, warnings: [], semanticError: "",
+      scrollPending: false, revision: readerSearchState.revision + 1 });
     readerSearchInput.value = "";
   } else if (snapshot !== readerSearchState.snapshot) {
     readerSearchState.snapshot = snapshot;
@@ -155,6 +157,7 @@ function syncReaderSearch(item) {
     readerSearchState.matches = [];
     readerSearchState.activeId = "";
     readerSearchState.loading = false;
+    readerSearchState.semanticError = "";
     if (item && readerSearchState.query) runReaderSearch(readerSearchState.query);
   }
   renderReaderSearchPanel();
@@ -168,7 +171,8 @@ async function runReaderSearch(query) {
   const snapshot = readerSearchSnapshot(item);
   Object.assign(readerSearchState, { documentId: item.id, snapshot, query,
     matches: query ? findReaderLiteralMatches(item, query) : [], activeId: "", scrollPending: false,
-    loading: Boolean(query && item.pages.some((page) => getReaderSearchText(page).trim())), warnings: [] });
+    loading: Boolean(query && item.pages.some((page) => getReaderSearchText(page).trim())),
+    warnings: [], semanticError: "" });
   renderReaderSearchPanel();
   refreshReaderSearchText();
   if (!readerSearchState.loading) return;
@@ -183,7 +187,8 @@ async function runReaderSearch(query) {
     readerSearchState.warnings = response.warnings || [];
   } catch (error) {
     if (revision !== readerSearchState.revision) return;
-    readerSearchState.warnings = [`嵌入检索未完成：${error.message}；字面结果仍可使用。`];
+    // 不单独写提示句：失败状态由「嵌入」计数格显示为「失败」（悬停看原因）
+    readerSearchState.semanticError = error.message;
   } finally {
     if (revision === readerSearchState.revision) {
       readerSearchState.loading = false;
@@ -222,8 +227,15 @@ function renderReaderSearchPanel() {
   const filtered = getFilteredReaderSearchMatches();
   for (const button of readerSearchNavButtons) button.disabled = !filtered.length || readerEditing;
   for (const level of Object.keys(READER_SEARCH_LABELS)) {
-    document.querySelector(`[data-reader-search-count="${level}"]`).textContent =
-      String(readerSearchState.matches.filter((match) => match.level === level).length);
+    const node = document.querySelector(`[data-reader-search-count="${level}"]`);
+    // 嵌入检索失败时不显示 0（会被误读成「没有相近段落」），改为「失败」并悬停提示原因
+    const failed = level === "semantic" && Boolean(readerSearchState.semanticError);
+    node.textContent = failed
+      ? "失败"
+      : String(readerSearchState.matches.filter((match) => match.level === level).length);
+    node.classList.toggle("is-failed", failed);
+    if (failed) node.title = `嵌入检索失败：${readerSearchState.semanticError}`;
+    else node.removeAttribute("title");
   }
   const messages = [];
   if (!item) messages.push("请先打开一篇文献。");
