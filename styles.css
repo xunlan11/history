@@ -375,7 +375,7 @@ label {
   font-size: 14px;
 }
 
-.reader-search-mark-button:hover {
+.reader-search-mark-button:hover:not(:disabled) {
   border-color: #bac7c0;
   background: var(--surface-2);
 }
@@ -386,9 +386,15 @@ label {
   color: #fff;
 }
 
-.reader-search-mark-button[aria-pressed="true"]:hover {
+.reader-search-mark-button[aria-pressed="true"]:hover:not(:disabled) {
   border-color: var(--primary-dark);
   background: var(--primary-dark);
+}
+
+/* 无筛选结果时与 首项/末项/上一项/下一项 同步禁用 */
+.reader-search-mark-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 mark.reader-search-highlight { background: #e8d9fa; color: inherit; padding: 0; border-radius: 2px; }
 mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset 0 -2px #7152a3; }

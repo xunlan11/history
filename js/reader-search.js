@@ -226,6 +226,8 @@ function renderReaderSearchPanel() {
   renderReaderSearchMarkAll();
   const filtered = getFilteredReaderSearchMatches();
   for (const button of readerSearchNavButtons) button.disabled = !filtered.length || readerEditing;
+  // 「标注」标的是筛选后的结果，没有可标注的项时与导航按钮一起禁用
+  if (readerSearchMarkAll) readerSearchMarkAll.disabled = !filtered.length || readerEditing;
   for (const level of Object.keys(READER_SEARCH_LABELS)) {
     const node = document.querySelector(`[data-reader-search-count="${level}"]`);
     // 嵌入检索失败时不显示 0（会被误读成「没有相近段落」），改为「失败」并悬停提示原因
