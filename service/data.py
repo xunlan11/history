@@ -24,7 +24,7 @@ from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
 from service import reader_index
-from service import retrieval_store, retrieval
+from service import retrieval
 from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
 from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
 from service.retrieval_worker import SemanticWorker
@@ -396,7 +396,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
 
         """
     )
-    retrieval_store.ensure_schema(connection)
+    retrieval.ensure_schema(connection)
     processing_scheduler.ensure_schema(connection)
     reader_index.ensure_schema(connection)
     _require_current_schema(connection)
@@ -1044,7 +1044,7 @@ def upsert_document_pages(
                 (page_id, document_id, page_number, payload, timestamp),
             )
 
-        retrieval_store.reconcile_page(connection, document_id, page, timestamp)
+        retrieval.reconcile_page(connection, document_id, page, timestamp)
 
     rows = connection.execute(
         "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
@@ -1058,7 +1058,7 @@ def upsert_document_pages(
                 (timestamp, timestamp, page_id),
             )
 
-    retrieval_store.cleanup_deleted(connection)
+    retrieval.cleanup_deleted(connection)
 
 
 def upsert_conversations(connection: sqlite3.Connection, conversations: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
@@ -1166,7 +1166,7 @@ def soft_delete_entities(
             )
 
     if table == "documents":
-        retrieval_store.cleanup_deleted(connection)
+        retrieval.cleanup_deleted(connection)
 
 
 def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1932,7 +1932,7 @@ def delete_user(user_id: int) -> dict[str, str]:
             ensure_admin_remains(connection)
         with connection:
             connection.execute("DELETE FROM users WHERE id=?", (user_id,))
-            retrieval_store.cleanup_deleted(connection)
+            retrieval.cleanup_deleted(connection)
     purge_sessions_for(user_id)
     return {"status": "ok"}
 

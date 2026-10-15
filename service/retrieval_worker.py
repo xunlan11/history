@@ -9,7 +9,7 @@ import time
 import uuid
 
 from service.embedding import EmbeddingError, EmbeddingUnavailable, normalize_vector
-from service import retrieval_store as store
+from service import retrieval
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,13 @@ class SemanticWorker:
                     for row in rows:
                         page = json.loads(row["payload"])
                         page["id"] = row["id"]
-                        store.reconcile_page(connection, row["document_id"], page, str(time.time()))
+                        retrieval.reconcile_page(connection, row["document_id"], page, str(time.time()))
             if not rows:
                 break
             after = rows[-1]["id"]
         with self.connection_factory() as connection, connection:
-            store.cleanup_deleted(connection)
-            store.enqueue_model(connection, identity)
+            retrieval.cleanup_deleted(connection)
+            retrieval.enqueue_model(connection, identity)
         self._last_scan = time.monotonic()
 
     def run_once(self) -> bool:
@@ -57,7 +57,7 @@ class SemanticWorker:
         token = uuid.uuid4().hex
         lease = max(300, float(getattr(self.client, "timeout", 60)) * 2)
         with self.connection_factory() as connection:
-            job = store.claim_job(connection, identity.fingerprint, lease, token)
+            job = retrieval.claim_job(connection, identity.fingerprint, lease, token)
             if not job:
                 return False
             chunks = connection.execute("""SELECT c.* FROM semantic_chunks c
