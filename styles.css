@@ -928,29 +928,32 @@ button:focus-visible {
   color: var(--primary);
 }
 
-/* 侧栏折叠按钮：竖长胶囊（参考 VS Code），纵向居中、正好落在侧栏与主区之间的分隔带
-   （.reader-layout 的 14px gap：按钮 12px 宽，左右各留 1px，整体居中于 -7px 处） */
+/* 侧栏折叠按钮：竖长胶囊（参考 VS Code）。中线压在阅览器面板的左边框线上
+   （left = -宽度/2，即 -8.5px）；填充与描边比背景稍重，好在边框线上立起来 */
 .reader-main .reader-sidebar-toggle.icon-button {
   position: absolute;
   top: 50%;
-  left: -13px;
+  left: -8.5px;
   z-index: 2;
   transform: translateY(-50%);
-  width: 12px;
-  height: 46px;
+  width: 17px;
+  height: 58px;
   flex: 0 0 auto;
   padding: 0;
-  border: 0;
+  /* 图标比内容盒宽，必须 place-content 居中；只写 place-items 时它会贴左边缘 */
+  place-content: center;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(28, 37, 33, 0.1);
 }
 
-/* 胶囊只有 12px 宽，用透明伪元素把可点区域向四周扩 6px */
+/* 胶囊只有 17px 宽，用透明伪元素把可点区域向四周扩 7px */
 .reader-main .reader-sidebar-toggle.icon-button::before {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -7px;
 }
 
 .reader-main .reader-sidebar-toggle.icon-button:hover {
@@ -959,8 +962,8 @@ button:focus-visible {
 }
 
 .reader-main .reader-sidebar-toggle svg {
-  width: 14px;
-  height: 14px;
+  width: 19px;
+  height: 19px;
 }
 
 /* 侧栏收起后分隔线消失，按钮贴到主区左边缘 */

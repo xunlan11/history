@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 NON_BODY_TYPES = {"header", "footer", "page_number", "figure", "chart", "seal", "image"}
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
 # 索引载荷版本：算法变化时递增，旧索引会被重建（reconcile 落库 / load 即时重建）。
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 
 def text_hash(text: str) -> str:
@@ -131,6 +131,59 @@ def split_sentences(text: str) -> list[dict[str, Any]]:
     return sentences
 
 
+def _ordered_quad(polygon):
+    """4 点多边形规范成 tl, tr, br, bl（先按 y 分上下两组，组内按 x 排序）。"""
+    ordered = sorted(polygon, key=lambda point: (point[1], point[0]))
+    top = sorted(ordered[:2], key=lambda point: point[0])
+    bottom = sorted(ordered[2:], key=lambda point: point[0])
+    return top[0], top[1], bottom[1], bottom[0]
+
+
+def _char_span_quad(line, low, high):
+    """按行内字符比例切出字级四边形：竖排按 y 切、横排按 x 切。
+
+    真实扫描件的文字行几乎都是带透视的 4 点四边形，直接拿 bbox 按轴切会露出相邻字；
+    这里沿四边形自己的两条长边线性插值，切出的区域跟着行一起斜。
+    无法判定方向（太方正/无形）时返回 None，调用方退回整列。
+    """
+    x1, y1, x2, y2 = line["bbox"]
+    vertical = (y2 - y1) > (x2 - x1) * 2
+    horizontal = (x2 - x1) > (y2 - y1) * 2
+    if not vertical and not horizontal:
+        return None
+    polygon = [point for point in (line.get("polygon") or []) if len(point) == 2]
+    if len(polygon) == 4:
+        tl, tr, br, bl = _ordered_quad(polygon)
+        if vertical:
+            if bl[1] <= tl[1] or br[1] <= tr[1]:
+                return None
+            left = lambda y: tl[0] + (bl[0] - tl[0]) * (y - tl[1]) / (bl[1] - tl[1])
+            right = lambda y: tr[0] + (br[0] - tr[0]) * (y - tr[1]) / (br[1] - tr[1])
+            head, tail = y1 + (y2 - y1) * low, y1 + (y2 - y1) * high
+            quad = [[left(head), head], [right(head), head], [right(tail), tail], [left(tail), tail]]
+        else:
+            if tr[0] <= tl[0] or br[0] <= bl[0]:
+                return None
+            top = lambda x: tl[1] + (tr[1] - tl[1]) * (x - tl[0]) / (tr[0] - tl[0])
+            bottom = lambda x: bl[1] + (br[1] - bl[1]) * (x - bl[0]) / (br[0] - bl[0])
+            head, tail = x1 + (x2 - x1) * low, x1 + (x2 - x1) * high
+            quad = [[head, top(head)], [head, bottom(head)], [tail, bottom(tail)], [tail, top(tail)]]
+    elif not polygon:
+        if vertical:
+            head, tail = y1 + (y2 - y1) * low, y1 + (y2 - y1) * high
+            quad = [[x1, head], [x2, head], [x2, tail], [x1, tail]]
+        else:
+            head, tail = x1 + (x2 - x1) * low, x1 + (x2 - x1) * high
+            quad = [[head, y1], [head, y2], [tail, y2], [tail, y1]]
+    else:
+        return None
+    box = [min(point[0] for point in quad), min(point[1] for point in quad),
+           max(point[0] for point in quad), max(point[1] for point in quad)]
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return None
+    return box, [[round(point[0], 2), round(point[1], 2)] for point in quad]
+
+
 def _line_region(line, start, end):
     box, polygon = line.get("bbox"), line.get("polygon") or []
     if not box:
@@ -140,23 +193,17 @@ def _line_region(line, start, end):
         return {"lineId": line["id"], "bbox": box, "polygon": polygon}, True
     raw = line["text"]
     positions = [i for i, c in enumerate(raw) if c.isalnum()]
-    x1, y1, x2, y2 = box
-    axis_aligned = not polygon or (len(polygon) == 4 and
-        set(map(tuple, polygon)) == {(x1, y1), (x2, y1), (x2, y2), (x1, y2)})
-    # 仅对等宽汉字作按字符比例切分，其余保留整行且降低置信度。
-    safe = (axis_aligned and len(positions) == len(normalized) and
-            all(unicodedata.east_asian_width(c) in {"W", "F"} for c in raw))
-    if not safe:
+    # 只有等宽全角汉字能按字符比例切；其余（混排数字/字母、字数与归一化不符）保留整行。
+    if len(positions) != len(normalized) or not all(
+            unicodedata.east_asian_width(c) in {"W", "F"} for c in raw):
         return {"lineId": line["id"], "bbox": box, "polygon": polygon}, False
     low = positions[start] / len(raw)
     high = (positions[end - 1] + 1) / len(raw)
-    if y2 - y1 > (x2 - x1) * 2:
-        cropped = [x1, y1 + (y2 - y1) * low, x2, y1 + (y2 - y1) * high]
-    elif x2 - x1 > (y2 - y1) * 2:
-        cropped = [x1 + (x2 - x1) * low, y1, x1 + (x2 - x1) * high, y2]
-    else:
+    sliced = _char_span_quad(line, low, high)
+    if not sliced:
         return {"lineId": line["id"], "bbox": box, "polygon": polygon}, False
-    return {"lineId": line["id"], "bbox": cropped, "polygon": []}, True
+    cropped, cropped_polygon = sliced
+    return {"lineId": line["id"], "bbox": cropped, "polygon": cropped_polygon}, True
 
 
 def build_reader_index(*, layout: dict[str, Any], source_text: str,
