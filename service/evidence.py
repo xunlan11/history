@@ -113,6 +113,13 @@ def validate_result_citations(result: dict, evidence: list[dict], mode: str) -> 
         answer["quote"] = quote
         if item.get("sourceLayer") == "notes":
             answer["sourceLabel"] = "笔记"
+        # 把定位范围收窄到被引用的原样片段。材料切片的 start/end 覆盖整片（约 250~800 字），
+        # 前端按它定位只能停在整片开头，读起来像是“跳转后高亮页面第一句”。
+        # quote 已在本片上核验通过，偏移按 Unicode 码点计算，与前端 markEvidenceRange 一致。
+        offset = item["text"].find(quote)
+        if offset >= 0 and isinstance(item.get("start"), int):
+            answer["start"] = item["start"] + offset
+            answer["end"] = answer["start"] + len(quote)
         return answer
 
     if mode == "search":
