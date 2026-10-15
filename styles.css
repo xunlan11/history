@@ -288,6 +288,9 @@ label {
 .reader-search-form button { flex-shrink: 0; min-height: 30px; padding: 4px 14px; font-size: 14px; }
 .reader-search-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .reader-search-status { max-height: 100px; overflow: auto; flex-shrink: 0; }
+/* 只有「未找到匹配项。」一种情况，其余时候为空；空时整行退出布局，
+   否则它仍会占掉 .reader-search-panel 的两个 flex gap（10px×2） */
+.reader-search-status:empty { display: none; }
 .reader-search-filters { display: flex; flex-wrap: wrap; gap: 8px 10px; padding: 0; margin: 0; border: 0; }
 .reader-search-filters label { display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 400; white-space: nowrap; }
 .reader-search-filters [data-reader-search-count] { color: var(--muted); font-variant-numeric: tabular-nums; }

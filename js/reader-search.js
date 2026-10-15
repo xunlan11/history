@@ -239,17 +239,13 @@ function renderReaderSearchPanel() {
     if (failed) node.title = `嵌入检索失败：${readerSearchState.semanticError}`;
     else node.removeAttribute("title");
   }
-  const messages = [];
-  if (!item) messages.push("请先打开一篇文献。");
-  else if (readerEditing) messages.push("正在修改整理文本，保存后可继续检索和定位。");
-  else if (!readerSearchState.query) messages.push("输入检索词，在当前文献中查找。");
-  else if (!item.pages.some((page) => getReaderSearchText(page).trim())) messages.push("当前文献尚无整理文本。");
-  else if (!readerSearchState.levels.size) messages.push("未选择匹配层级，当前不显示结果。");
-  else if (!readerSearchState.matches.length && !readerSearchState.loading) messages.push("未找到匹配项。");
-  else messages.push(`显示 ${filtered.length} / ${readerSearchState.matches.length} 项，按文中位置排序。`);
-  if (readerSearchState.loading) messages.push("正在检索嵌入匹配，字面结果已列出…");
-  messages.push(...readerSearchState.warnings);
-  readerSearchStatus.textContent = messages.join(" ");
+  // 只在「已检索且确实一条都没匹配上」时提示；未检索、无整理文本、层级未选、编辑态等一律不提示
+  const searched = !readerEditing && Boolean(readerSearchState.query) &&
+    Boolean(item && item.pages.some((page) => getReaderSearchText(page).trim()));
+  if (readerSearchStatus) {
+    readerSearchStatus.textContent =
+      searched && !readerSearchState.loading && !readerSearchState.matches.length ? "未找到匹配项。" : "";
+  }
   readerSearchResults.setAttribute("aria-busy", String(readerSearchState.loading));
   readerSearchResults.replaceChildren();
   const fragment = document.createDocumentFragment();
