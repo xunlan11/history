@@ -17,6 +17,10 @@ Environment=PROCESSING_LLM_URL=http://127.0.0.1:8865
 # 服务令牌（/etc/wenqu-sso.env 提供 DATABASE_URL / SERVICE_TOKEN_SECRET）。
 Environment=AUTH_MODE=sso
 EnvironmentFile=/etc/wenqu-sso.env
+# 语义检索默认关闭；部署时由独立配置启用。
+Environment=SEMANTIC_SEARCH_ENABLED=false
+Environment=EMBEDDING_MODEL=qwen3-embedding:0.6b-q8_0
+EnvironmentFile=-/etc/literature-semantic.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 18665
 Restart=always
 RestartSec=5

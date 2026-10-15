@@ -13,10 +13,10 @@ const SITE_TITLE = SITE_TITLES[SITE_ID] || SITE_ID;
 // localStorage 按站点隔离（/history 沿用旧前缀，既有用户数据不变）
 const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `wenqu.${SITE_ID}`;
 
-const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
+const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema9`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
 const VARIANT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.variant.schema1`;
-const DATA_SCHEMA_VERSION = 8;
+const DATA_SCHEMA_VERSION = 9;
 
 function endpoint(proxiedPath) {
   return `${HISTORY_BASE}/api${proxiedPath}`;
@@ -26,6 +26,7 @@ const DATA_PROCESSING_URL = endpoint("/data/api/documents");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
 const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
+const EMBEDDING_HEALTH_URL = endpoint("/data/api/embedding/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
@@ -247,6 +248,7 @@ const cardTemplate = document.querySelector("#document-card-template");
 const versionServiceStatus = document.querySelector("#version-service-status");
 const versionUpdateButton = document.querySelector("#version-update-button");
 const ocrServiceStatus = document.querySelector("#ocr-service-status");
+const embeddingServiceStatus = document.querySelector("#embedding-service-status");
 const llmServiceStatus = document.querySelector("#llm-service-status");
 const conversationList = document.querySelector("#conversation-list");
 const newConversationButton = document.querySelector("#new-conversation");
@@ -289,14 +291,14 @@ const openSettingsButton = document.querySelector("#open-settings");
 const settingsDialog = document.querySelector("#settings-dialog");
 const closeSettingsButton = document.querySelector("#close-settings");
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema5`;
+const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema9`;
 const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
-const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema4`;
-const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema4`;
-const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema4`;
-const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema5`;
+const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema9`;
+const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema9`;
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema9`;
+const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema9`;
 // 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
-const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema4`;
+const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema9`;
 
 
 function getConversationStorageKey() {

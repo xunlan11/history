@@ -367,44 +367,6 @@ function runSmartChronicle() {
   return sendConversationTurn("chronicle");
 }
 
-function buildLibraryChatContext(prompt, conversation = getSelectedConversation()) {
-  const entries = [];
-  const attachmentEntries = collectConversationAttachmentChatEntries(prompt, conversation);
-
-  getSmartScopeDocuments(conversation).forEach((item, documentIndex) => {
-    item.pages.forEach((page, pageIndex) => {
-      const text = getSmartPagePrimaryText(page, conversation);
-      if (!text) {
-        return;
-      }
-
-      const snippet = buildSnippet(text, prompt) || text.slice(0, 260);
-      entries.push({
-        documentId: item.id,
-        documentTitle: getDocumentDisplayTitle(item),
-        author: item.author || "",
-        year: item.year || "",
-        pageId: page.id,
-        pageNumber: page.pageNumber,
-        text: snippet,
-        score: scoreTextRelevance(`${item.title}\n${item.author}\n${text}`, prompt),
-        documentIndex,
-        pageIndex,
-      });
-    });
-  });
-
-  const rankEntries = (items) => items.sort((a, b) => {
-    return b.score - a.score || a.documentIndex - b.documentIndex || a.pageIndex - b.pageIndex;
-  });
-  const selectedEntries = entries.length && attachmentEntries.length
-    ? [...rankEntries(attachmentEntries).slice(0, 4), ...rankEntries(entries).slice(0, 4)]
-    : rankEntries([...entries, ...attachmentEntries]).slice(0, 8);
-
-  return selectedEntries
-    .map(({ score, documentIndex, pageIndex, ...entry }) => entry);
-}
-
 function isLlmServiceConnected() {
   return llmServiceStatus?.classList.contains("service-ok");
 }
@@ -516,9 +478,11 @@ function resumePendingProcessingTasks() {
 
 initializeApplication();
 refreshOcrServiceStatus();
+refreshEmbeddingServiceStatus();
 refreshLlmServiceStatus();
 refreshVersionStatus();
 setInterval(refreshOcrServiceStatus, 10000);
+setInterval(refreshEmbeddingServiceStatus, 10000);
 setInterval(refreshLlmServiceStatus, 10000);
 setInterval(refreshVersionStatus, 30000);
 versionUpdateButton?.addEventListener("click", requestProjectUpdate);

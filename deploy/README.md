@@ -14,7 +14,7 @@ OCR and LLM models. See the runtime layout below for hosts and ports.
 | Literature data API | data host | 18665 | `data/literature.service` |
 | Literature OCR orchestration | data host | 18765 | `data/literature-ocr.service` |
 | PaddleX OCR | remote host | 8080 | `service/history-ocr.service` |
-| Ollama / Qwen3-8B | remote host | 11434 | `service/history-llm.service` |
+| Ollama / Qwen3-8B + Qwen3-Embedding-0.6B Q8_0 | remote host | 11434 | `service/history-llm.service` |
 | SSH reverse tunnel | remote host | 18080, 11435 on data host | `service/history-tunnel.service` |
 
 The data host reaches the model host through the tunnel:
@@ -249,3 +249,8 @@ browser during registration/body processing, interrupt OCR and LLM independently
 restart the data API, then restore services. Confirm saved stages are reused and
 subsequent bodies never overtake the waiting head. This deployment verification
 has not been performed on the code-only workstation.
+
+
+## Semantic retrieval
+
+Schema 9 adds page-local chunking, a durable embedding queue, permission-filtered hybrid retrieval, and verified citations shared by search/chat/chronicle. The feature is disabled by default. The selected embedding model is **Qwen3-Embedding-0.6B Q8_0**, with the exact Ollama tag `qwen3-embedding:0.6b-q8_0`. Hand [semantic-search.md](semantic-search.md) to the model-host agent for model installation, endpoint checks, and the data-host handoff; [data/semantic.env.example](data/semantic.env.example) supplies the shared configuration template. Deploy the data API, LLM API and frontend together with a fresh schema-9 database; no schema-8 migration is supplied. See [semantic-search.md](semantic-search.md) for configuration, index commands and deployment acceptance. Code-only workstations run offline tests without starting services or downloading models.

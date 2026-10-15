@@ -9,6 +9,7 @@
     "../js/core.js",
     "../js/auth.js",
     "../js/variant.js",
+    "../js/retrieval.js",
   ];
   const documentScripts = [
     "../js/documents.js",

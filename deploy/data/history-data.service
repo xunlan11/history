@@ -11,6 +11,10 @@ Environment=PROCESSING_OCR_URL=http://127.0.0.1:8765
 Environment=PROCESSING_LLM_URL=http://127.0.0.1:8865
 # 本站保留本地账号登录（登录弹窗 + Bearer Token），不接入问渠 SSO。
 Environment=AUTH_MODE=local
+# 语义检索默认关闭；部署时由独立配置启用。
+Environment=SEMANTIC_SEARCH_ENABLED=false
+Environment=EMBEDDING_MODEL=qwen3-embedding:0.6b-q8_0
+EnvironmentFile=-/etc/history-semantic.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.data:app --host 127.0.0.1 --port 8665
 Restart=always
 RestartSec=5

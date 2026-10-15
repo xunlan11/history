@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from service.chronology import normalize_chronicle_entries
+from service.evidence import BudgetConfig, EvidenceError, fit_prompt_budget, validate_result_citations
 
 
 # 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
@@ -78,6 +79,7 @@ class ExtractMetadataRequest(LlmTaskRequest):
 
 
 class ChronicleRequest(BaseModel):
+    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     topic: str = ""
     documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
@@ -91,12 +93,14 @@ class SupplementChronicleRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     query: str
     documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
+    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     prompt: str
     context: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
@@ -489,87 +493,7 @@ def format_conversation_history(options: dict[str, Any]) -> str:
 
 @app.post("/llm/chronicle")
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
-    prompt = f"""
-/no_think
-请基于输入材料生成史事编年草稿。documents 同时可能包含库内文献和当前对话上传文件；每项包含 sourceType、documentId、attachmentId（仅上传文件）、title 及 pages，每页包含 pageId、pageNumber、text、notes。
-
-其中 sourceType 为 conversation-file 的材料来自当前对话的临时快速读取，可能存在基础 OCR 或顺序误差；可以依据其原文生成结果，但不得把它表述成已经正式整理、登记入库的文献。
-
-任务：
-1. 现场从 documents.pages.text 中识别与主题相关的史事；主题为空时，抽取全部有明确时间依据的史事。
-2. 识别复杂纪年的组成信息，包括民国纪年、清代年号、干支纪年、公历日期、农历日期、闰月以及上下文省略的年份或月份。
-3. 不要自行做历法换算；只按原文和上下文填写 calendarType、year、month、day、eraName、eraYear、lunarMonth、lunarDay、lunarLeap、ganzhiYear。无法确定的字段留空。
-4. 严格只使用输入材料，不引入外部史实，不补充材料外事件；日期换算、排序和同日判定由程序完成。
-5. 史事表述必须客观、精要，不加入立场褒贬。
-6. 每条必须保留材料定位依据、sourceType、documentId、attachmentId、pageId、pageNumber 和原文依据 quote；字段值必须照抄输入，不得虚构。
-7. 输出必须是 JSON，不要输出解释文字或 Markdown。
-
-返回格式：
-{{
-  "entries": [
-    {{
-      "dateOriginal": "原文时间表述",
-      "calendarType": "gregorian、lunar 或 unknown",
-      "year": 1898,
-      "month": 0,
-      "day": 0,
-      "eraName": "光绪、民国等年号或空",
-      "eraYear": 24,
-      "lunarMonth": 6,
-      "lunarDay": 3,
-      "lunarLeap": false,
-      "ganzhiYear": "戊戌或空",
-      "summary": "客观史事",
-      "sources": [
-        {{
-          "documentId": "输入中的 documentId",
-          "attachmentId": "上传文件的 attachmentId 或空",
-          "sourceType": "document-page 或 conversation-file",
-          "pageId": "输入中的 pageId",
-          "author": "著者",
-          "title": "文献名",
-          "publisher": "出版信息",
-          "year": "年份",
-          "pageNumber": 1,
-          "quote": "原文依据"
-        }}
-      ]
-    }}
-  ],
-  "warnings": ["处理提示"]
-}}
-
-此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
-{format_conversation_history(payload.options)}
-
-主题：
-{payload.topic}
-
-文献数据：
-{json.dumps(payload.documents, ensure_ascii=False)}
-""".strip()
-
-    try:
-        result = call_json_task(prompt)
-        entries, chronology_warnings = normalize_chronicle_entries(
-            normalize_entries(result.get("entries"))
-        )
-        warnings = list_value(result.get("warnings")) + chronology_warnings
-        response = base_response("chronicle", ready=True)
-    except LlmServiceError as exc:
-        entries = []
-        warnings = [str(exc)]
-        response = failure_response("chronicle", exc)
-
-    response.update(
-        {
-            "topic": payload.topic,
-            "entries": entries,
-            "warnings": warnings,
-        }
-    )
-    return response
-
+    return run_evidence_task(payload, "chronicle")
 
 @app.post("/llm/chronicle/supplement")
 def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
@@ -633,133 +557,11 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
 
 @app.post("/llm/search")
 def search(payload: SearchRequest) -> dict[str, Any]:
-    prompt = f"""
-/no_think
-请在用户书库文献和当前对话上传文件中做智能检索。
-
-其中 sourceType 为 conversation-file 的材料来自当前对话的临时快速读取，可能存在基础 OCR 或顺序误差；仍须忠实引用输入文字，不得补写或修正成材料中没有的内容。
-
-任务：
-1. 根据 query 在 documents.pages.text 和 notes 中找相关内容。
-2. 不只做字面匹配，还要识别同一对象的不同称呼：
-   - 人物：姓名、字、号、别名、旧译名、职务代称。
-   - 战役/事件：中外不同称呼、敌我双方不同称呼、简称、旧称。
-   - 机构/部队：全称、简称、番号变化、上级/下级常见代称。
-   - 地名：旧地名、异体写法、简称。
-3. 可以使用通用历史常识判断别称关系，但匹配结果必须能在输入材料中找到原文依据 quote。
-4. 不要把只是同一时代、同一地区但无直接关联的内容列为结果。
-5. 每条结果必须保留 sourceType、documentId、attachmentId、pageId、pageNumber，方便前端打开原文献或上传文件。
-6. 按相关性排序：直接命中、明确别称、强上下文关联优先。
-7. 最多返回 options.maxMatches 条；如果命中更多，在 warnings 中说明还有更多结果。
-8. 输出必须是 JSON，不要输出解释文字或 Markdown。
-
-返回格式：
-{{
-  "matches": [
-    {{
-      "documentId": "输入中的 documentId",
-      "attachmentId": "上传文件的 attachmentId 或空",
-      "sourceType": "document-page 或 conversation-file",
-      "pageId": "输入中的 pageId",
-      "pageNumber": 1,
-      "title": "文献名",
-      "author": "著者",
-      "year": "年份",
-      "matchedAs": "材料中实际出现的称呼",
-      "matchType": "直接命中/别称/字号/战役异称/部队番号/地名旧称/上下文关联",
-      "reason": "为什么判断与 query 相关",
-      "quote": "原文依据",
-      "score": 0.0
-    }}
-  ],
-  "expandedTerms": ["模型识别出的同义称谓"],
-  "warnings": ["处理提示"]
-}}
-
-此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
-{format_conversation_history(payload.options)}
-
-query：
-{payload.query}
-
-options：
-{json.dumps({key: value for key, value in payload.options.items() if key != "history"}, ensure_ascii=False)}
-
-documents：
-{json.dumps(payload.documents, ensure_ascii=False)}
-""".strip()
-
-    try:
-        result = call_json_task(prompt)
-        matches = normalize_entries(result.get("matches"))
-        expanded_terms = list_value(result.get("expandedTerms"))
-        warnings = list_value(result.get("warnings"))
-        response = base_response("search", ready=True)
-    except LlmServiceError as exc:
-        matches = []
-        expanded_terms = []
-        warnings = [str(exc)]
-        response = failure_response("search", exc)
-
-    response.update(
-        {
-            "query": payload.query,
-            "matches": matches,
-            "expandedTerms": expanded_terms,
-            "warnings": warnings,
-        }
-    )
-    return response
-
+    return run_evidence_task(payload, "search")
 
 @app.post("/llm/chat")
 def chat(payload: ChatRequest) -> dict[str, Any]:
-    prompt = f"""
-/no_think
-请作为近代军史文献书库助手回答用户问题。
-
-原则：
-1. 优先依据输入上下文回答；其中 sourceType 为 conversation-file 的内容是当前对话上传文件的临时快速读取结果，并非正式入库文献。
-2. 如果上下文不足，明确说明“当前材料不足以确认”。
-3. 不要编造来源、页码或史实。
-4. 回答要简洁，必要时列出所依据的文献页码。
-
-此前对话（用于理解追问、修改要求和已有草稿；历史回答不作为独立史料，涉及史实须依据输入材料核对）：
-{format_conversation_history(payload.options)}
-
-用户问题：
-{payload.prompt}
-
-输入上下文：
-{json.dumps(payload.context, ensure_ascii=False)}
-""".strip()
-
-    try:
-        answer = call_chat_completion(
-            [
-                {
-                    "role": "system",
-                    "content": "你是近代军史文献书库助手。回答必须忠于输入上下文；临时上传文件可能存在快速读取误差，不足则说明不足。",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-            json_response=False,
-        )
-        response = base_response("chat", ready=True)
-    except LlmServiceError as exc:
-        answer = ""
-        response = failure_response("chat", exc)
-
-    response.update(
-        {
-            "prompt": payload.prompt,
-            "answer": answer.strip(),
-            "contextCount": len(payload.context),
-        }
-    )
-    return response
-
+    return run_evidence_task(payload, "chat")
 
 def call_json_task(prompt: str) -> dict[str, Any]:
     content = call_chat_completion(
@@ -783,12 +585,14 @@ def call_chat_completion(
     messages: list[dict[str, Any]],
     temperature: float = 0.1,
     json_response: bool = True,
+    context_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> str:
     if not provider_configured():
         raise LlmServiceError("尚未配置大模型服务（服务端地址 / 模型名）。")
 
     if LLM_PROVIDER == "ollama":
-        return call_ollama_chat_completion(messages, temperature, json_response)
+        return call_ollama_chat_completion(messages, temperature, json_response, context_tokens, output_tokens)
 
     url = f"{LLM_API_BASE.rstrip('/')}/chat/completions"
     payload = {
@@ -797,6 +601,8 @@ def call_chat_completion(
         "temperature": temperature,
         "stream": False,
     }
+    if output_tokens is not None:
+        payload["max_tokens"] = output_tokens
     if json_response:
         payload["response_format"] = {"type": "json_object"}
 
@@ -812,6 +618,8 @@ def call_ollama_chat_completion(
     messages: list[dict[str, Any]],
     temperature: float = 0.1,
     json_response: bool = True,
+    context_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> str:
     base = LLM_API_BASE.rstrip("/")
     ollama_root = base.removesuffix("/v1")
@@ -826,6 +634,10 @@ def call_ollama_chat_completion(
             "temperature": temperature,
         },
     }
+    if context_tokens is not None:
+        payload["options"]["num_ctx"] = context_tokens
+    if output_tokens is not None:
+        payload["options"]["num_predict"] = output_tokens
     if json_response:
         payload["format"] = "json"
 
@@ -986,3 +798,36 @@ def normalize_entries(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def run_evidence_task(payload, mode: str) -> dict[str, Any]:
+    query = getattr(payload, "query", getattr(payload, "prompt", getattr(payload, "topic", "")))
+    try:
+        evidence = payload.evidence or []
+        for item in evidence:
+            if not isinstance(item.get("chunkId"), str) or not isinstance(item.get("text"), str):
+                raise EvidenceError("证据缺少 chunkId 或原文")
+        config = BudgetConfig.from_env()
+        budgeted = fit_prompt_budget(query, mode, evidence, payload.options.get("history", []), config)
+        if not budgeted.evidence:
+            result = {}
+        else:
+            content = call_chat_completion(budgeted.messages, temperature=0.1, json_response=True,
+                                           context_tokens=config.context_tokens, output_tokens=config.output_tokens)
+            result = parse_json_object(content)
+        checked = validate_result_citations(result, budgeted.evidence, mode)
+        if mode == "chronicle":
+            checked["entries"], date_warnings = normalize_chronicle_entries(checked["entries"])
+            checked["warnings"].extend(date_warnings)
+        response = base_response(mode, ready=True)
+        response.update(checked)
+        response["warnings"] = budgeted.warnings + response.get("warnings", [])
+        response["usedEvidence"] = budgeted.evidence
+        response["usedHistory"] = budgeted.history
+        response["inputTokens"] = budgeted.input_tokens
+        response["budgetMethod"] = "tokenizer" if config.tokenizer_path else "utf8UpperBound"
+        return response
+    except (EvidenceError, ValueError, TypeError) as exc:
+        return base_response(mode, ready=False, message=str(exc)) | {"errorKind": "processing", "warnings": [str(exc)]}
+    except LlmServiceError as exc:
+        return failure_response(mode, exc) | {"warnings": [str(exc)]}

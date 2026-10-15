@@ -45,6 +45,16 @@ async function refreshOcrServiceStatus() {
   }
 }
 
+async function refreshEmbeddingServiceStatus() {
+  if (!embeddingServiceStatus) return;
+  try {
+    const result = await fetchServiceJson(EMBEDDING_HEALTH_URL, "Embedding health check failed");
+    renderModelServiceStatus(embeddingServiceStatus, result);
+  } catch (error) {
+    setServiceStatus(embeddingServiceStatus, "未连接", "service-warn");
+  }
+}
+
 async function refreshLlmServiceStatus() {
   if (!llmServiceStatus) return;
   try {

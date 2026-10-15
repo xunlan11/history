@@ -2401,6 +2401,7 @@ body {
 
 .service-strip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
@@ -2421,11 +2422,6 @@ body {
 .service-item-version {
   flex-basis: 118px;
   min-width: 118px;
-}
-
-.service-item-llm {
-  flex-basis: 136px;
-  min-width: 136px;
 }
 
 .status-title {
@@ -3935,4 +3931,23 @@ body {
 .reader-sentence.is-selected,
 .reader-image-region.is-selected {
   outline: 2px solid #986811;
+}
+
+.retrieval-highlight {
+  background: #ffe59a;
+  color: inherit;
+  border-radius: 2px;
+  scroll-margin-block: 5rem;
+}
+.reader-evidence-status {
+  padding: 0.75rem 1rem;
+  border-inline-start: 3px solid #ba8a32;
+  background: #fffbef;
+  font-size: 0.9rem;
+}
+.reader-evidence-text {
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow-y: auto;
+  line-height: 1.8;
 }
