@@ -1,13 +1,13 @@
-﻿"""Shared, versioned contracts for retrieval and source anchors."""
+"""Shared, versioned contracts for retrieval and source anchors."""
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CHUNKER_VERSION = "paragraph-v1"
-TextPolicy = Literal["primary", "processed"]
+TextPolicy = Literal["primary", "processed", "reader"]
 
 
 @dataclass(frozen=True)
@@ -37,10 +37,18 @@ class Chunk:
 
 class RetrievalRequest(BaseModel):
     query: str = Field(max_length=2000)
-    mode: Literal["search", "chat", "chronicle"] = "search"
+    mode: Literal["search", "chat", "chronicle", "reader"] = "search"
     documentIds: list[str] | None = Field(default=None, max_length=1000)
     textPolicy: TextPolicy = "primary"
     limit: int | None = Field(default=None, ge=1, le=40)
+
+    @model_validator(mode="after")
+    def reader_scope(self):
+        if self.mode == "reader":
+            if not self.documentIds or len(self.documentIds) != 1 or not self.documentIds[0].strip():
+                raise ValueError("文内检索必须限定一篇文献")
+            self.textPolicy = "reader"
+        return self
 
     @field_validator("query")
     @classmethod

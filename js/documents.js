@@ -722,6 +722,7 @@ function renderReader() {
   readerNotes.classList.add("hidden");
 
   if (!item) {
+    if (typeof syncReaderSearch === "function") syncReaderSearch(null);
     setReaderEditing(false);
     readerTitle.textContent = "未选择文献";
     readerPageInput.value = "";
@@ -749,6 +750,7 @@ function renderReader() {
   const editingPageKey = JSON.stringify([currentUser?.id, item.id, page?.id]);
   if (!canEdit || readerEditingPageKey !== editingPageKey) readerEditing = false;
   readerEditingPageKey = editingPageKey;
+  if (typeof syncReaderSearch === "function") syncReaderSearch(item);
   const sortedPages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
   const pageIndex = Math.max(0, sortedPages.findIndex((entry) => entry.id === page?.id));
 
@@ -816,6 +818,7 @@ function applyReaderEditingState() {
   readerText.contentEditable = String(readerEditing);
   readerText.classList.toggle("is-editing", readerEditing);
   const canEdit = canEditDocument(getSelectedDocument());
+  if (typeof renderReaderSearchPanel === "function") renderReaderSearchPanel();
   editDocumentLabel.textContent = readerEditing ? "保存" : canEdit ? "修改" : "只读";
   editDocumentButton.setAttribute("aria-label", readerEditing ? "保存整理文本" : canEdit ? "修改整理文本" : "只读文献");
 }
@@ -1082,9 +1085,9 @@ function renderReaderOriginal(page, readerIndex = null) {
   readerOriginalPreview.append(frame);
 }
 
-function renderReaderText(page, readerIndex = null) {
+function renderReaderText(page, readerIndex = null, options = {}) {
   const text = getPagePrimaryText(page);
-  if (typeof showReaderEvidence === "function") showReaderEvidence(page, readerIndex);
+  if (options.evidence !== false && typeof showReaderEvidence === "function") showReaderEvidence(page, readerIndex);
 
   if (!text) {
     readerText.classList.add("is-empty");
@@ -1104,6 +1107,8 @@ function renderReaderText(page, readerIndex = null) {
   } else {
     readerText.textContent = text;
   }
+
+  if (typeof applyReaderSearchHighlights === "function") applyReaderSearchHighlights(page);
 
   if (page?.notes) {
     readerNotes.textContent = page.notes;
