@@ -25,7 +25,7 @@ from service import scheduler as processing_scheduler
 from service import variant as variant_service
 from service import reader_index
 from contextvars import ContextVar
-from service.wenqu_sso.session import SsoResolver, verify_service_token
+from service.wenqu_sso import SsoResolver, verify_service_token
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
