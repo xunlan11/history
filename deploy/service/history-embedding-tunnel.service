@@ -1,0 +1,15 @@
+[Unit]
+Description=Reverse SSH tunnel to data server (CPU embedding 11436)
+After=network-online.target history-embedding.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# 数据端 SSH key/sshd 需允许 127.0.0.1:11436；该隧道独立于 OCR/生成隧道。
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=15 -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i %h/.ssh/cloud-tunnel -R 127.0.0.1:11436:127.0.0.1:11436 tunneluser@192.144.141.60
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

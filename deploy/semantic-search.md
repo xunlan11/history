@@ -1,4 +1,4 @@
-﻿# 语义检索：部署与离线验证
+# 语义检索：部署与离线验证
 
 本仓库是代码端。代码端只安装开发依赖、运行纯函数/临时 SQLite/模拟模型测试，不启动服务，不需要真实文献数据、Ollama、OCR 或嵌入模型。本文的配置和索引操作命令属于后续数据端/服务端部署，不能作为代码端测试的前置条件。
 
@@ -6,28 +6,43 @@
 
 本次暂定使用 **Qwen3-Embedding-0.6B，Q8_0 量化**，Ollama 精确标签为 **`qwen3-embedding:0.6b-q8_0`**。不要替换为 `latest`、`qwen3-embedding:0.6b` 或生成模型 `qwen3:8b`；后者继续负责问答/编年生成。模型权重仅安装在模型服务端，SQLite、全文、分段与向量保存在数据端。
 
-服务端执行者按下面顺序完成，并返回实际检查结果；本文命令尚未在真实部署主机执行：
+服务端执行者按下面顺序完成，并返回实际检查结果；实际部署结果以服务端交付记录为准：
 
-1. 检查既有 `history-llm.service`、Ollama 二进制、模型目录和可用内存，沿用现有服务与存储位置。
-2. 在模型服务端拉取上述精确标签，确认 Q8_0、1024 维及模型 digest，执行下方接口冒烟检查。
-3. 从数据端经原有隧道复查同一模型：数据端 `127.0.0.1:11435` → 模型服务端 `127.0.0.1:11434`。两端应看到相同 digest。
+1. 检查既有生成实例 `history-llm.service`，新增独立 CPU 实例 `history-embedding.service`，沿用同一 Ollama 二进制。
+2. 在模型服务端 CPU 实例拉取上述精确标签，确认 Q8_0、1024 维及模型 digest，执行下方接口冒烟检查。
+3. 从数据端经独立嵌入隧道复查同一模型：数据端 `127.0.0.1:11436` → 模型服务端 `127.0.0.1:11436`。两端应看到相同 digest。
 4. 若同时具备数据端操作权限，按下方说明更新代码/前端、配置两站并重启相应单元；只有模型服务端权限时，交付模型标签、digest、端口、接口结果及资源记录，列出待数据端执行的步骤。
 5. 数据端录入真实授权文献后完成索引、检索/问答/编年和引用验收。空库接口成功只证明部署连通，不代表召回质量通过验收。
 
 ## 模型服务端安装和检查
 
-现有部署约定见 [部署总览](README.md)：模型目录为 `~/history-service/models`，二进制为 `~/history-service/ollama/bin/ollama`，模型服务是用户级 `history-llm.service`。以下命令在运行该服务的同一 Linux 用户下执行。若实际目录不同，先检查 `systemctl --user cat history-llm.service` 并使用已有位置；不要创建另一份模型缓存或重复启动 `ollama serve`。
+生成使用 `history-llm.service`（11434，`~/history-service/models`），嵌入使用
+`history-embedding.service`（11436，`~/history-service/models-embedding`）。两实例共享
+`~/history-service/ollama/bin/ollama` 二进制，但模型清单分离：生成实例只保留生成模型，
+避免旧嵌入调用加载到 GPU。OCR 和嵌入固定 CPU，生成可使用 GPU/CPU 混合加载。
+CPU unit 设置 `CUDA_VISIBLE_DEVICES=-1`，同时屏蔽 Vulkan/ROCm 设备。
+两个实例均设置 `OLLAMA_KEEP_ALIVE=-1`；首次请求加载后保持驻留，重启后需重新预热。
+客户端不覆盖 `keep_alive`，由各实例管理驻留策略。
+
+首次安装 CPU 实例（已有的生成/OCR 无需重启）：
 
 ```bash
-systemctl --user status history-llm.service --no-pager
-systemctl --user cat history-llm.service
-# 现有 Ollama 应处于运行状态；若尚未安装，先按部署总览安装对应 unit。
-export OLLAMA_HOST=127.0.0.1:11434
-export OLLAMA_MODELS="$HOME/history-service/models"
+mkdir -p ~/history-service/models-embedding ~/history-service/logs ~/.config/systemd/user
+cp deploy/service/history-embedding.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now history-embedding.service
+export OLLAMA_HOST=127.0.0.1:11436
+export OLLAMA_MODELS="$HOME/history-service/models-embedding"
 "$HOME/history-service/ollama/bin/ollama" --version
 "$HOME/history-service/ollama/bin/ollama" pull qwen3-embedding:0.6b-q8_0
 "$HOME/history-service/ollama/bin/ollama" show qwen3-embedding:0.6b-q8_0
 ```
+
+已有精确模型时，可校验 manifest、blob 大小和 SHA-256 后把嵌入 manifest
+复制到 CPU 目录，并在同一文件系统内硬链接对应 blobs，避免重复占用权重空间。
+CPU 嵌入验证成功后备份并移走生成目录中的嵌入 manifest；不要删除两实例仍引用的 blobs，
+也不要为 CPU 目录复制生成模型清单。更新生成 unit 的 `OLLAMA_KEEP_ALIVE=-1`
+需要受控重启该服务，再用实际生成请求预热。
 
 `show` 应显示 Q8_0；不要用创建别名的方式掩盖实际量化不符。下载遇到未知模型或 `/api/embed` 不受支持时，检查模型标签、网络和 Ollama 版本，升级服务端后重新验收，不在代码中加入旧接口兼容分支。
 
@@ -40,7 +55,7 @@ import math
 import os
 import urllib.request
 
-base = os.environ.get("EMBEDDING_API_BASE", "http://127.0.0.1:11434").rstrip("/")
+base = os.environ.get("EMBEDDING_API_BASE", "http://127.0.0.1:11436").rstrip("/")
 model = "qwen3-embedding:0.6b-q8_0"
 def request(route, payload=None):
     body = None if payload is None else json.dumps(payload).encode()
@@ -53,7 +68,7 @@ assert tag.get("digest"), "missing model digest"
 show = request("/api/show", {"model": model})
 assert show["details"]["quantization_level"] == "Q8_0", show["details"]
 query = "Instruct: Given a question about historical documents, retrieve relevant passages that answer the question\nQuery: 军费从哪里筹措？"
-result = request("/api/embed", {"model": model, "input": [query, "筹集饷银，以供军需。"], "truncate": False, "keep_alive": "5m"})
+result = request("/api/embed", {"model": model, "input": [query, "筹集饷银，以供军需。"], "truncate": False})
 vectors = result["embeddings"]
 assert len(vectors) == 2
 for vector in vectors:
@@ -63,10 +78,14 @@ for vector in vectors:
 print(json.dumps({"model": model, "digest": tag["digest"], "quantization": "Q8_0", "dimensions": 1024, "vectors": len(vectors)}, ensure_ascii=False))
 PY
 # 保留模型已加载时的内存/显存与上下文信息。
-curl --fail --silent --show-error http://127.0.0.1:11434/api/ps
+curl --fail --silent --show-error http://127.0.0.1:11436/api/ps
 ```
 
-从数据端复查时，先设置 `export EMBEDDING_API_BASE=http://127.0.0.1:11435`，再执行同一段 Python。同网段直接连接可使用模型服务端实际内网地址；需同时调整数据端配置，沿用现有访问控制。
+新端口需数据端 SSH key/sshd 放行 `127.0.0.1:11436` 后，再安装启用
+`deploy/service/history-embedding-tunnel.service`。当前账号若拒绝该端口，先完成
+数据端权限配置，保留原 OCR/生成隧道运行。
+
+从数据端复查时，先设置 `export EMBEDDING_API_BASE=http://127.0.0.1:11436`，再执行同一段 Python。同网段直接连接可使用模型服务端实际内网地址；需同时调整数据端配置，沿用现有访问控制。
 
 ## 已实现的行为
 
@@ -124,15 +143,20 @@ journalctl --user -u history-data.service -u literature.service -n 100 --no-page
 
 ## 首页连接状态
 
-首页顶栏按“识别 → 嵌入 → 生成”显示三个独立状态。嵌入通过数据 API 的 `GET /api/embedding/health` 检查当前站点的嵌入配置和 Ollama 模型列表，每 10 秒刷新；不调用 `/api/embed`，不加载模型、不创建索引，也不查询生成服务状态。现有数据 API 代理即可转发，无需新增模型端口或代理路径。
+首页顶栏按“识别 → 嵌入 → 生成”显示三个独立状态。嵌入通过数据 API 的 `GET /api/embedding/health` 检查当前站点的嵌入配置和 Ollama 模型列表，每 10 秒刷新；不调用 `/api/embed`，不加载模型、不创建索引，也不查询生成服务状态。现有数据 API 代理即可转发；底层嵌入使用独立的 11436 模型端口及隧道。
 
 三个服务沿用相同状态表述：`已连接`、`未就绪`、`不可达`、`未连接`。嵌入未启用、模型缺失或响应无效时为“未就绪”；上游连接/超时失败时为“不可达”；浏览器无法取得有效健康检查结果时为“未连接”。“已连接”说明配置模型出现在可访问的模型列表中；实际向量推理仍需完成前文的接口检查。
 
 ## 服务端资源
 
-所选 Ollama Q8_0 权重文件约 **639 MB**。短片段、小批量（默认 8）、低并发时，可先为嵌入进程预留 **4 GB 内存，6 GB 更宽裕**；这是部署容量估算，不是官方最低要求或本机实测值，不包含生成模型、OCR、操作系统和数据库的占用。CPU 可运行该模型；GPU 部署另测显存，不能把 639 MB 下载体积当作运行显存。模型最大上下文不应作为实际部署上下文直接照搬；现有 Ollama unit 配置 4096，部署时需用实际加载信息与峰值占用核实。
+所选 Ollama Q8_0 权重文件约 **639 MB**。短片段、小批量（默认 8）、低并发时，可先为嵌入进程预留 **4 GB 内存，6 GB 更宽裕**；这是部署容量估算，不是官方最低要求或本机实测值，不包含生成模型、OCR、操作系统和数据库的占用。CPU 可运行该模型；GPU 部署另测显存，不能把 639 MB 下载体积当作运行显存。模型最大上下文不应作为实际部署上下文直接照搬；两个 Ollama unit 均配置 4096，部署时需用实际加载信息与峰值占用核实。
 
-现有模型 unit 配置最多加载一个模型、并行数为 1。首次沿用同一 Ollama 和隧道，不提高模型加载上限。后台索引在正文任务 queued/running 时暂停新任务；查询嵌入仍可能导致 Qwen3-8B 与嵌入模型互相装卸。记录冷启动/热查询延迟、索引批处理时的峰值 RAM/VRAM 和生成延迟。若切换开销不可接受，再评估独立嵌入实例与端口/隧道，并同步 `EMBEDDING_API_BASE`；不要未经容量核实提高并发。
+生成和嵌入分别最多加载一个模型、并行数为 1，使用不同实例同时驻留。
+生成保留 GPU 加速，显存不足时允许 CPU 分担；嵌入不得使用 GPU。
+后台索引在正文任务 queued/running 时暂停新任务；CPU 嵌入仍可能与 OCR、
+生成的 CPU 部分争用内存和 CPU。用并发真实请求确认 CPU `/api/ps` 的
+`size_vram=0`，生成 `/api/ps` 始终保留 `qwen3:8b`，且 GPU 进程列表没有嵌入 runner。
+GPU 仍可能由桌面显示系统使用，本部署限制的是模型服务的设备分配。
 
 服务端交付记录至少包含 Ollama 版本、精确标签、digest、Q8_0、实际 1024 维结果、连接路径、RAM/VRAM 峰值、冷/热耗时、已执行与待执行的两端步骤。
 

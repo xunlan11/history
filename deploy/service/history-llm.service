@@ -1,5 +1,5 @@
 [Unit]
-Description=近代军史数智平台 大模型服务端（Ollama, Qwen3-8B + Qwen3-Embedding-0.6B）
+Description=近代军史数智平台 大模型服务端（Ollama, Qwen3-8B, GPU 加速）
 Documentation=https://ollama.com
 After=network-online.target
 Wants=network-online.target
@@ -8,9 +8,9 @@ Wants=network-online.target
 Type=simple
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=%h/history-service/models
-Environment=OLLAMA_KEEP_ALIVE=24h
-# 生成 qwen3:8b；嵌入 qwen3-embedding:0.6b-q8_0，安装/验收见 deploy/semantic-search.md。
-# 沿用单模型加载上限；两种模型按请求切换，部署时实测内存和延迟。
+Environment=OLLAMA_KEEP_ALIVE=-1
+# 本实例的模型目录只保留生成模型；嵌入使用 history-embedding.service 的 CPU 实例。
+# 生成允许 GPU/CPU 混合加载，其他模型服务不使用 GPU。
 Environment=OLLAMA_MAX_LOADED_MODELS=1
 Environment=OLLAMA_NUM_PARALLEL=1
 Environment=OLLAMA_CONTEXT_LENGTH=4096

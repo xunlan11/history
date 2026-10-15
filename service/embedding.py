@@ -62,7 +62,7 @@ def normalize_vector(values, dimensions: int | None = None) -> list[float]:
 
 class EmbeddingClient:
     def __init__(self, base: str | None = None, model: str | None = None, timeout: float | None = None):
-        self.base = (base if base is not None else os.getenv("EMBEDDING_API_BASE", "http://127.0.0.1:11435")).rstrip("/").removesuffix("/v1")
+        self.base = (base if base is not None else os.getenv("EMBEDDING_API_BASE", "http://127.0.0.1:11436")).rstrip("/").removesuffix("/v1")
         self.model = model if model is not None else os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
         self.timeout = timeout or float(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "60"))
         self.document_prefix = os.getenv("EMBEDDING_DOCUMENT_PREFIX", "")
@@ -99,7 +99,7 @@ class EmbeddingClient:
     def _embed(self, texts: list[str], dimensions: int | None = None) -> list[list[float]]:
         if not texts:
             return []
-        result = self._request("/api/embed", {"model": self.model, "input": texts, "truncate": False, "keep_alive": "5m"})
+        result = self._request("/api/embed", {"model": self.model, "input": texts, "truncate": False})
         vectors = result.get("embeddings")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
             raise EmbeddingError("嵌入返回数量与输入不一致")

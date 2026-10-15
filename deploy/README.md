@@ -14,13 +14,16 @@ OCR and LLM models. See the runtime layout below for hosts and ports.
 | Literature data API | data host | 18665 | `data/literature.service` |
 | Literature OCR orchestration | data host | 18765 | `data/literature-ocr.service` |
 | PaddleX OCR | remote host | 8080 | `service/history-ocr.service` |
-| Ollama / Qwen3-8B + Qwen3-Embedding-0.6B Q8_0 | remote host | 11434 | `service/history-llm.service` |
+| Ollama / Qwen3-8B (GPU, CPU offload allowed) | remote host | 11434 | `service/history-llm.service` |
+| Ollama / Qwen3-Embedding-0.6B Q8_0 (CPU only) | remote host | 11436 | `service/history-embedding.service` |
 | SSH reverse tunnel | remote host | 18080, 11435 on data host | `service/history-tunnel.service` |
+| Embedding reverse tunnel | remote host | 11436 on data host | `service/history-embedding-tunnel.service` |
 
 The data host reaches the model host through the tunnel:
 
 - `127.0.0.1:18080` -> remote `127.0.0.1:8080`
-- `127.0.0.1:11435` -> remote `127.0.0.1:11434`
+- `127.0.0.1:11435` -> remote `127.0.0.1:11434` (generation)
+- `127.0.0.1:11436` -> remote `127.0.0.1:11436` (CPU embeddings)
 
 ## Data host
 
@@ -89,8 +92,9 @@ OCR service manually on the same port; use the corresponding systemd unit.
 
 ## Remote host
 
-The remote host runs PaddleX PP-StructureV3 (`8080`) and Ollama + Qwen3-8B
-(`11434`). It stores no platform data and does not need this repository's code;
+The remote host runs PaddleX PP-StructureV3 (`8080`), GPU-accelerated
+Qwen3-8B (`11434`), and CPU-only Qwen3 embeddings (`11436`). It stores no platform
+data and does not need this repository's application code;
 it only has to expose HTTP to the data host. OCR runs fine on CPU; the LLM also
 runs on CPU (~4.9 tok/s) but a GPU is preferred (with 6 GB VRAM, Qwen3-8B
 measured 28-31 tok/s).
@@ -104,22 +108,30 @@ deploy/service/PP-StructureV3-cpu.yaml
 deploy/service/Modelfile.qwen3-8b
 deploy/service/history-ocr.service
 deploy/service/history-llm.service
+deploy/service/history-embedding.service
 deploy/service/history-tunnel.service
+deploy/service/history-embedding-tunnel.service
 ```
 
 The OCR and Ollama binaries, virtual environments, model files, and logs are
 also expected under `~/history-service/` as referenced by the units.
 
-Install the two model services and the tunnel:
+Install OCR, generation, CPU embeddings and the existing OCR/generation tunnel:
 
 ```bash
 mkdir -p ~/.config/systemd/user
 cp ~/history-service/deploy/service/history-ocr.service ~/.config/systemd/user/
 cp ~/history-service/deploy/service/history-llm.service ~/.config/systemd/user/
 cp ~/history-service/deploy/service/history-tunnel.service ~/.config/systemd/user/
+cp ~/history-service/deploy/service/history-embedding.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now history-ocr history-llm history-tunnel
+systemctl --user enable --now history-ocr history-llm history-embedding history-tunnel
 ```
+
+See [CPU embedding setup](semantic-search.md) before starting the embedding unit:
+its isolated cache is `~/history-service/models-embedding`. Only generation may
+use the GPU; OCR and embeddings run on CPU. Each Ollama keeps its model loaded
+with `OLLAMA_KEEP_ALIVE=-1`; model loading occurs on the first inference request.
 
 The tunnel unit must point to the current data host and use the configured
 `~/.ssh/cloud-tunnel` key. Change its SSH destination before enabling it when
@@ -129,14 +141,32 @@ the data host address changes.
 
 The remote host must be able to SSH to the data host using the dedicated key
 referenced by `service/history-tunnel.service`. The key on the data host must
-allow reverse forwarding only to `127.0.0.1:18080` and `127.0.0.1:11435`.
-Keep both reverse forwards bound to loopback; do not expose them publicly.
+allow reverse forwarding to `127.0.0.1:18080`, `127.0.0.1:11435`, and
+`127.0.0.1:11436`. Add `permitlisten="127.0.0.1:11436"` to any existing
+key restrictions and include it in any sshd `PermitListen` allowlist. Preserve
+all existing restrictions and ports. Only after authorization succeeds, install
+and enable `service/history-embedding-tunnel.service`. Keeping this tunnel
+separate prevents a rejected embedding forward from stopping OCR/generation.
+Set data-host `EMBEDDING_API_BASE=http://127.0.0.1:11436` for both sites and
+restart their data APIs. Deploy the matching `service/embedding.py`, which lets
+the CPU server control residency instead of overriding it to five minutes.
+The existing LLM API stays on 11435.
+
+After the data host allows the embedding forward, on the model host run:
+
+```bash
+cp deploy/service/history-embedding-tunnel.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now history-embedding-tunnel.service
+```
+
+Keep all reverse forwards bound to loopback; do not expose them publicly.
 
 If the tunnel is active but health checks fail:
 
-1. On the remote host, check `history-ocr` and `history-llm`.
-2. On the data host, check ports `18080` and `11435`.
-3. Check `journalctl --user -u history-tunnel.service`.
+1. On the remote host, check `history-ocr`, `history-llm` and `history-embedding`.
+2. On the data host, check ports `18080`, `11435` and `11436`.
+3. Check both `history-tunnel.service` and `history-embedding-tunnel.service` journals.
 4. Restart the tunnel only after confirming the remote model services are up.
 
 ## Verification
@@ -149,6 +179,7 @@ curl -s http://127.0.0.1:8765/health
 curl -s http://127.0.0.1:8865/health
 curl -s http://127.0.0.1:18080/health
 curl -s http://127.0.0.1:11435/v1/models
+curl -s http://127.0.0.1:11436/api/tags
 ```
 
 Expected results:
@@ -163,7 +194,7 @@ Expected results:
 - Copy `deploy/` with the repository.
 - Do not copy `.venv/`, `storage/`, `ocr-storage/`, or `.deploy/`.
 - Restore the data directories separately.
-- Keep the five data-host units and three remote-host units.
+- Keep the five data-host units and five remote-host units (including the separate embedding tunnel).
 - `fetch-assets.py` downloads the remote OCR/Ollama assets when rebuilding the
   remote host.
 

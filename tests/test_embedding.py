@@ -20,6 +20,7 @@ def test_batch_preserves_order_and_disables_truncation(monkeypatch):
     monkeypatch.setattr(client, "_request", request)
     assert client.embed_documents(["甲", "乙"]) == [[0.6, 0.8], [0, 1]]
     assert calls[0]["truncate"] is False
+    assert "keep_alive" not in calls[0]
 
 
 def test_dimension_change_rejected():
@@ -36,7 +37,9 @@ def test_model_fingerprint_includes_digest_and_templates():
 def test_selected_qwen_model_formats_queries_without_changing_documents(monkeypatch):
     for name in ("EMBEDDING_MODEL", "EMBEDDING_QUERY_PREFIX", "EMBEDDING_DOCUMENT_PREFIX"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("EMBEDDING_API_BASE", raising=False)
     client = EmbeddingClient()
+    assert client.base == "http://127.0.0.1:11436"
     assert client.model == "qwen3-embedding:0.6b-q8_0"
     calls = []
     def request(route, payload=None):
