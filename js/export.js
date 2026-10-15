@@ -6,10 +6,7 @@ function exportPdf() {
     return;
   }
 
-  openPrintWindow(item);
-}
-
-function openPrintWindow(item) {
+  // 先同步开窗，避免转换请求（异步）之后被浏览器当成弹窗拦截
   const printWindow = window.open("", "_blank");
 
   if (!printWindow) {
@@ -17,15 +14,43 @@ function openPrintWindow(item) {
     return;
   }
 
+  openPrintWindow(item, printWindow);
+}
+
+async function openPrintWindow(item, printWindow) {
+  let html;
+
+  try {
+    html = await buildPrintHtml(item);
+  } catch (error) {
+    console.error(error);
+    if (!printWindow.closed) printWindow.close();
+    alert("导出内容生成失败，请刷新后重试。");
+    return;
+  }
+
+  if (printWindow.closed) return;
+
   printWindow.document.open();
-  printWindow.document.write(buildPrintHtml(item));
+  printWindow.document.write(html);
   printWindow.document.close();
   printWindow.focus();
 }
 
-function buildPrintHtml(item) {
+// 首页信息（标题 / 品牌名 / 信息表）随「设置」里选择的简繁体显示；转换失败时保留原文
+async function convertExportInfo(texts) {
+  if (typeof window.convertVariantTexts !== "function") return texts;
+  try {
+    return await window.convertVariantTexts(texts);
+  } catch (error) {
+    console.warn("导出简繁体转换失败，保留原文", error);
+    return texts;
+  }
+}
+
+async function buildPrintHtml(item) {
   const sortedPages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
-  const metadata = [
+  const metadataPairs = [
     ["文献名", item.title || "未录"],
     ["著者", item.author || "未录"],
     ["出版时间", item.year || "未录"],
@@ -35,8 +60,21 @@ function buildPrintHtml(item) {
     ["导出时间", formatDateTime(new Date())],
   ];
 
-  const metadataHtml = metadata
-    .map(([label, value]) => `<div class="meta-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+  // 前两项是标题与品牌名，其余按「标签 / 值」交替排列
+  const converted = await convertExportInfo([
+    item.title || "未命名文献",
+    SITE_TITLE,
+    ...metadataPairs.flat(),
+  ]);
+  const heading = converted[0];
+  const brand = converted[1];
+  const metadataTexts = converted.slice(2);
+  const metadataHtml = metadataPairs
+    .map((_, index) => {
+      const label = metadataTexts[index * 2];
+      const value = metadataTexts[index * 2 + 1];
+      return `<div class="meta-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+    })
     .join("");
 
   const pagesHtml = sortedPages
@@ -69,7 +107,7 @@ function buildPrintHtml(item) {
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>${escapeHtml(item.title || "未命名文献")} 整理稿</title>
+    <title>${escapeHtml(heading)}</title>
     <style>
       @page { size: A4; margin: 18mm 16mm; }
       * { box-sizing: border-box; }
@@ -98,14 +136,14 @@ function buildPrintHtml(item) {
   </head>
   <body>
     <header class="print-header">
-      <p class="print-brand">${escapeHtml(SITE_TITLE)}</p>
+      <p class="print-brand">${escapeHtml(brand)}</p>
       <div class="print-actions">
         <button type="button" onclick="window.print()">保存为 PDF</button>
         <button type="button" onclick="window.close()">关闭</button>
       </div>
     </header>
     <main>
-      <h1>${escapeHtml(item.title || "未命名文献")} 整理稿</h1>
+      <h1>${escapeHtml(heading)}</h1>
       <dl class="meta-block">${metadataHtml}</dl>
       ${pagesHtml}
     </main>

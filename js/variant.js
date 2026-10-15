@@ -164,6 +164,23 @@
     }
   }
 
+  // 供导出等非 DOM 场景使用：按当前简繁体批量转换文本，复用同一份缓存与接口。
+  async function convertTexts(texts) {
+    const list = texts.map((text) => (text == null ? "" : String(text)));
+    const converted = convertedFor(current);
+    const raws = new Set(list.filter((text) => text && !converted.has(text)));
+    if (raws.size) {
+      try {
+        await fetchConverted(current, raws);
+      } catch (error) {
+        console.warn("简繁转换请求失败，保留原文", error);
+      }
+    }
+    return list.map((text) => (converted.has(text) ? converted.get(text) : text));
+  }
+
+  window.convertVariantTexts = convertTexts;
+
   async function flush() {
     const targetVariant = current;
     const converted = convertedFor(targetVariant);
