@@ -148,6 +148,21 @@ function markEvidenceRange(container, start, end) {
   return first;
 }
 
+// 把引用片段（层内偏移）映射到正文句子：同层直接用偏移，跨层退回按文本查找。
+// 引用偏移是 Unicode 码点，句子偏移是 UTF-16，需要换算。
+function evidenceSentence(displayed, source, start, end, sentences) {
+  if (source === displayed) {
+    const points = Array.from(displayed);
+    const from = points.slice(0, start).join("").length;
+    const to = points.slice(0, end).join("").length;
+    return sentences.find((sentence) => sentence.end > from && sentence.start < to);
+  }
+  const needle = Array.from(source || "").slice(start, end).join("");
+  const found = needle ? displayed.indexOf(needle) : -1;
+  return found < 0 ? undefined
+    : sentences.find((sentence) => sentence.end > found && sentence.start < found + needle.length);
+}
+
 async function showReaderEvidence(page, readerIndex = null) {
   const revision = ++evidenceRenderRevision;
   document.querySelector(".reader-evidence-status")?.remove();
@@ -163,14 +178,27 @@ async function showReaderEvidence(page, readerIndex = null) {
   panel.setAttribute("aria-label", "引用定位");
   readerText.before(panel);
   if (anchor.status !== "ready") {
+    setReaderCitationSentence("");
     panel.textContent = anchor.status === "stale" ? "原文已更新，先前引用位置已失效。" : "无法定位片段，已打开来源页。";
     return;
   }
   const labels = { ocrText: "OCR 原文", cleanText: "校对文本", punctuatedText: "标点文本", notes: "笔记" };
   const label = document.createElement("p");
   label.className = "meta-line";
-  label.textContent = "引用来自：" + labels[anchor.sourceLayer];
+  label.textContent = "引用来自：" + (labels[anchor.sourceLayer] || anchor.sourceLayer);
   panel.append(label);
+  // 高亮与「选中句子」一致：正文句子与原文区域一起高亮；悬停其它句子会临时改变高亮。
+  const sentences = readerIndex?.sentences?.length ? readerIndex.sentences : null;
+  const sentence = sentences
+    ? evidenceSentence(getPagePrimaryText(page), page[anchor.sourceLayer], anchor.start, anchor.end, sentences) : null;
+  if (sentence) {
+    setReaderCitationSentence(sentence.id);
+    return;
+  }
+  setReaderCitationSentence("");
+  // 有句子索引却定位不到该片段时不再画按字符的黄块，避免与选中高亮混淆。
+  if (sentences) return;
+  // 没有句子索引（未校对/索引未就绪）时，退回按字符高亮。
   const source = page[anchor.sourceLayer];
   let mark;
   if (source === getPagePrimaryText(page) && readerText.textContent === source) {
@@ -184,13 +212,6 @@ async function showReaderEvidence(page, readerIndex = null) {
     target.textContent = source;
     panel.append(target);
     mark = markEvidenceRange(target, anchor.start, anchor.end);
-  }
-  if (readerIndex?.displayedText === source && source === getPagePrimaryText(page)) {
-    const points = Array.from(source);
-    const start = points.slice(0, anchor.start).join("").length;
-    const end = points.slice(0, anchor.end).join("").length;
-    const sentence = readerIndex.sentences.find((s) => s.end > start && s.start < end);
-    if (sentence) setReaderLinkActive(sentence.id, { scrollImage: true });
   }
   mark?.scrollIntoView({ block: "center" });
 }

@@ -727,26 +727,18 @@ function renderLlmSearchResults(matches, warnings = [], query = "", container = 
     const sourceLabel = `${title} · ${location}` + (match.sourceLayer === "notes" ? " · 笔记" : "");
     const href = match.chunkId && match.sourceType === "document-page"
       ? buildEvidenceHref(match) : searchResultHref(attachment, item, page);
+    // 出处不再做成独立链接（否则会出现下划线与焦点框）；整行本身即可点击跳转。
+    source.textContent = sourceLabel;
     if (href) {
-      const link = document.createElement("a");
-      link.href = href;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = sourceLabel;
-      source.append(link);
       row.tabIndex = 0;
       row.className = "conversation-match-row";
       row.setAttribute("aria-label", `打开 ${sourceLabel}`);
-      row.addEventListener("click", (event) => {
-        if (!event.target?.closest?.("a")) window.open(href, "_blank", "noopener");
-      });
+      row.addEventListener("click", () => window.open(href, "_blank", "noopener"));
       row.addEventListener("keydown", (event) => {
-        if (event.target?.closest?.("a") || !["Enter", " "].includes(event.key)) return;
+        if (!["Enter", " "].includes(event.key)) return;
         event.preventDefault();
         window.open(href, "_blank", "noopener");
       });
-    } else {
-      source.textContent = sourceLabel;
     }
     row.append(number, excerpt, source);
     body.append(row);
@@ -1264,9 +1256,10 @@ function renderConversationTurns() {
         renderChronicleLlmEntries(turn.result.payload.entries || [], turn.result.warnings, answer);
       }
     }
-    if (turn.mode === "chat" || turn.mode === "search") {
+    // 匹配内容只属于检索；对话只给参考文献（引文标注）。
+    if (turn.mode === "search") {
       const matches = turn.result?.payload.matches || conversationRetrievalMatches(turn.request);
-      renderConversationRetrieval(matches, turn.prompt, answer, turn.mode === "chat");
+      renderConversationRetrieval(matches, turn.prompt, answer);
     }
     if (turn.status === "pending" || turn.error) {
       const status = document.createElement("p");

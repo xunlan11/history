@@ -3401,6 +3401,12 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 分组之间由 .conversation-retrieval-group 的 border-top 分隔；末行若再带下边框，
+   两个分组交界处会出现紧挨着的两条线。 */
+.conversation-match-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .conversation-match-table th {
   color: var(--muted);
   font-weight: 500;
@@ -3420,15 +3426,6 @@ body {
 
 .conversation-match-table td:nth-child(2) {
   white-space: pre-wrap;
-}
-
-.conversation-match-table td a {
-  color: var(--primary);
-  text-decoration: none;
-}
-
-.conversation-match-table td a:hover {
-  text-decoration: underline;
 }
 
 .conversation-match-row {

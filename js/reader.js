@@ -478,6 +478,13 @@ async function loadReaderIndex(documentId, pageId) {
   return entry.promise;
 }
 
+// 引用跳转定位到的句子：高亮该句（正文句子 + 原文区域），与「选中高亮」同一形式。
+// 悬停其它句子会改高亮那一句；从其它句子移开后不再恢复本句（与阅览器原有悬停行为一致）。
+function setReaderCitationSentence(sentenceId) {
+  window.clearTimeout(readerLinkSelectionTimer);
+  setReaderLinkActive(sentenceId || null, { scrollText: true, scrollImage: true, selected: true });
+}
+
 function resetReaderLink() {
   readerLinkRenderRevision += 1;
   window.clearTimeout(readerLinkSelectionTimer);

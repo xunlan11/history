@@ -19,7 +19,7 @@ from service.embedding import EmbeddingError, semantic_enabled
 from service.evidence import NO_RELEVANT_MATERIAL
 from service.retrieval_types import CHUNKER_VERSION, Chunk, RetrievalRequest, SourceText, TextPolicy
 from service.variant import to_simplified
-from service.match import match_text, normalize_literal, sentence_boundaries, sentence_excerpt
+from service.match import match_text, sentence_boundaries, sentence_excerpt
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,10 @@ DEFAULT_MIN_COSINE = 0.45
 
 # 字面打分视为“长查询”的二字片段个数：达到该长度后，只重合一个片段不再算命中。
 LONG_QUERY_GRAM_COUNT = 6
+
+# 同一页正文可能存成多个层（原始 OCR / 校对 / 标点）。它们是同一段内容的多种 rendition，
+# 检索时只能挑一个层代表正文命中，否则同一句会重复出现。
+CONTENT_LAYERS = ("ocrText", "cleanText", "punctuatedText")
 
 
 # Source selection and lossless chunking.
@@ -252,17 +256,29 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         if request.textPolicy == "processed":
             sources.pop("ocrText", None)
         if full_mode:
-            # Prefer the selected source when identical layers contain the same text.
+            # 同一页正文往往同时存有原始 OCR、校对、标点等多个层，逐层命中会把同一段
+            # 原文重复展示两三次（实测页 3：ocrText 与 punctuatedText 各命中同一句）。
+            # 因此每页只让「一个正文层」承担字面命中：优先策略选定的层，该层无命中时
+            # 按层顺序回退；笔记层内容独立，始终额外参与。同一层内重合到同一句的多段
+            # 命中只保留一条。literal_ranges 仍登记所有层，供下面剔除与字面命中重叠的
+            # 语义切片。
             sources = {primary.sourceLayer: primary, **sources}
-            seen_sources = set()
+            layer_matches = {source.sourceLayer: match_text(source.text, request.query)
+                             for source in sources.values()}
             for source in sources.values():
-                matches = match_text(source.text, request.query)
-                literal_ranges[(source.pageId, source.sourceLayer)] = matches
-                source_key = normalize_literal(source.text)[0]
-                if source_key in seen_sources:
-                    continue
-                seen_sources.add(source_key)
-                for ordinal, match in enumerate(matches):
+                literal_ranges[(source.pageId, source.sourceLayer)] = layer_matches[source.sourceLayer]
+            chosen = next((source for source in sources.values()
+                           if source.sourceLayer in CONTENT_LAYERS and layer_matches[source.sourceLayer]), None)
+            emit_sources = [source for source in sources.values() if source.sourceLayer not in CONTENT_LAYERS]
+            if chosen is not None:
+                emit_sources.insert(0, chosen)
+            for source in emit_sources:
+                seen_sentences = set()
+                for ordinal, match in enumerate(layer_matches[source.sourceLayer]):
+                    sentence_span = (match["sentenceStart"], match["sentenceEnd"])
+                    if sentence_span in seen_sentences:
+                        continue
+                    seen_sentences.add(sentence_span)
                     identity = [source.documentId, source.pageId, source.sourceLayer, source.sourceHash,
                                 match["matchStart"], match["matchEnd"], "literal-v1"]
                     chunk = Chunk(text_hash(json.dumps(identity, ensure_ascii=False)), source.documentId,
