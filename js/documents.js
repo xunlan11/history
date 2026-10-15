@@ -858,6 +858,17 @@ function renderReaderDetailActions(item, canEdit, editing) {
     return;
   }
 
+  if (isDocumentRegistrationPending(item)) {
+    const text = describeDocumentUploadState(item.id) || item.status || "登记中";
+    const status = document.createElement("span");
+    status.className = "reader-detail-registration-status";
+    status.setAttribute("role", "status");
+    status.textContent = shortenDocumentCardStatus(text);
+    status.title = text;
+    readerDetailActions.append(status);
+    return;
+  }
+
   if (editing) {
     const cancelButton = document.createElement("button");
     cancelButton.type = "button";
@@ -985,7 +996,7 @@ function renderReaderSidebar() {
 
   const canEdit = canEditDocument(item);
   // 换到别的文献时退出编辑态，避免把 A 的输入存到 B 上。
-  if (readerDetailEditingDocumentId !== item.id) {
+  if (readerDetailEditingDocumentId !== item.id || isDocumentRegistrationPending(item)) {
     readerDetailEditing = false;
     readerDetailEditingDocumentId = item.id;
   }

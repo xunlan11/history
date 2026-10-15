@@ -324,6 +324,8 @@ function refreshDocumentUploadIndicators(documentId) {
   });
 
   if (typeof selectedDocumentId === "string" && selectedDocumentId === documentId) {
+    const item = getLiveDocument(documentId);
+    renderReaderDetailActions(item, canEditDocument(item), readerDetailEditing);
     const statusNode = document.querySelector("#reader-stream-status");
     if (statusNode && text) {
       statusNode.textContent = text;

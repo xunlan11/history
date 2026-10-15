@@ -278,6 +278,11 @@ label {
   font-size: 14px;
 }
 
+.reader-detail-actions .reader-detail-registration-status {
+  color: var(--primary);
+  white-space: nowrap;
+}
+
 .reader-detail-actions,
 .conversation-prompt-actions,
 .conversation-answer-actions,
