@@ -16,7 +16,7 @@ const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `w
 const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema4`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
 const VARIANT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.variant.schema1`;
-const DATA_SCHEMA_VERSION = 7;
+const DATA_SCHEMA_VERSION = 8;
 
 function endpoint(proxiedPath) {
   return `${HISTORY_BASE}/api${proxiedPath}`;
@@ -407,6 +407,10 @@ function normalizeDocuments(items) {
             imageSize: Number(page.imageSize) || 0,
             ocr: normalizeStoredOcr(page.ocr),
             processingRevision: Number(page.processingRevision) || 0,
+            readerIndexStatus: page.readerIndexStatus || "",
+            readerIndexRevision: Number(page.readerIndexRevision) || 0,
+            readerIndexTextHash: page.readerIndexTextHash || "",
+            readerIndexUpdatedAt: page.readerIndexUpdatedAt || "",
             stageStatus: page.stageStatus || {},
             ocrDone: page.ocrDone === true,
             variantDone: page.variantDone === true,

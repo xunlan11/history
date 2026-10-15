@@ -6,4 +6,5 @@ __pycache__/
 *.pyc
 .agents
 /.codegraph/
+/docs
 测试文件

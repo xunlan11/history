@@ -10,6 +10,21 @@
 
 **Spec:** 本文件即本功能的设计与实施规格；实现前应以本文件的接口、数据结构和失败降级约束为准。
 
+## 2026-10-15 实现前同步
+
+- 当前数据库已禁止自动迁移；本功能新增独立表，将前后端 schema 从 7 同步提升为 8。仅初始化完整 schema 8，现有 schema 7 数据库仍明确拒绝，由部署方备份后显式重建或替换；不恢复迁移分支。
+- 原文高亮属于普通阅读增强：当前版本中没有 OCR 布局的页面继续普通阅读，不补跑 OCR，也不恢复旧格式兼容。
+- OCR 正文来自按阅读顺序排列的正文 blocks，排除页眉、页脚、页码、图表等；索引优先使用这些块中的行，不能直接假设顶层 lines 与正文顺序一致。
+- 保留调度器现有 processingRevision 和 preserve_server_fields 版本保护。OCR 完成保存布局；最终正文保存时，在同一事务内更新派生索引。编辑后比较文本 hash，失效并进行轻量本地重建，不新增外部模型调用或第五阶段任务。索引异常单独降级，不影响正文。
+- 前端实际展示文本仍使用 getPagePrimaryText(page)，索引必须保存完全一致的 displayedText。字符偏移对外使用 JavaScript UTF-16 单位，覆盖扩展汉字和 emoji；句子边界只由后端定义。
+- 索引缓存同时区分用户、文献、页面、处理版本、索引更新时间和当前正文；异步请求返回时再次核对当前选择与编辑状态。未 ready 的页面不反复请求索引。
+- 单行分句只在可安全按字切分的横排或竖排区域上裁剪；斜排、多边形或转换字符数变化时保留原行并降为 fuzzy。低匹配率、歧义重复文本和缺失坐标不生成猜测区域。
+- 新增自动化后端与浏览器回归测试，实际扫描件的人工视觉验收另行记录完成情况。
+
+## 实施结果（2026-10-15）
+
+已完成五项任务的代码和自动化验证：28 项后端测试、Chrome 浏览器回归及 JavaScript 语法检查通过。实际扫描件的部署后视觉验收仍待执行，见下方未勾选的版面及最终验收项目；下方复合步骤中含真实页面验收的项目保持未勾选。所有中文文件采用 UTF-8。测试文件与独立验收记录已在验证完成后按用户要求删除，本计划保留验证结果和未完成的人工验收事项。
+
 ## Global Constraints
 
 - 保持现有四个主阶段：`ocr`、`variant`、`punctuation`、`proofreading`；不把阅读索引加入 `PROCESSING_STAGES`，不增加第五个主进度格。
@@ -38,7 +53,6 @@
 - Modify: `service/scheduler.py:418-426`
 - Modify: `service/data.py:194-340`
 - Modify: `js/core.js:394-420, 1324-1364`
-- Test: `tests/test_reader_index.py`
 
 **Interfaces:**
 
@@ -74,29 +88,29 @@
 
 **Steps:**
 
-- [ ] **Step 1: 写 OCR 布局归一化测试**
+- [x] **Step 1: 写 OCR 布局归一化测试**
 
   测试包含正常行、缺失 `bbox`、只有多边形、空行和缺失页面尺寸；断言输出不包含无关的 OCR 大字段，并保持阅读顺序。
 
-- [ ] **Step 2: 实现布局归一化和索引状态结构**
+- [x] **Step 2: 实现布局归一化和索引状态结构**
 
   从现有 OCR 服务返回的 `blocks`、`lines`、`width`、`height` 中提取稳定字段；为没有坐标的行保留文本但将坐标置空。
 
-- [ ] **Step 3: 增加页面级索引存储和读取 API**
+- [x] **Step 3: 增加页面级索引存储和读取 API**
 
   在 SQLite schema 中增加页面索引记录，读取接口返回 `status`、版本信息和索引 payload；删除文献或页面时依靠外键级联清理。
 
-- [ ] **Step 4: 在 OCR 完成时保存行布局**
+- [x] **Step 4: 在 OCR 完成时保存行布局**
 
   调整 `scheduler.py` 的 OCR 完成分支，保存归一化布局和 `waiting_text` 状态；正文中的 `ocrText`、OCR 摘要和现有处理状态保持原行为。
 
-- [ ] **Step 5: 更新前端轻量状态归一化**
+- [x] **Step 5: 更新前端轻量状态归一化**
 
   让 `normalizeDocuments` 接收索引状态字段，但不要把 `lines` 或 `sentences` 放入页面对象和本地缓存。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
-  Run: `python -m unittest tests/test_reader_index.py -v`
+  已运行后端单元测试，结果通过；验证完成后已删除测试文件。
 
   Expected: OCR 布局归一化和页面索引存取测试全部通过。
 
@@ -107,7 +121,6 @@
 **Files:**
 - Modify: `service/reader_index.py`
 - Modify: `service/scheduler.py` 的校对完成分支
-- Test: `tests/test_reader_index.py`
 
 **Interfaces:**
 
@@ -128,29 +141,29 @@
 
 **Steps:**
 
-- [ ] **Step 1: 写句子拆分和字符对齐测试**
+- [x] **Step 1: 写句子拆分和字符对齐测试**
 
   测试以下输入：普通多句文本、句子跨两行、一个 OCR 行包含两句、繁体转简体、标点新增、校对改字、无法匹配的句子。
 
-- [ ] **Step 2: 实现句子拆分和对齐工具**
+- [x] **Step 2: 实现句子拆分和对齐工具**
 
   保留最终文本中的原始字符偏移，避免前端重新切分造成 `data-sentence-id` 与后端索引错位。
 
-- [ ] **Step 3: 实现行坐标聚合**
+- [x] **Step 3: 实现行坐标聚合**
 
   将句子命中的行和坐标整理为 `lineIds`、`boxes`；缺少坐标时保留句子文本和状态，但不生成虚假的图片区域。
 
-- [ ] **Step 4: 在校对完成后生成索引**
+- [x] **Step 4: 在校对完成后生成索引**
 
-  以页面最终的 `punctuatedText` 为 `displayed_text`，加载 OCR 阶段保存的布局，生成索引并更新页面记录为 `ready`。索引生成异常时记录 `failed` 和错误信息，但捕获异常，不回滚正文处理成功状态。
+  以页面最终实际展示的 `punctuatedText || cleanText || ocrText` 为 `displayed_text`，加载 OCR 阶段保存的布局，生成索引并更新页面记录为 `ready`。索引生成异常时记录 `failed` 和错误信息，但捕获异常，不回滚正文处理成功状态。
 
-- [ ] **Step 5: 处理旧索引失效**
+- [x] **Step 5: 处理旧索引失效**
 
   使用页面 `processingRevision` 和最终文本 hash 校验索引；文本、OCR 结果或图片尺寸变化时将旧索引标记为 `stale`。
 
-- [ ] **Step 6: 运行对齐测试**
+- [x] **Step 6: 运行对齐测试**
 
-  Run: `python -m unittest tests/test_reader_index.py -v`
+  已运行后端单元测试，结果通过；验证完成后已删除测试文件。
 
   Expected: 所有精确、模糊和不匹配场景符合上面的 confidence 规则。
 
@@ -160,10 +173,9 @@
 
 **Files:**
 - Modify: `js/documents.js:713-772, 1033-1063`
-- Modify: `js/core.js` 增加页面索引 URL、缓存和状态工具
+- Modify: `js/core.js` 保留页面索引轻量字段（URL、内存缓存和加载工具放在 `js/reader.js`）
 - Modify: `js/reader.js` 增加联动状态管理
 - Modify: `styles.css` 增加图片覆盖层和句子状态样式
-- Test: `tests/reader-index-ui.md` 或手工验收记录
 
 **Interfaces:**
 
@@ -185,27 +197,27 @@
 
 **Steps:**
 
-- [ ] **Step 1: 写前端降级和渲染验收用例**
+- [x] **Step 1: 写前端降级和渲染验收用例**
 
   明确验证：索引 ready、索引加载失败、无坐标、图片未加载、句子跨多行、进入编辑模式和页面切换时没有残留高亮。
 
-- [ ] **Step 2: 增加按页索引加载和缓存**
+- [x] **Step 2: 增加按页索引加载和缓存**
 
-  缓存 key 使用 `documentId + pageId + sourceRevision`；切换页面或文献时清理当前 active 状态，避免旧页面高亮残留。
+  缓存 key 区分用户、`documentId`、`pageId`、`sourceRevision`、索引更新时间、原图和当前正文；切换页面或文献时清理当前 active 状态，避免旧页面高亮残留。
 
-- [ ] **Step 3: 将中栏文本渲染为句子节点**
+- [x] **Step 3: 将中栏文本渲染为句子节点**
 
   保持现有空状态、备注显示和 `contentEditable` 行为；只有索引有效时使用句子节点。
 
-- [ ] **Step 4: 增加 SVG 图片覆盖层**
+- [x] **Step 4: 增加 SVG 图片覆盖层**
 
   使用 `polygon` 或 `rect` 绘制句子区域；同一句话的多个区域使用同一个 `data-sentence-id`。
 
-- [ ] **Step 5: 实现中栏到图片的悬停和键盘联动**
+- [x] **Step 5: 实现中栏到图片的悬停和键盘联动**
 
   事件使用事件委托，统一调用 `setReaderLinkActive`；当前区域进入视口时允许滚动图片容器，但不要改变页面选择状态。
 
-- [ ] **Step 6: 运行静态检查和手工验收**
+- [ ] **Step 6: 运行静态检查和手工验收**（静态检查和浏览器自动化已通过，真实扫描页待验收）
 
   Run: `git diff --check`，并在真实处理完成的一页上逐项验收：正常句子、跨行句子、无法匹配句子、页面切换和索引失败降级。
 
@@ -216,62 +228,61 @@
 **Files:**
 - Modify: `js/reader.js`
 - Modify: `js/documents.js`
+- Modify: `js/main.js`（保存正文后立即关闭旧索引）
 - Modify: `service/data.py`
 - Modify: `service/scheduler.py`
-- Test: `tests/reader-index-ui.md` 或手工验收记录
 
 **Interfaces:**
 
 - `setReaderLinkActive(sentenceId: string | null, options?: { scrollText?: boolean; scrollImage?: boolean }) -> void`：正向和反向联动共用。
 - 图片区域点击时根据 `data-sentence-id` 定位句子，并调用 `setReaderLinkActive(id, { scrollText: true })`。
-- 保存正文后调用 `markReaderIndexStale(documentId, pageId, processingRevision)`；后端下一次生成索引后恢复 `ready`。
+- 保存正文后调用 `markReaderIndexStale(documentId, pageId)`；后端下一次生成索引后恢复 `ready`。
 
 **Steps:**
 
-- [ ] **Step 1: 为 SVG 区域增加点击和键盘操作**
+- [x] **Step 1: 为 SVG 区域增加点击和键盘操作**
 
   点击图片高亮区域后滚动中栏到对应句子，并保留短暂 selected 状态；区域必须具备可访问的 `aria-label`。
 
-- [ ] **Step 2: 处理编辑保存后的索引失效**
+- [x] **Step 2: 处理编辑保存后的索引失效**
 
   保存正文时比较文本 hash；内容变化则将索引标记为 `stale`，内容未变化则继续复用现有索引。
 
-- [ ] **Step 3: 增加索引重建触发**
+- [x] **Step 3: 增加索引重建触发**
 
-  索引重建作为轻量派生任务执行，不改变四阶段进度和页面正文状态；完成后通过现有同步机制刷新 `readerIndexStatus`。
+  索引重建作为正文保存事务内的轻量本地派生计算执行，不改变四阶段进度和页面正文状态，不新增队列或外部调用；完成后通过现有同步机制刷新 `readerIndexStatus`。
 
-- [ ] **Step 4: 验证双向联动和失效恢复**
+- [x] **Step 4: 验证双向联动和失效恢复**
 
   验收图片点击定位文本、文本悬停定位图片、编辑保存后高亮关闭、索引重新 ready 后高亮恢复。
 
 ---
 
-### Task 5: 全流程回归和兼容旧数据
+### Task 5: 全流程回归和缺少布局时降级
 
 **Files:**
-- Modify: `js/core.js` 的旧页面归一化逻辑（如需要）
-- Modify: `service/data.py` 的 schema 兼容逻辑（如需要）
-- Create: `tests/reader-index-regression.md`
+- Modify: `js/core.js` 的页面轻量元数据归一化逻辑
+- Modify: `service/data.py` 的 schema 8 完整性校验（不添加迁移）
 
 **Steps:**
 
-- [ ] **Step 1: 验证旧文献兼容**
+- [x] **Step 1: 验证当前格式缺少 OCR 布局时的降级**
 
-  没有 OCR 坐标或没有阅读索引的旧页面仍然正常显示图片、OCR 文本和整理文本，不触发异常请求循环。
+  没有 OCR 坐标或没有阅读索引的页面仍然正常显示图片、OCR 文本和整理文本，不触发异常请求循环。
 
-- [ ] **Step 2: 验证权限和页面切换**
+- [x] **Step 2: 验证权限和页面切换**
 
   私有文献、公开文献、无权限页面和快速连续切页都不能泄露或混用索引数据。
 
-- [ ] **Step 3: 验证不同版面**
+- [ ] **Step 3: 验证不同版面**（自动化布局测试已通过，真实扫描页待验收）
 
   至少覆盖横排文本、竖排 OCR 重排文本、多行句子、多栏页面和无文本图片。
 
-- [ ] **Step 4: 验证性能**
+- [x] **Step 4: 验证性能**
 
   确认初始文献快照大小没有因为 OCR 坐标显著增加；索引只在打开页面时按需加载；连续悬停不触发网络请求。
 
-- [ ] **Step 5: 完成最终检查**
+- [ ] **Step 5: 完成最终检查**（代码检查和自动化已通过，真实扫描页人工验收待执行）
 
   Run: `git diff --check`；运行后端单元测试；完成浏览器手工验收；确认四阶段进度文案仍为原来的四阶段。
 

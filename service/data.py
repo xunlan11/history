@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
+from service import reader_index
 from contextvars import ContextVar
 from service.wenqu_sso.session import SsoResolver, verify_service_token
 
@@ -32,7 +33,7 @@ DB_PATH = Path(os.getenv("DATA_DB_PATH", APP_DIR / "storage" / "app.db")).resolv
 STORAGE_DIR = Path(os.getenv("DATA_STORAGE_DIR", DB_PATH.parent)).resolve()
 FILE_STORAGE_DIR = Path(os.getenv("DATA_FILE_STORAGE_DIR", STORAGE_DIR / "files")).resolve()
 PUBLIC_BASE_URL = os.getenv("DATA_PUBLIC_BASE_URL", "/history/api/data").rstrip("/")
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SESSIONS: dict[str, dict[str, Any]] = {}
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\w.+/]+)?;base64,(?P<data>.+)$", re.DOTALL)
 
@@ -170,7 +171,11 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA foreign_keys=ON")
-    ensure_schema(connection)
+    try:
+        ensure_schema(connection)
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
@@ -191,6 +196,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
     "roles": {"account_id", "username", "role"},
     "document_pages": {"id", "document_id", "page_number", "payload", "updated_at", "deleted_at", "version"},
     "page_annotations": {"user_id", "document_id", "page_id", "content", "updated_at"},
+    "page_reader_indexes": {"page_id", "document_id", "status", "source_revision", "text_hash", "layout", "payload", "error", "updated_at"},
     "reading_progress": {"user_id", "document_id", "page_id", "page_number", "updated_at"},
     "conversations": {"id", "owner_id", "payload", "sort_order", "updated_at", "deleted_at", "version"},
     "document_files": {"id", "document_id", "page_id", "role", "original_name", "storage_path", "public_url", "sha256", "size_bytes", "mime_type", "created_at", "updated_at", "deleted_at"},
@@ -382,6 +388,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         """
     )
     processing_scheduler.ensure_schema(connection)
+    reader_index.ensure_schema(connection)
     _require_current_schema(connection)
     connection.execute(
         "INSERT INTO app_meta(key, value) VALUES('sync_version', '0')"
@@ -960,6 +967,8 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
         materialize_document_assets(connection, document_id, stored_document, timestamp)
+        for page in stored_document.get("pages") or []:
+            reader_index.reconcile_reader_index(connection, document_id, page, timestamp)
         payload = json_dump(stored_document)
 
         visibility = "public" if stored_document.get("visibility") == "public" else "private"
@@ -2019,6 +2028,14 @@ def require_visible_document_page(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="文献页不存在或不可见")
+
+
+@app.get("/api/documents/{document_id}/pages/{page_id}/reader-index")
+def get_page_reader_index(document_id: str, page_id: str) -> dict[str, Any]:
+    user = current_user()
+    with database() as connection:
+        require_visible_document_page(connection, user, document_id, page_id)
+        return reader_index.load_reader_index(connection, document_id, page_id)
 
 
 @app.get("/api/documents/{document_id}/pages/{page_id}/annotation")

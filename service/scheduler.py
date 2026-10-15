@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib import error, request
 
 from service.variant import to_simplified
+from service import reader_index
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -233,6 +234,8 @@ def save_job_state(data, connection, job, doc, cp):
     task["metadataSnapshot"] = metadata(doc)
     doc["processingTask"] = task
     data.materialize_document_assets(connection, doc["id"], doc, stamp)
+    for page in doc.get("pages", []):
+        reader_index.reconcile_reader_index(connection, doc["id"], page, stamp)
     connection.execute("UPDATE documents SET payload=?, updated_at=?, version=version+1 WHERE id=? AND deleted_at IS NULL",
                        (data.json_dump(doc), stamp, doc["id"]))
     data.upsert_document_pages(connection, doc["id"], doc.get("pages", []), stamp)
@@ -410,6 +413,7 @@ class Scheduler:
                     page.update(ocrText=str(result.get("text") or ""), ocr={k: result.get(k) for k in ("confidence", "engine", "warnings", "width", "height")}, status="已识别",
                                 imageName=page.get("imageName") or f"page-{number}.png")
                     self._set_stage(page, "ocr", "done")
+                    reader_index.save_ocr_layout(connection, doc["id"], page, result, self.data.now_iso())
                 elif operation == "variant":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1

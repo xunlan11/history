@@ -231,7 +231,7 @@ readerBackButton?.addEventListener("click", returnFromReader);
 
 exportDocumentPdfButton?.addEventListener("click", exportPdf);
 
-editDocumentButton?.addEventListener("click", () => {
+editDocumentButton?.addEventListener("click", async () => {
   const item = getSelectedDocument();
   const page = getSelectedPage();
   if (!item || !page || !readerText || !canEditDocument(item)) {
@@ -239,7 +239,9 @@ editDocumentButton?.addEventListener("click", () => {
   }
 
   if (readerEditing) {
-    page.punctuatedText = readerText.innerText.trim();
+    const editedText = readerText.innerText.trim();
+    if (editedText !== getPagePrimaryText(page)) markReaderIndexStale(item.id, page.id);
+    page.punctuatedText = editedText;
     page.status = page.punctuatedText ? "已保存文字" : "待整理";
     page.updatedAt = new Date().toISOString();
     item.status = summarizeDocumentStatus(item);
@@ -247,6 +249,8 @@ editDocumentButton?.addEventListener("click", () => {
     persist();
     setReaderEditing(false);
     renderAll();
+    await flushPendingSync();
+    if (!readerEditing && getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id) renderReader();
     return;
   }
 

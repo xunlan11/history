@@ -395,3 +395,211 @@ readerAnnotation?.addEventListener("blur", () => {
 window.addEventListener("pagehide", () => {
   readerAnnotationSaveStates.forEach((_, key) => flushReaderAnnotationSave(key));
 });
+
+
+// 大型索引只缓存在内存；键包含正文，防止相同处理版本下的编辑复用旧坐标。
+const readerIndexCache = new Map();
+let readerLinkRenderRevision = 0;
+let readerLinkSelectionTimer = null;
+let readerEditingPageKey = "";
+
+function getReaderIndexUrl(documentId, pageId) {
+  return DATA_PROCESSING_URL + "/" + encodeURIComponent(documentId) + "/pages/" + encodeURIComponent(pageId) + "/reader-index";
+}
+
+function getReaderIndexKey(item, page) {
+  return JSON.stringify([currentUser?.id || "", item.id, page.id, page.processingRevision,
+    page.readerIndexStatus, page.readerIndexRevision, page.readerIndexUpdatedAt,
+    page.readerIndexTextHash, getPageImageSource(page), getPagePrimaryText(page)]);
+}
+
+function isReaderIndexEligible(page) {
+  return Boolean(page?.proofreadingDone && page.readerIndexStatus === "ready" &&
+    page.readerIndexRevision === page.processingRevision);
+}
+
+function isReaderIndexValid(index, page) {
+  if (!index || index.status !== "ready" || index.sourceRevision !== page.processingRevision ||
+      index.displayedText !== getPagePrimaryText(page) || !(index.imageWidth > 0) || !(index.imageHeight > 0) ||
+      !Array.isArray(index.sentences)) return false;
+  // 检查偏移与文本，任何不完整索引都退回普通阅读，不丢字或重复渲染。
+  let offset = 0;
+  for (const sentence of index.sentences) {
+    if (!sentence.id || sentence.start !== offset || sentence.end <= offset ||
+        index.displayedText.slice(offset, sentence.end) !== sentence.text || !Array.isArray(sentence.boxes)) return false;
+    offset = sentence.end;
+  }
+  return offset === index.displayedText.length;
+}
+
+function getCachedReaderIndex(item, page) {
+  if (!isReaderIndexEligible(page)) return null;
+  const value = readerIndexCache.get(getReaderIndexKey(item, page))?.value;
+  return isReaderIndexValid(value, page) ? value : null;
+}
+
+async function loadReaderIndex(documentId, pageId) {
+  const item = documents.find((entry) => entry.id === documentId);
+  const page = item?.pages.find((entry) => entry.id === pageId);
+  if (!isReaderIndexEligible(page)) return null;
+  const key = getReaderIndexKey(item, page);
+  if (readerIndexCache.has(key)) {
+    const entry = readerIndexCache.get(key);
+    return entry.promise || entry.value;
+  }
+  const entry = { value: null, promise: null };
+  readerIndexCache.set(key, entry);
+  while (readerIndexCache.size > 12) readerIndexCache.delete(readerIndexCache.keys().next().value);
+  entry.promise = (async () => {
+    try {
+      const response = await fetch(getReaderIndexUrl(documentId, pageId), { cache: "no-store" });
+      if (!response.ok) return null;
+      const index = await response.json();
+      if (getReaderIndexKey(item, page) !== key || !isReaderIndexValid(index, page)) return null;
+      entry.value = index;
+      return index;
+    } catch {
+      return null;
+    } finally {
+      entry.promise = null;
+    }
+  })();
+  return entry.promise;
+}
+
+function resetReaderLink() {
+  readerLinkRenderRevision += 1;
+  window.clearTimeout(readerLinkSelectionTimer);
+  setReaderLinkActive(null);
+  return readerLinkRenderRevision;
+}
+
+function markReaderIndexStale(documentId, pageId) {
+  const page = documents.find((item) => item.id === documentId)?.pages.find((entry) => entry.id === pageId);
+  if (page?.readerIndexStatus) page.readerIndexStatus = "stale";
+  resetReaderLink();
+}
+
+function scrollReaderRegionIntoView(element, container) {
+  if (!element || !container || container.clientHeight === 0) return;
+  const box = element.getBoundingClientRect();
+  const viewport = container.getBoundingClientRect();
+  if (box.top < viewport.top || box.bottom > viewport.bottom) {
+    container.scrollTop += box.top - viewport.top - (container.clientHeight - box.height) / 2;
+  }
+}
+
+function setReaderLinkActive(sentenceId, options = {}) {
+  const textNodes = readerText?.querySelectorAll("[data-sentence-id]") || [];
+  const imageNodes = readerOriginalPreview?.querySelectorAll("[data-sentence-id]") || [];
+  let activeText = null;
+  let activeRegion = null;
+  for (const node of [...textNodes, ...imageNodes]) {
+    const active = Boolean(sentenceId && node.dataset.sentenceId === sentenceId && !readerEditing);
+    node.classList.toggle("is-active", active);
+    node.classList.toggle("is-selected", active && options.selected === true);
+    if (active && node.classList.contains("reader-sentence")) activeText = node;
+    if (active && !activeRegion && node.classList.contains("reader-image-region")) activeRegion = node;
+  }
+  if (options.scrollText) scrollReaderRegionIntoView(activeText, readerText);
+  if (options.scrollImage) scrollReaderRegionIntoView(activeRegion, readerOriginalPreview);
+}
+
+function activateReaderImageSentence(sentenceId) {
+  window.clearTimeout(readerLinkSelectionTimer);
+  setReaderLinkActive(sentenceId, { scrollText: true, selected: true });
+  readerLinkSelectionTimer = window.setTimeout(() => setReaderLinkActive(null), 1800);
+}
+
+function bindReaderLinkEvents(container, imageSide = false) {
+  if (!container) return;
+  const sentenceFor = (target) => target?.closest?.("[data-sentence-id]");
+  const activate = (event) => {
+    const node = sentenceFor(event.target);
+    if (node && !readerEditing) {
+      window.clearTimeout(readerLinkSelectionTimer);
+      setReaderLinkActive(node.dataset.sentenceId, { scrollImage: !imageSide });
+    }
+  };
+  const deactivate = (event) => {
+    if (!sentenceFor(event.target)) return;
+    const related = sentenceFor(event.relatedTarget);
+    if (related && container.contains(related)) {
+      setReaderLinkActive(related.dataset.sentenceId);
+      return;
+    }
+    const focused = sentenceFor(document.activeElement);
+    if (event.type === "pointerout" && focused && container.contains(focused)) {
+      setReaderLinkActive(focused.dataset.sentenceId);
+    } else {
+      setReaderLinkActive(null);
+    }
+  };
+  container.addEventListener("pointerover", activate);
+  container.addEventListener("focusin", activate);
+  container.addEventListener("pointerout", deactivate);
+  container.addEventListener("focusout", deactivate);
+  if (imageSide) {
+    container.addEventListener("click", (event) => {
+      const node = sentenceFor(event.target);
+      if (node && !readerEditing) activateReaderImageSentence(node.dataset.sentenceId);
+    });
+    container.addEventListener("keydown", (event) => {
+      const node = sentenceFor(event.target);
+      if (node && !readerEditing && ["Enter", " "].includes(event.key)) {
+        event.preventDefault();
+        activateReaderImageSentence(node.dataset.sentenceId);
+      }
+    });
+  }
+}
+
+bindReaderLinkEvents(readerText);
+bindReaderLinkEvents(readerOriginalPreview, true);
+
+
+function createReaderImageOverlay(index, image) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const overlay = document.createElementNS(namespace, "svg");
+  overlay.classList.add("reader-image-overlay");
+  overlay.setAttribute("viewBox", "0 0 " + index.imageWidth + " " + index.imageHeight);
+  overlay.setAttribute("aria-label", "原文句子定位");
+  overlay.style.visibility = "hidden";
+  for (const sentence of index.sentences) {
+    if (!["exact", "fuzzy"].includes(sentence.confidence)) continue;
+    for (const box of sentence.boxes) {
+      const bounds = box.bbox;
+      if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(Number.isFinite)) continue;
+      const [x1, y1, x2, y2] = bounds;
+      if (x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 || x2 > index.imageWidth || y2 > index.imageHeight) continue;
+      const polygon = box.polygon;
+      const usePolygon = Array.isArray(polygon) && polygon.length >= 3 &&
+        polygon.every((point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite));
+      const region = document.createElementNS(namespace, usePolygon ? "polygon" : "rect");
+      if (usePolygon) {
+        region.setAttribute("points", polygon.map((point) => point.join(",")).join(" "));
+      } else {
+        region.setAttribute("x", x1);
+        region.setAttribute("y", y1);
+        region.setAttribute("width", x2 - x1);
+        region.setAttribute("height", y2 - y1);
+      }
+      region.classList.add("reader-image-region");
+      region.dataset.sentenceId = sentence.id;
+      region.setAttribute("tabindex", "0");
+      region.setAttribute("role", "button");
+      region.setAttribute("aria-label", "定位整理文本：" + sentence.text.trim());
+      overlay.append(region);
+    }
+  }
+  const show = () => {
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    const expected = index.imageWidth / index.imageHeight;
+    const actual = image.naturalWidth / image.naturalHeight;
+    if (Math.abs(expected / actual - 1) < 0.01) overlay.style.visibility = "visible";
+  };
+  image.addEventListener("load", show, { once: true });
+  image.addEventListener("error", () => overlay.remove(), { once: true });
+  if (image.complete) show();
+  return overlay;
+}

@@ -712,6 +712,7 @@ function renderReader() {
     return;
   }
 
+  const linkRevision = resetReaderLink();
   const item = getSelectedDocument();
   readerOriginalPreview.innerHTML = "";
   readerText.innerHTML = "";
@@ -745,7 +746,9 @@ function renderReader() {
   ensureSelectedPage(item);
   const page = getSelectedPage();
   const canEdit = canEditDocument(item);
-  if (!canEdit) readerEditing = false;
+  const editingPageKey = JSON.stringify([currentUser?.id, item.id, page?.id]);
+  if (!canEdit || readerEditingPageKey !== editingPageKey) readerEditing = false;
+  readerEditingPageKey = editingPageKey;
   const sortedPages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
   const pageIndex = Math.max(0, sortedPages.findIndex((entry) => entry.id === page?.id));
 
@@ -763,8 +766,23 @@ function renderReader() {
   if (typeof recordReaderProgress === "function") {
     recordReaderProgress(item, page);
   }
-  renderReaderOriginal(page);
-  renderReaderText(page);
+  const index = readerEditing ? null : getCachedReaderIndex(item, page);
+  renderReaderOriginal(page, index);
+  renderReaderText(page, index);
+  if (!readerEditing && !index && page) {
+    const requestKey = getReaderIndexKey(item, page);
+    loadReaderIndex(item.id, page.id).then((loaded) => {
+      const selected = getSelectedDocument();
+      const selectedPage = getSelectedPage();
+      if (!loaded || linkRevision !== readerLinkRenderRevision || readerEditing ||
+          selected?.id !== item.id || selectedPage?.id !== page.id ||
+          getReaderIndexKey(selected, selectedPage) !== requestKey) return;
+      readerOriginalPreview.replaceChildren();
+      readerText.replaceChildren();
+      renderReaderOriginal(selectedPage, loaded);
+      renderReaderText(selectedPage, loaded);
+    });
+  }
   if (typeof renderReaderAnnotation === "function") {
     renderReaderAnnotation(item, page);
   }
@@ -774,6 +792,12 @@ function renderReader() {
 function setReaderEditing(editing) {
   const item = getSelectedDocument();
   readerEditing = Boolean(editing && item && getSelectedPage() && canEditDocument(item));
+  if (readerEditing) {
+    resetReaderLink();
+    // 清除句子节点再编辑，保存时始终读取普通正文。
+    readerText.textContent = readerText.classList.contains("is-empty") ? "" : readerText.textContent;
+    readerOriginalPreview?.querySelector(".reader-image-overlay")?.remove();
+  }
   if (readerEditing && readerText?.classList.contains("is-empty")) {
     readerText.innerHTML = "";
     readerText.classList.remove("is-empty");
@@ -1028,7 +1052,7 @@ function renderReaderSidebar() {
   renderStreamProgress(item);
 }
 
-function renderReaderOriginal(page) {
+function renderReaderOriginal(page, readerIndex = null) {
   const imageSource = getPageImageSource(page);
 
   if (!imageSource) {
@@ -1040,10 +1064,14 @@ function renderReaderOriginal(page) {
   const image = document.createElement("img");
   image.src = imageSource;
   image.alt = page.imageName ? `第 ${page.pageNumber} 页原始资料：${page.imageName}` : `第 ${page.pageNumber} 页原始资料`;
-  readerOriginalPreview.append(image);
+  const frame = document.createElement("div");
+  frame.className = "reader-image-frame";
+  frame.append(image);
+  if (readerIndex && !readerEditing) frame.append(createReaderImageOverlay(readerIndex, image));
+  readerOriginalPreview.append(frame);
 }
 
-function renderReaderText(page) {
+function renderReaderText(page, readerIndex = null) {
   const text = getPagePrimaryText(page);
 
   if (!text) {
@@ -1052,7 +1080,18 @@ function renderReaderText(page) {
     return;
   }
 
-  readerText.textContent = text;
+  if (readerIndex && !readerEditing && isReaderIndexValid(readerIndex, page)) {
+    for (const sentence of readerIndex.sentences) {
+      const node = document.createElement("span");
+      node.className = "reader-sentence";
+      node.dataset.sentenceId = sentence.id;
+      node.tabIndex = 0;
+      node.textContent = sentence.text;
+      readerText.append(node);
+    }
+  } else {
+    readerText.textContent = text;
+  }
 
   if (page?.notes) {
     readerNotes.textContent = page.notes;

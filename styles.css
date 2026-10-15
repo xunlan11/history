@@ -3821,3 +3821,55 @@ body {
     box-shadow: none;
   }
 }
+
+.reader-image-frame {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  line-height: 0;
+  border: 1px solid var(--line);
+}
+
+.reader-original-viewer .reader-image-frame img {
+  display: block;
+  border: 0;
+}
+
+.reader-image-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.reader-image-region {
+  pointer-events: all;
+  cursor: pointer;
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.reader-image-region.is-active,
+.reader-image-region:focus-visible {
+  fill: rgb(234 179 8 / 28%);
+  stroke: #a66c08;
+  outline: none;
+}
+
+.reader-sentence {
+  border-radius: 3px;
+}
+
+.reader-sentence.is-active,
+.reader-sentence:focus-visible {
+  background: #f5e3a6;
+  outline: 1px solid #b58421;
+}
+
+.reader-sentence.is-selected,
+.reader-image-region.is-selected {
+  outline: 2px solid #986811;
+}
