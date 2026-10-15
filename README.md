@@ -29,6 +29,5 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 3. 失败恢复。
 4. 图表还原。
 5. 文献合并。
-6. 文献导出。
-7. 对话参考文献私有、公开选项。
-8. 测试编年。
+6. 对话参考文献私有、公开选项。
+7. 测试编年。

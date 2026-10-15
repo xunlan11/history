@@ -43,37 +43,21 @@ function buildPrintHtml(item) {
     .map((page) => {
       const imageSource = getPageImageSource(page);
       const imageHtml = imageSource
-        ? `<figure><img src="${escapeHtml(imageSource)}" alt="第 ${page.pageNumber} 页原始资料" /><figcaption>原始资料：${escapeHtml(page.imageName || `第 ${page.pageNumber} 页`)}</figcaption></figure>`
+        ? `<figure><img src="${escapeHtml(imageSource)}" alt="第 ${page.pageNumber} 页原始资料" /></figure>`
         : `<p class="no-image">本页未放入原始资料图片。</p>`;
-      const notesHtml = page.notes
-        ? `<h3>页备注</h3><div class="notes">${escapeHtml(page.notes)}</div>`
-        : "";
-      const layers = [
-        ["OCR 原始录文", page.ocrText],
-        ["忠实整理文本", page.cleanText],
-        ["简体标点文本", page.punctuatedText],
-      ];
-      const layerHtml = layers
-        .map(([label, value]) => `
-          <section class="text-layer">
-            <h3>${escapeHtml(label)}</h3>
-            <div class="transcription">${escapeHtml(value || "（本层尚未整理文字）")}</div>
-          </section>
-        `)
-        .join("");
-
       return `
         <section class="page-section">
           <h2>第 ${page.pageNumber} 页</h2>
-          <div class="page-meta">整理状态：${escapeHtml(page.status || "待整理")}</div>
           <div class="page-grid">
             <div>
               <h3>原始资料</h3>
               ${imageHtml}
             </div>
             <div>
-              ${layerHtml}
-              ${notesHtml}
+              <section class="text-layer">
+                <h3>整理文本</h3>
+                <div class="transcription">${escapeHtml(page.punctuatedText || "（尚未整理文字）")}</div>
+              </section>
             </div>
           </div>
         </section>
@@ -90,37 +74,38 @@ function buildPrintHtml(item) {
       @page { size: A4; margin: 18mm 16mm; }
       * { box-sizing: border-box; }
       body { margin: 0; color: #1f2723; font-family: "Microsoft YaHei", "SimSun", serif; line-height: 1.75; }
-      .print-actions { position: sticky; top: 0; display: flex; justify-content: flex-end; gap: 10px; padding: 12px; background: #eef3f0; border-bottom: 1px solid #d9e0dc; }
+      .print-header { position: sticky; top: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 22px; background: #eef3f0; border-bottom: 1px solid #d9e0dc; }
+      .print-brand { flex: 1; margin: 0; font-size: 22px; font-weight: 700; }
+      .print-actions { display: flex; gap: 10px; margin-left: auto; }
       button { min-height: 36px; border: 1px solid #b9c7c0; border-radius: 6px; background: #ffffff; color: #1f2723; padding: 6px 14px; font: inherit; cursor: pointer; }
       main { max-width: 980px; margin: 0 auto; padding: 28px 22px 56px; }
-      h1 { margin: 0 0 8px; text-align: center; font-size: 26px; line-height: 1.35; }
-      .subtitle { margin: 0 0 24px; text-align: center; color: #66736d; }
-      .meta-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; margin-bottom: 28px; border-top: 2px solid #2f6f5e; border-bottom: 1px solid #d9e0dc; padding: 12px 0; }
+      h1 { margin: 0 0 24px; text-align: center; font-size: 26px; line-height: 1.35; }
+      .meta-block { display: grid; grid-template-columns: 1fr; margin-bottom: 28px; border-top: 2px solid #2f6f5e; border-bottom: 1px solid #d9e0dc; padding: 12px 0; }
       .meta-row { display: grid; grid-template-columns: 88px 1fr; gap: 8px; border-bottom: 1px solid #edf1ef; padding: 7px 0; }
       dt { color: #66736d; font-weight: 700; }
       dd { margin: 0; }
       .page-section { break-inside: avoid; border-top: 1px solid #cfd8d3; padding-top: 18px; margin-top: 24px; }
-      .page-section h2 { margin: 0; font-size: 20px; }
-      .page-meta { margin: 2px 0 12px; color: #66736d; font-size: 13px; }
+      .page-section h2 { margin: 0 0 12px; font-size: 20px; }
       .page-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
       h3 { margin: 0 0 8px; font-size: 15px; }
       figure { margin: 0; }
       img { max-width: 100%; height: auto; border: 1px solid #d9e0dc; }
-      figcaption, .no-image { margin: 6px 0 0; color: #66736d; font-size: 12px; }
+      .no-image { margin: 6px 0 0; color: #66736d; font-size: 12px; }
       .text-layer { margin-bottom: 14px; }
       .transcription { min-height: 88px; white-space: pre-wrap; border: 1px solid #d9e0dc; padding: 12px; background: #fbfcfb; }
-      .notes { margin-top: 8px; white-space: pre-wrap; border-left: 3px solid #8f4a3d; padding: 8px 10px; background: #f8f4ef; }
-      @media print { .print-actions { display: none; } main { padding: 0; } }
+      @media print { .print-header { position: static; margin-bottom: 24px; } .print-actions { display: none; } main { padding: 0; } }
     </style>
   </head>
   <body>
-    <div class="print-actions">
-      <button type="button" onclick="window.print()">保存为 PDF</button>
-      <button type="button" onclick="window.close()">关闭</button>
-    </div>
+    <header class="print-header">
+      <p class="print-brand">${escapeHtml(SITE_TITLE)}</p>
+      <div class="print-actions">
+        <button type="button" onclick="window.print()">保存为 PDF</button>
+        <button type="button" onclick="window.close()">关闭</button>
+      </div>
+    </header>
     <main>
       <h1>${escapeHtml(item.title || "未命名文献")} 整理稿</h1>
-      <p class="subtitle">${SITE_TITLE}</p>
       <dl class="meta-block">${metadataHtml}</dl>
       ${pagesHtml}
     </main>
