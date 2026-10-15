@@ -15,6 +15,8 @@ from service.variant import to_simplified
 logger = logging.getLogger(__name__)
 NON_BODY_TYPES = {"header", "footer", "page_number", "figure", "chart", "seal", "image"}
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
+# 索引载荷版本：算法变化时递增，旧索引会被重建（reconcile 落库 / load 即时重建）。
+INDEX_VERSION = 2
 
 
 def text_hash(text: str) -> str:
@@ -23,6 +25,32 @@ def text_hash(text: str) -> str:
 
 def normalize_for_alignment(text: str) -> str:
     return "".join(char for char in text if char.isalnum())
+
+
+def reorder_lines_for_source(lines: list[dict[str, Any]], source_text: str) -> list[dict[str, Any]]:
+    """按 sourceText（OCR 阅读顺序）重排文字行。
+
+    检测器给出的行序在竖排、多栏页面上常与阅读顺序相反（同一版块内逐行颠倒），
+    直接拼接会与 page.ocrText 不一致，导致整页无法对齐、所有句子都拿不到坐标。
+    """
+    if len(lines) < 2:
+        return lines
+    key = normalize_for_alignment(to_simplified(source_text or ""))
+    if len(key) < 2:
+        return lines
+    positions, cursor = [], 0
+    for index, line in enumerate(lines):
+        part = normalize_for_alignment(line.get("normalizedText") or "")
+        position = key.find(part, cursor) if part else -1
+        if position < 0 and part:
+            position = key.find(part)
+        if position < 0:
+            position = cursor
+        else:
+            cursor = max(cursor, position + len(part))
+        positions.append((position, index, line))
+    positions.sort(key=lambda item: (item[0], item[1]))
+    return [line for _, _, line in positions]
 
 
 def _dimension(value: Any) -> float:
@@ -133,7 +161,7 @@ def _line_region(line, start, end):
 
 def build_reader_index(*, layout: dict[str, Any], source_text: str,
                        displayed_text: str, source_revision: int) -> dict[str, Any]:
-    lines = layout.get("lines") or []
+    lines = reorder_lines_for_source(layout.get("lines") or [], source_text)
     source_parts = [normalize_for_alignment(line["normalizedText"]) for line in lines]
     source = "".join(source_parts)
     target = normalize_for_alignment(to_simplified(displayed_text))
@@ -171,8 +199,20 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
             offset += len(part)
         if sentence["boxes"]:
             sentence["confidence"] = "exact" if exact and safe else "fuzzy"
-    return {**layout, **reader_index_status_payload("ready", source_revision, text_hash(displayed_text)),
+    return {**layout, "indexVersion": INDEX_VERSION,
+            **reader_index_status_payload("ready", source_revision, text_hash(displayed_text)),
             "displayedText": displayed_text, "sentences": sentences}
+
+
+def build_index_payload(*, layout: dict[str, Any], page: dict[str, Any],
+                        source_revision: int, displayed_text: str) -> dict[str, Any]:
+    """构建可用索引；一条句子都拿不到坐标时直接报错，
+    避免出现「状态 ready 但整页没有任何高亮」的静默失败。"""
+    index = build_reader_index(layout=layout, source_text=page.get("ocrText") or "",
+                               displayed_text=displayed_text, source_revision=source_revision)
+    if not any(sentence["boxes"] for sentence in index["sentences"]):
+        raise ValueError("OCR 布局与正文无法对齐，没有任何句子匹配到文字行")
+    return index
 
 
 def reader_index_status_payload(status: str, source_revision: int, text_hash: str = "", error: str = "") -> dict[str, Any]:
@@ -225,6 +265,13 @@ def save_ocr_layout(connection, document_id, page, result, timestamp):
     _set_metadata(page, status, revision, "", timestamp)
 
 
+def _stored_index_version(payload: str) -> int:
+    try:
+        return int(json.loads(payload or "{}").get("indexVersion") or 0)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0
+
+
 def reconcile_reader_index(connection, document_id, page, timestamp):
     row = connection.execute("SELECT * FROM page_reader_indexes WHERE page_id=? AND document_id=?",
                              (page["id"], document_id)).fetchone()
@@ -238,6 +285,8 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
     layout = json.loads(row["layout"])
     status, error, payload = row["status"], row["error"], row["payload"]
     changed = row["source_revision"] != revision or row["text_hash"] != digest
+    # 算法升级后旧载荷要重算：行序修正前存的索引虽为 ready，却没有任何坐标。
+    outdated = status == "ready" and _stored_index_version(payload) != INDEX_VERSION
     if not layout and status == "failed":
         pass
     elif (layout.get("sourceTextHash") != text_hash(page.get("ocrText") or "") or
@@ -246,12 +295,12 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
     elif not page.get("proofreadingDone") or (page.get("stageStatus") or {}).get("proofreading") in {"failed", "skipped"}:
         if status != "failed":
             status, payload = "waiting_text", "{}"
-    elif changed or status == "waiting_text":
+    elif changed or outdated or status == "waiting_text":
         try:
             if not layout.get("imageWidth") or not layout.get("imageHeight") or not any(line.get("bbox") for line in layout.get("lines", [])):
                 raise ValueError("OCR 未提供有效的图片尺寸或文字行坐标")
-            index = build_reader_index(layout=layout, source_text=page.get("ocrText") or "",
-                                       displayed_text=displayed, source_revision=revision)
+            index = build_index_payload(layout=layout, page=page,
+                                        source_revision=revision, displayed_text=displayed)
             # 布局内的校验信息仅供服务端使用。
             index.pop("imageIdentity", None)
             index.pop("sourceTextHash", None)
@@ -259,7 +308,7 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
         except Exception as exc:
             logger.exception("Cannot build reader index for %s", page["id"])
             status, error, payload = "failed", str(exc), "{}"
-    updated = changed or status != row["status"]
+    updated = changed or outdated or status != row["status"]
     stamp = timestamp if updated else row["updated_at"]
     if updated:
         connection.execute("""UPDATE page_reader_indexes SET status=?,source_revision=?,text_hash=?,
@@ -288,6 +337,16 @@ def load_reader_index(connection, document_id, page_id):
             (layout and layout.get("imageIdentity") != _image_identity(page))):
         status = "stale"
     result = json.loads(row["payload"]) if status == "ready" else {}
-    result.update(reader_index_status_payload(status, row["source_revision"], row["text_hash"], row["error"]))
+    error = row["error"]
+    if status == "ready" and _stored_index_version(row["payload"]) != INDEX_VERSION:
+        # 旧版索引先按当前布局即时重建（不写库，等下次 reconcile 落库）。
+        try:
+            result = build_index_payload(layout=layout, page=page,
+                                         source_revision=row["source_revision"],
+                                         displayed_text=displayed)
+        except Exception as exc:
+            logger.exception("Cannot rebuild reader index for %s", page_id)
+            status, error, result = "failed", str(exc), {}
+    result.update(reader_index_status_payload(status, row["source_revision"], row["text_hash"], error))
     result["updatedAt"] = row["updated_at"]
     return result

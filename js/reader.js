@@ -23,7 +23,6 @@ function applyReaderPanelState() {
     const label = sidebarCollapsed ? "展开工具栏" : "折叠工具栏";
     readerSidebarToggle.setAttribute("aria-expanded", String(!sidebarCollapsed));
     readerSidebarToggle.setAttribute("aria-label", label);
-    readerSidebarToggle.title = label;
   }
   readerCompare?.classList.toggle("is-original-collapsed", originalCollapsed);
   readerCompare?.classList.toggle("is-annotation-collapsed", annotationCollapsed);

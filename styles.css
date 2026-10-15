@@ -928,12 +928,44 @@ button:focus-visible {
   color: var(--primary);
 }
 
-.reader-sidebar-toggle.icon-button {
+/* 侧栏折叠按钮：竖长胶囊（参考 VS Code），纵向居中、正好落在侧栏与主区之间的分隔带
+   （.reader-layout 的 14px gap：按钮 12px 宽，左右各留 1px，整体居中于 -7px 处） */
+.reader-main .reader-sidebar-toggle.icon-button {
   position: absolute;
   top: 50%;
-  left: 0;
+  left: -13px;
   z-index: 2;
   transform: translateY(-50%);
+  width: 12px;
+  height: 46px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+/* 胶囊只有 12px 宽，用透明伪元素把可点区域向四周扩 6px */
+.reader-main .reader-sidebar-toggle.icon-button::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.reader-main .reader-sidebar-toggle.icon-button:hover {
+  background: #e3ebe7;
+  color: var(--primary-dark);
+}
+
+.reader-main .reader-sidebar-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 侧栏收起后分隔线消失，按钮贴到主区左边缘 */
+.reader-layout.is-sidebar-collapsed .reader-sidebar-toggle.icon-button {
+  left: 0;
 }
 
 .reader-panel-toggle.icon-button:hover {
@@ -2219,6 +2251,11 @@ a.citation:hover {
 
   .reader-sidebar-stack {
     grid-template-rows: auto auto minmax(120px, 1fr);
+  }
+
+  /* 单列时没有左右分隔带，胶囊贴主区左边缘（否则 -13px 会被 .reader-layout 的 overflow 裁掉） */
+  .reader-main .reader-sidebar-toggle.icon-button {
+    left: 0;
   }
 
   #reader-view.active {
