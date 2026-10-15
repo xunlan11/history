@@ -81,17 +81,36 @@
                 <div class="section-heading"><h3 id="reader-search-title">文内检索</h3></div>
                 <form class="reader-search-form" id="reader-search-form" role="search">
                   <label class="sr-only" for="reader-search-input">检索当前文献的整理文本</label>
-                  <input id="reader-search-input" type="search" maxlength="2000" placeholder="检索当前文献的整理文本" autocomplete="off" aria-describedby="reader-search-help" />
+                  <input id="reader-search-input" type="search" maxlength="2000" autocomplete="off" />
                   <button class="secondary-button" type="submit" id="reader-search-submit">检索</button>
                 </form>
-                <p class="reader-search-help" id="reader-search-help">严格匹配完整原词；部分匹配词语或连续片段；嵌入匹配语义相近段落。</p>
-                <fieldset class="reader-search-filters">
-                  <legend class="sr-only">筛选匹配层级，可任选零至三个层级</legend>
-                  <label><input type="checkbox" data-reader-search-level="exact" checked />严格 <span data-reader-search-count="exact">0</span></label>
-                  <label><input type="checkbox" data-reader-search-level="partial" checked />部分 <span data-reader-search-count="partial">0</span></label>
-                  <label><input type="checkbox" data-reader-search-level="semantic" checked />嵌入 <span data-reader-search-count="semantic">0</span></label>
-                </fieldset>
-                <label class="reader-search-mark-option"><input id="reader-search-mark-all" type="checkbox" />标注全部筛选结果</label>
+                <div class="reader-search-action-row">
+                  <div class="reader-search-nav-group">
+                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="first">首项</button>
+                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="last">末项</button>
+                  </div>
+                  <div class="reader-search-nav-group">
+                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="prev">上一项</button>
+                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="next">下一项</button>
+                  </div>
+                  <button class="reader-search-mark-button" id="reader-search-mark-all" type="button" aria-pressed="false">标注</button>
+                </div>
+                <div class="reader-search-filter-row">
+                  <fieldset class="reader-search-filters">
+                    <legend class="sr-only">筛选匹配层级，可任选零至三个层级</legend>
+                    <label><input type="checkbox" data-reader-search-level="exact" checked /><span class="reader-search-level-exact">严格</span> <span data-reader-search-count="exact">0</span></label>
+                    <label><input type="checkbox" data-reader-search-level="partial" checked /><span class="reader-search-level-partial">部分</span> <span data-reader-search-count="partial">0</span></label>
+                    <label><input type="checkbox" data-reader-search-level="semantic" checked /><span class="reader-search-level-semantic">嵌入</span> <span data-reader-search-count="semantic">0</span></label>
+                  </fieldset>
+                  <fieldset class="reader-search-page-range">
+                    <legend class="sr-only">按页码筛选结果，留空表示不限制</legend>
+                    <span>第</span>
+                    <input id="reader-search-page-from" type="number" min="1" step="1" inputmode="numeric" aria-label="起始页码" />
+                    <span>-</span>
+                    <input id="reader-search-page-to" type="number" min="1" step="1" inputmode="numeric" aria-label="终止页码" />
+                    <span>页</span>
+                  </fieldset>
+                </div>
                 <p class="reader-search-status" id="reader-search-status" role="status" aria-live="polite"></p>
                 <ol class="reader-search-results" id="reader-search-results" aria-label="匹配结果，按文中位置排序"></ol>
               </section>

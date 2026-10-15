@@ -4,9 +4,21 @@ const readerSearchInput = document.querySelector("#reader-search-input");
 const readerSearchResults = document.querySelector("#reader-search-results");
 const readerSearchStatus = document.querySelector("#reader-search-status");
 const readerSearchMarkAll = document.querySelector("#reader-search-mark-all");
+const readerSearchPageFrom = document.querySelector("#reader-search-page-from");
+const readerSearchPageTo = document.querySelector("#reader-search-page-to");
+const readerSearchNavButtons = [...document.querySelectorAll("[data-reader-search-nav]")];
 const READER_SEARCH_LABELS = { exact: "严格匹配", partial: "部分匹配", semantic: "嵌入匹配" };
+// 结果表列标题；第 1、3 列是纯数字，内容居中（reader-search-col-center）
+const READER_SEARCH_COLUMNS = [
+  { title: "序号", center: true },
+  { title: "匹配文本", center: false },
+  { title: "位置", center: true },
+];
+// 嵌入匹配的片段可能远长于检索词，列表里只截断显示前 N 个字符
+const READER_SEARCH_TEXT_LIMIT = 100;
 const readerSearchState = {
   documentId: null, snapshot: "", query: "", matches: [], levels: new Set(["exact", "partial", "semantic"]),
+  pageFrom: null, pageTo: null,
   activeId: "", markAll: false, loading: false, warnings: [], revision: 0, scrollPending: false,
 };
 
@@ -181,8 +193,24 @@ async function runReaderSearch(query) {
   }
 }
 
+function parseReaderSearchPage(value) {
+  const page = Number.parseInt(value, 10);
+  return Number.isFinite(page) && page > 0 ? page : null;
+}
+
+function syncReaderSearchPageRange() {
+  readerSearchState.pageFrom = parseReaderSearchPage(readerSearchPageFrom?.value);
+  readerSearchState.pageTo = parseReaderSearchPage(readerSearchPageTo?.value);
+}
+
 function getFilteredReaderSearchMatches() {
-  return readerSearchState.matches.filter((match) => readerSearchState.levels.has(match.level));
+  const { levels, pageFrom, pageTo } = readerSearchState;
+  return readerSearchState.matches.filter((match) => {
+    if (!levels.has(match.level)) return false;
+    if (pageFrom === null && pageTo === null) return true;
+    const page = match.pageIndex + 1;
+    return (pageFrom === null || page >= pageFrom) && (pageTo === null || page <= pageTo);
+  });
 }
 
 function renderReaderSearchPanel() {
@@ -190,7 +218,9 @@ function renderReaderSearchPanel() {
   const item = getSelectedDocument();
   readerSearchInput.disabled = !item || readerEditing;
   document.querySelector("#reader-search-submit").disabled = !item || readerEditing;
+  renderReaderSearchMarkAll();
   const filtered = getFilteredReaderSearchMatches();
+  for (const button of readerSearchNavButtons) button.disabled = !filtered.length || readerEditing;
   for (const level of Object.keys(READER_SEARCH_LABELS)) {
     document.querySelector(`[data-reader-search-count="${level}"]`).textContent =
       String(readerSearchState.matches.filter((match) => match.level === level).length);
@@ -209,32 +239,56 @@ function renderReaderSearchPanel() {
   readerSearchResults.setAttribute("aria-busy", String(readerSearchState.loading));
   readerSearchResults.replaceChildren();
   const fragment = document.createDocumentFragment();
-  for (const match of filtered) {
+  const appendCells = (target, cells) => {
+    for (const [className, text] of cells) {
+      const cell = document.createElement("span");
+      if (className) cell.className = className;
+      cell.textContent = text;
+      target.append(cell);
+    }
+  };
+  if (filtered.length) {
+    // 表头（随列表滚动吸顶）；aria-hidden，列名对屏幕阅读器无意义
+    const head = document.createElement("li");
+    head.className = "reader-search-results-head";
+    head.setAttribute("aria-hidden", "true");
+    appendCells(head, READER_SEARCH_COLUMNS.map(({ title, center }) => [center ? "reader-search-col-center" : "", title]));
+    fragment.append(head);
+  }
+  filtered.forEach((match, index) => {
     const row = document.createElement("li");
+    row.className = "reader-search-result-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "reader-search-result";
     button.classList.toggle("is-active", match.id === readerSearchState.activeId);
     button.setAttribute("aria-current", String(match.id === readerSearchState.activeId));
     button.disabled = readerEditing;
-    const meta = document.createElement("span");
-    meta.className = "reader-search-result-meta";
-    meta.textContent = `第 ${match.pageIndex + 1} 页 · ${READER_SEARCH_LABELS[match.level]}`;
-    const excerpt = document.createElement("span");
-    excerpt.className = "reader-search-result-excerpt";
-    const start = Math.max(0, match.start - 20), end = Math.min(match.text.length, match.end + 35);
-    const mark = document.createElement("mark");
-    // Semantic chunks can be long; keep the list compact without shortening the anchor.
-    const previewEnd = Math.min(match.end, match.start + 100);
-    mark.textContent = match.text.slice(match.start, previewEnd);
-    excerpt.append((start ? "…" : "") + match.text.slice(start, match.start), mark,
-      previewEnd < match.end ? "…" : match.text.slice(match.end, end) + (end < match.text.length ? "…" : ""));
-    button.append(meta, excerpt);
+    // 只列匹配到的片段，不带上下文
+    const previewEnd = Math.min(match.end, match.start + READER_SEARCH_TEXT_LIMIT);
+    appendCells(button, [
+      [`reader-search-result-index reader-search-col-center reader-search-level-${match.level}`, String(index + 1)],
+      ["reader-search-result-text", match.text.slice(match.start, previewEnd) + (previewEnd < match.end ? "…" : "")],
+      ["reader-search-result-page reader-search-col-center", String(match.pageIndex + 1)],
+    ]);
     button.addEventListener("click", () => openReaderSearchMatch(match.id));
     row.append(button);
     fragment.append(row);
-  }
+  });
   readerSearchResults.append(fragment);
+}
+
+// 在当前筛选结果里跳转：选中目标项 → 列表高亮该行，正文也跟着圈出并滚动到该处
+function jumpReaderSearchMatch(kind) {
+  const matches = getFilteredReaderSearchMatches();
+  if (!matches.length) return;
+  const index = matches.findIndex((match) => match.id === readerSearchState.activeId);
+  let target;
+  if (kind === "first") target = 0;
+  else if (kind === "last") target = matches.length - 1;
+  else if (kind === "next") target = index === -1 ? 0 : Math.min(index + 1, matches.length - 1);
+  else target = index === -1 ? matches.length - 1 : Math.max(index - 1, 0);
+  openReaderSearchMatch(matches[target].id);
 }
 
 function openReaderSearchMatch(id) {
@@ -332,7 +386,23 @@ document.querySelectorAll("[data-reader-search-level]").forEach((input) => {
     refreshReaderSearchText();
   });
 });
-readerSearchMarkAll?.addEventListener("change", () => {
-  readerSearchState.markAll = readerSearchMarkAll.checked;
+for (const input of [readerSearchPageFrom, readerSearchPageTo]) {
+  input?.addEventListener("input", () => {
+    syncReaderSearchPageRange();
+    renderReaderSearchPanel();
+    refreshReaderSearchText();
+  });
+}
+for (const button of readerSearchNavButtons) {
+  button.addEventListener("click", () => jumpReaderSearchMatch(button.dataset.readerSearchNav));
+}
+function renderReaderSearchMarkAll() {
+  if (!readerSearchMarkAll) return;
+  readerSearchMarkAll.setAttribute("aria-pressed", String(readerSearchState.markAll));
+}
+
+readerSearchMarkAll?.addEventListener("click", () => {
+  readerSearchState.markAll = !readerSearchState.markAll;
+  renderReaderSearchMarkAll();
   refreshReaderSearchText();
 });

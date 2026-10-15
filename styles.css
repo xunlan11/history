@@ -247,6 +247,7 @@ label {
 
 /* 中栏由内部进度框提供边框，避免额外上下留白 */
 .reader-progress-panel {
+  min-width: 0;
   min-height: 0;
   padding: 0;
   border: 0;
@@ -254,8 +255,11 @@ label {
   box-shadow: none;
 }
 
+/* 与上/下两栏的 .panel 保持同一内边距（20px），让三栏标题到卡片左上角的
+   距离一致（1px 边框 + 20px 内边距 = 21px） */
 .reader-progress-panel .progress-stack {
   margin-top: 0;
+  padding: 20px;
 }
 
 /* 状态文字为空时不占高度 */
@@ -280,22 +284,111 @@ label {
 
 .reader-search-panel .section-heading { margin-bottom: 0; }
 .reader-search-form { display: flex; gap: 8px; }
-.reader-search-form input { min-width: 0; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.reader-search-form button { flex-shrink: 0; padding: 8px 12px; }
-.reader-search-help, .reader-search-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.reader-search-form input { min-width: 0; width: 100%; padding: 5px 9px; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.reader-search-form button { flex-shrink: 0; min-height: 30px; padding: 4px 14px; font-size: 14px; }
+.reader-search-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .reader-search-status { max-height: 100px; overflow: auto; flex-shrink: 0; }
-.reader-search-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 0; margin: 0; border: 0; }
-.reader-search-filters label, .reader-search-mark-option { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 400; white-space: nowrap; }
-.reader-search-filters span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.reader-search-filters { display: flex; flex-wrap: wrap; gap: 8px 10px; padding: 0; margin: 0; border: 0; }
+.reader-search-filters label { display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 400; white-space: nowrap; }
+.reader-search-filters [data-reader-search-count] { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 类别筛选 + 页码筛选同一行；页码筛选 flex-basis 为 0，所以优先被压缩而不是换行
+   （行宽不够时两个页码输入框等比变窄，最低 24px），只有类别筛选自己都放不下时才换行 */
+.reader-search-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
+.reader-search-filter-row .reader-search-filters { flex: 0 0 auto; }
+.reader-search-filter-row .reader-search-page-range { flex: 1 1 0; min-width: 0; }
+/* 按页码筛选：第 [起始]-[终止] 页；两个框留空 = 不限页码 */
+.reader-search-page-range { display: flex; align-items: center; gap: 2px; padding: 0; margin: 0; border: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.reader-search-page-range input { flex: 0 1 54px; width: 54px; min-width: 20px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+/* 去掉数字框的上下箭头，保持行内紧凑 */
+.reader-search-page-range input::-webkit-outer-spin-button,
+.reader-search-page-range input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.reader-search-page-range input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+/* 三个匹配层级各自的颜色：筛选标签文字与结果表序号列共用。
+   注意别用紫色（#7152a3 是本面板的「选中」色：复选框 accent-color、选中行底色/色条、正文当前高亮），
+   否则嵌入匹配和选中态会混淆 */
+.reader-search-level-exact { color: #2f6f5e; }
+.reader-search-level-partial { color: #b27a42; }
+.reader-search-level-semantic { color: #2f6d9e; }
 .reader-search-panel input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; padding: 0; accent-color: #7152a3; }
+/* 检索结果表：序号 / 匹配文本 / 位置 三列。序号与位置只放数字，列宽压到最小，
+   把剩余宽度都留给「匹配文本」列（列宽必须写死：每行是独立的 grid，用 max-content 会各行不齐） */
+.reader-search-results-head,
+.reader-search-result {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 32px;
+  gap: 8px;
+  align-items: start;
+}
+
+.reader-search-col-center { text-align: center; }
+
+/* 表头随结果列表吸顶（同处一个滚动容器，列宽/滚动条都不会错位） */
+.reader-search-results-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 9px 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--line);
+}
+
 .reader-search-results { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; }
-.reader-search-results li + li { margin-top: 7px; }
-.reader-search-result { display: grid; gap: 5px; width: 100%; padding: 9px 10px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
-.reader-search-result:hover, .reader-search-result:focus-visible { border-color: #9070bc; background: #faf7fe; }
-.reader-search-result.is-active { border-color: #7152a3; background: #f3edfc; }
-.reader-search-result-meta { color: #7152a3; font-size: 12px; }
-.reader-search-result-excerpt { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
-.reader-search-result-excerpt mark, mark.reader-search-highlight { background: #e8d9fa; color: inherit; padding: 0; border-radius: 2px; }
+.reader-search-result-row + .reader-search-result-row { border-top: 1px solid var(--line); }
+.reader-search-result { width: 100%; padding: 6px 9px; text-align: left; border: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.5; }
+.reader-search-result:hover, .reader-search-result:focus-visible { background: #faf7fe; }
+.reader-search-result.is-active { background: #f3edfc; box-shadow: inset 2px 0 0 #7152a3; }
+.reader-search-result-index { font-variant-numeric: tabular-nums; }
+.reader-search-result-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+.reader-search-result-page { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 首项|末项 、 上一项|下一项 两个按钮组 + 标注；三个块两端对齐、间距平分 */
+.reader-search-action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+/* 组合样式：组内两个按钮首尾相连、共用中间那条边线 */
+.reader-search-nav-group { display: flex; align-items: stretch; }
+.reader-search-nav-group .reader-search-nav-button:first-child { border-radius: 6px 0 0 6px; }
+.reader-search-nav-group .reader-search-nav-button:last-child { border-radius: 0 6px 6px 0; }
+.reader-search-nav-group .reader-search-nav-button + .reader-search-nav-button { margin-left: -1px; }
+.reader-search-nav-button {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.reader-search-nav-button:hover:not(:disabled) { border-color: #bac7c0; background: var(--surface-2); }
+.reader-search-nav-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 「标注全部筛选结果」开关按钮：未启用白底描边，启用绿底白字 */
+.reader-search-mark-button {
+  min-height: 30px;
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.reader-search-mark-button:hover {
+  border-color: #bac7c0;
+  background: var(--surface-2);
+}
+
+.reader-search-mark-button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.reader-search-mark-button[aria-pressed="true"]:hover {
+  border-color: var(--primary-dark);
+  background: var(--primary-dark);
+}
+mark.reader-search-highlight { background: #e8d9fa; color: inherit; padding: 0; border-radius: 2px; }
 mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset 0 -2px #7152a3; }
 
 #reader-document-detail {
@@ -359,8 +452,11 @@ mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset
   font-size: 13px;
 }
 
+/* 末行不再画分隔线，也不留 8px 下内边距——否则「文献信息」框底部视觉留白
+   会比另外两栏多 8px（卡片内边距 20px + 末行 8px）*/
 #reader-document-detail > div:last-child {
   border-bottom: 0;
+  padding-bottom: 0;
 }
 
 #reader-document-detail .metadata-pair-row {
@@ -799,6 +895,8 @@ button:focus-visible {
   margin-top: 14px;
 }
 
+/* 与上/下两栏的 .panel 保持同一卡片外观（底色 var(--surface) + 阴影），
+   三栏底色/投影一致 */
 .progress-stack {
   display: grid;
   gap: 8px;
@@ -806,7 +904,8 @@ button:focus-visible {
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fbfdfc;
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
 .progress-row {
@@ -1205,18 +1304,25 @@ body {
   line-height: 1.2;
 }
 
+/* 标题仍贴顶，保证三栏标题顶端对齐；串行/并行那行在
+   「标题下沿 → 下面进度条上沿」之间垂直居中 */
 .progress-header {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 10px;
-  margin: -6px -4px 0 0;
+  margin: 0;
 }
 
-/* 左栏：标题 + 处理方式（串行 / 并行）两行；环固定在右上角 */
+/* 左栏：标题 + 处理方式（串行 / 并行）两行；环固定在右上角。
+   grid-template-rows: auto 1fr 让标题占 auto、方式占剩余空间并居中；
+   margin-bottom: -8px 把这块居中区域向下延伸到下一行开始处
+   （-8px 即 .progress-stack 的行间距），这样上下间距才真正相等 */
 .progress-heading {
   display: grid;
-  gap: 2px;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  margin-bottom: -8px;
   min-width: 0;
 }
 
@@ -1228,6 +1334,7 @@ body {
 }
 
 .progress-mode {
+  align-self: center;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.2;
