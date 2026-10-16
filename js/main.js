@@ -171,6 +171,9 @@ form?.addEventListener("submit", async (event) => {
   };
 
   documents.unshift(item);
+  if (typeof moveShelfDocument === "function" && formSheet?.dataset.shelfFolderId) {
+    moveShelfDocument(item.id, formSheet.dataset.shelfFolderId);
+  }
   selectedDocumentId = item.id;
   selectedPageId = firstPage.id;
   item.status = "提交逐页处理中";

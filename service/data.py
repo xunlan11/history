@@ -98,6 +98,7 @@ class SyncPayload(BaseModel):
     conversations: list[dict[str, Any]] = Field(default_factory=list)
     deletedDocumentIds: list[str] = Field(default_factory=list)
     deletedConversationIds: list[str] = Field(default_factory=list)
+    shelf: dict[str, Any] | None = None
 
 
 class ConversationFileTextPayload(BaseModel):
@@ -1169,11 +1170,96 @@ def soft_delete_entities(
         retrieval.cleanup_deleted(connection)
 
 
+def load_shelf(connection: sqlite3.Connection, user: dict[str, Any] | None) -> dict[str, Any]:
+    if not user:
+        return {"folders": [], "order": []}
+    row = connection.execute(
+        "SELECT value FROM app_meta WHERE key = ?", (f"shelf.user-{user['id']}",)
+    ).fetchone()
+    return json.loads(row["value"]) if row else {"folders": [], "order": []}
+
+
+def normalize_shelf(value: dict[str, Any], document_ids: list[str]) -> dict[str, Any]:
+    visible_ids = set(document_ids)
+    assigned: set[str] = set()
+    by_id: dict[str, dict[str, Any]] = {}
+    for source in value.get("folders", []) if isinstance(value.get("folders"), list) else []:
+        if not isinstance(source, dict):
+            continue
+        folder_id = source.get("id")
+        if not isinstance(folder_id, str) or not folder_id or folder_id in by_id:
+            continue
+        members = []
+        for document_id in source.get("documentIds", []) if isinstance(source.get("documentIds"), list) else []:
+            if isinstance(document_id, str) and document_id in visible_ids and document_id not in assigned:
+                assigned.add(document_id)
+                members.append(document_id)
+        name = source.get("name")
+        by_id[folder_id] = {
+            "id": folder_id,
+            "name": (name.strip()[:80] or "未命名文件夹") if isinstance(name, str) else "未命名文件夹",
+            "parentId": source.get("parentId") if isinstance(source.get("parentId"), str) else "",
+            "documentIds": members,
+            "order": source["order"] if isinstance(source.get("order"), list) else [f"document:{key}" for key in members],
+        }
+    folders = list(by_id.values())
+    for folder in folders:
+        if folder["parentId"] == folder["id"] or folder["parentId"] not in by_id:
+            folder["parentId"] = ""
+    checked: set[str] = set()
+    for folder in folders:
+        path: set[str] = set()
+        current = folder
+        while current is not None and current["id"] not in checked:
+            if current["id"] in path:
+                current["parentId"] = ""
+                break
+            path.add(current["id"])
+            current = by_id.get(current["parentId"])
+        checked.update(path)
+    valid_by_parent: dict[str, dict[str, None]] = {"": {}}
+    for folder in folders:
+        valid_by_parent[folder["id"]] = dict.fromkeys(f"document:{key}" for key in folder["documentIds"])
+    for folder in folders:
+        valid_by_parent[folder["parentId"]][f"folder:{folder['id']}"] = None
+    for document_id in document_ids:
+        if document_id not in assigned:
+            valid_by_parent[""][f"document:{document_id}"] = None
+
+    def normalize_order(source: Any, valid: dict[str, None]) -> list[str]:
+        order = []
+        for key in source if isinstance(source, list) else []:
+            if isinstance(key, str) and key in valid:
+                del valid[key]
+                order.append(key)
+        return order + list(valid)
+
+    order = normalize_order(value.get("order"), valid_by_parent[""])
+    for folder in folders:
+        folder["order"] = normalize_order(folder["order"], valid_by_parent[folder["id"]])
+        folder["documentIds"] = [key[9:] for key in folder["order"] if key.startswith("document:")]
+    return {"folders": folders, "order": order}
+
+
+def save_shelf(connection: sqlite3.Connection, user: dict[str, Any], value: dict[str, Any]) -> None:
+    # Layout and nesting belong to the account, independently of document ownership.
+    document_ids = [row["id"] for row in connection.execute(
+        "SELECT id FROM documents WHERE deleted_at IS NULL AND (owner_id = ? OR visibility = 'public') "
+        "ORDER BY sort_order ASC, updated_at DESC",
+        (user["id"],),
+    )]
+    connection.execute(
+        "INSERT INTO app_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (f"shelf.user-{user['id']}", json_dump(normalize_shelf(value, document_ids))),
+    )
+
+
 def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "schemaVersion": SCHEMA_VERSION,
         "documents": active_payloads(connection, "documents", user),
         "conversations": active_payloads(connection, "conversations", user),
+        "shelf": load_shelf(connection, user),
         "syncCursor": str(get_sync_version(connection)),
     }
 
@@ -2209,6 +2295,8 @@ def push(payload: SyncPayload) -> dict[str, Any]:
                     timestamp,
                     user,
                 )
+                if payload.shelf is not None:
+                    save_shelf(connection, user, payload.shelf)
                 cursor = bump_sync_version(connection)
                 snapshot = build_snapshot(connection, user)
         snapshot.update({"status": "ok", "syncCursor": str(cursor), "updatedAt": timestamp})

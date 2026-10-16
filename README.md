@@ -24,7 +24,7 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 ### 待做
 
-1. 文献库：标签、文件夹，嵌套，查找。
+1. 文献库：标签、查找。
 2. 对话参考文献私有、公开选项。
 3. 失败恢复。
 4. 图表还原。

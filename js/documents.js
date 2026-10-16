@@ -304,26 +304,40 @@ function getConversationModeLabel(mode) {
 }
 
 function renderDocumentList() {
+  // Background registration/sync updates must not detach a card during dragging.
+  if (documentDragState?.phase === "dragging") return;
   renderBookShelf(documentList, documentCount);
   renderBookShelf(allDocumentList, allDocumentCount);
 }
 
 function renderBookShelf(listNode, countNode) {
-  if (!listNode || !countNode) {
-    return;
-  }
-
+  if (!listNode || !countNode) return;
+  const state = getShelfState();
+  const folder = state.folders.find((entry) => entry.id === listNode.dataset.folderId);
+  listNode.dataset.folderId = folder?.id || "";
   listNode.innerHTML = "";
   countNode.textContent = `${documents.length} 项在库`;
-  listNode.append(createAddBookCard());
-
-  if (!documents.length) {
-    return;
+  renderShelfToolbar(listNode, folder, state);
+  listNode.append(createShelfTrashCard());
+  if (folder) listNode.append(createShelfParentCard(listNode, folder, state));
+  const documentsById = new Map(documents.map((item, index) => [item.id, { item, index }]));
+  const foldersById = new Map(state.folders.map((entry) => [entry.id, entry]));
+  const keys = folder ? folder.order : state.order;
+  for (const key of keys) {
+    if (key.startsWith("folder:")) {
+      const entry = foldersById.get(key.slice(7));
+      if (entry) listNode.append(createShelfFolderCard(entry, state));
+    } else {
+      const entry = documentsById.get(key.slice(9));
+      if (entry) listNode.append(createBookCard(entry.item, entry.index));
+    }
   }
-
-  documents.forEach((item, index) => {
-    listNode.append(createBookCard(item, index));
-  });
+  if (folder && !folder.order.length) {
+    const empty = document.createElement("p");
+    empty.className = "shelf-empty";
+    empty.textContent = "文件夹还是空的。可在这里新建子文件夹，或返回上层拖入书籍和文件夹。";
+    listNode.append(empty);
+  }
 }
 
 function createBookCard(item, index) {
@@ -338,6 +352,7 @@ function createBookCard(item, index) {
   card.classList.toggle("selected", item.id === selectedDocumentId);
   card.classList.add(`cover-${normalizeCoverVariant(item.coverVariant, index)}`);
   card.dataset.documentId = item.id;
+  card.dataset.shelfKey = `document:${item.id}`;
   card.dataset.documentIndex = String(index);
   card.setAttribute("aria-grabbed", "false");
   const uploadState = typeof getDocumentUploadState === "function" ? getDocumentUploadState(item.id) : null;
@@ -418,110 +433,110 @@ function createBookCard(item, index) {
   return node;
 }
 
-function prepareDocumentDrag(event, card, documentId) {
-  if (event.button !== 0 || !event.isPrimary) {
-    return;
-  }
-
-  const item = documents.find((entry) => entry.id === documentId);
-  if (!canEditDocument(item)) {
-    return;
-  }
-
+function prepareDocumentDrag(event, card, itemId, kind = "document") {
+  if (event.button !== 0 || !event.isPrimary) return;
   const listNode = card.closest(".document-list");
-  if (!listNode) {
-    return;
-  }
-
+  if (!listNode) return;
   clearDocumentDragState();
-  card.setPointerCapture?.(event.pointerId);
   documentDragState = {
-    phase: "pending",
-    documentId,
-    card,
-    listNode,
-    originalDocuments: documents.slice(),
+    phase: "pending", kind,
+    documentId: kind === "document" ? itemId : null,
+    folderId: kind === "folder" ? itemId : null,
+    card, listNode,
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
+    clientX: event.clientX,
+    clientY: event.clientY,
     timer: window.setTimeout(startDocumentDrag, DOCUMENT_DRAG_LONG_PRESS_MS),
   };
-
   document.addEventListener("pointermove", handleDocumentDragMove, { passive: false });
   document.addEventListener("pointerup", finishDocumentDrag, { passive: false });
   document.addEventListener("pointercancel", finishDocumentDrag, { passive: false });
+  document.addEventListener("keydown", handleDocumentDragKeydown);
 }
 
 function startDocumentDrag() {
-  if (!documentDragState || documentDragState.phase !== "pending") {
-    return;
-  }
-
-  const rect = documentDragState.card.getBoundingClientRect();
-  const previewNode = documentDragState.card.cloneNode(true);
+  if (!documentDragState || documentDragState.phase !== "pending") return;
+  const state = documentDragState;
+  state.card.setPointerCapture?.(state.pointerId);
+  const rect = state.card.getBoundingClientRect();
+  const previewNode = state.card.cloneNode(true);
   previewNode.classList.add("book-drag-preview");
   previewNode.classList.remove("selected");
+  previewNode.setAttribute("aria-hidden", "true");
   previewNode.style.width = `${rect.width}px`;
   previewNode.style.height = `${rect.height}px`;
   document.body.append(previewNode);
-  documentDragState.previewNode = previewNode;
-  documentDragState.offsetX = documentDragState.startX - rect.left;
-  documentDragState.offsetY = documentDragState.startY - rect.top;
-  documentDragState.phase = "dragging";
-  documentDragState.card.classList.add("dragging");
-  documentDragState.card.setAttribute("aria-grabbed", "true");
-  documentDragState.listNode.classList.add("is-reordering");
-  setDocumentTrashMode(documentDragState.listNode, true);
+  state.previewNode = previewNode;
+  state.offsetX = state.startX - rect.left;
+  state.offsetY = state.startY - rect.top;
+  state.phase = "dragging";
+  state.card.classList.add("dragging");
+  state.card.setAttribute("aria-grabbed", "true");
+  state.listNode.classList.add("is-reordering");
+  if (state.kind === "folder" || canEditDocument(documents.find((item) => item.id === state.documentId))) {
+    setDocumentTrashMode(state.listNode, true);
+  }
   document.body.classList.add("document-drag-active");
-  updateDocumentDragPreview(documentDragState.startX, documentDragState.startY);
+  updateDocumentDragPreview(state.startX, state.startY);
+  state.scrollFrame = window.requestAnimationFrame(scrollDocumentDrag);
 }
 
 function handleDocumentDragMove(event) {
-  if (!documentDragState || event.pointerId !== documentDragState.pointerId) {
-    return;
+  const state = documentDragState;
+  if (!state || event.pointerId !== state.pointerId) return;
+  const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+  if (state.phase === "pending") {
+    if (distance <= DOCUMENT_DRAG_CANCEL_DISTANCE) return;
+    if (event.pointerType === "mouse") startDocumentDrag();
+    else { clearDocumentDragState(); return; }
   }
-
-  const distance = Math.hypot(
-    event.clientX - documentDragState.startX,
-    event.clientY - documentDragState.startY,
-  );
-
-  if (documentDragState.phase === "pending") {
-    if (distance > DOCUMENT_DRAG_CANCEL_DISTANCE) {
-      clearDocumentDragState();
-    }
-    return;
-  }
-
   event.preventDefault();
+  window.clearTimeout(state.reorderTimer);
+  state.clientX = event.clientX;
+  state.clientY = event.clientY;
   updateDocumentDragPreview(event.clientX, event.clientY);
   updateDocumentTrashHover(event);
-  const target = document
-    .elementFromPoint(event.clientX, event.clientY)
-    ?.closest(".book-card[data-document-id]");
-
-  if (
-    !target ||
-    target === documentDragState.card ||
-    target.closest(".document-list") !== documentDragState.listNode
-  ) {
-    return;
+  if (updateShelfDropHover(event)) return;
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".book-card[data-shelf-key]");
+  if (!target || target === state.card || target.closest(".document-list") !== state.listNode) return;
+  const shouldPlaceAfter = isPointerAfterCard(event, target.getBoundingClientRect());
+  const reorder = () => {
+    if (documentDragState === state && target.parentNode === state.listNode) {
+      state.listNode.insertBefore(state.card, shouldPlaceAfter ? target.nextSibling : target);
+    }
+  };
+  if (target.classList.contains("folder-card")) {
+    // Passing through a folder edge should still reach its drop zone.
+    state.reorderTimer = window.setTimeout(reorder, 240);
+  } else {
+    reorder();
   }
+}
 
-  const targetRect = target.getBoundingClientRect();
-  const shouldPlaceAfter = isPointerAfterCard(event, targetRect);
-  documentDragState.listNode.insertBefore(
-    documentDragState.card,
-    shouldPlaceAfter ? target.nextSibling : target,
-  );
-  syncDocumentOrderFromList(documentDragState.listNode);
+function scrollDocumentDrag() {
+  const state = documentDragState;
+  if (!state || state.phase !== "dragging") return;
+  const stage = state.listNode.closest("[data-shelf-stage]");
+  const rect = stage.getBoundingClientRect();
+  const previousScroll = stage.scrollTop;
+  if (state.clientX >= rect.left && state.clientX <= rect.right &&
+      state.clientY >= rect.top && state.clientY <= rect.bottom) {
+    if (state.clientY < rect.top + 40) stage.scrollTop -= 10;
+    else if (state.clientY > rect.bottom - 40) stage.scrollTop += 10;
+  }
+  if (stage.scrollTop !== previousScroll) {
+    window.clearTimeout(state.reorderTimer);
+    const position = { clientX: state.clientX, clientY: state.clientY };
+    updateShelfDropHover(position);
+    updateDocumentTrashHover(position);
+  }
+  state.scrollFrame = window.requestAnimationFrame(scrollDocumentDrag);
 }
 
 function updateDocumentDragPreview(clientX, clientY) {
-  if (!documentDragState?.previewNode) {
-    return;
-  }
-
+  if (!documentDragState?.previewNode) return;
   const x = clientX - documentDragState.offsetX;
   const y = clientY - documentDragState.offsetY;
   documentDragState.previewNode.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(-2deg)`;
@@ -530,97 +545,76 @@ function updateDocumentDragPreview(clientX, clientY) {
 function isPointerAfterCard(event, rect) {
   const centerY = rect.top + rect.height / 2;
   const centerX = rect.left + rect.width / 2;
-
-  if (Math.abs(event.clientY - centerY) > rect.height / 3) {
-    return event.clientY > centerY;
-  }
-
+  if (Math.abs(event.clientY - centerY) > rect.height / 3) return event.clientY > centerY;
   return event.clientX > centerX;
 }
 
 function finishDocumentDrag(event) {
-  if (!documentDragState || event.pointerId !== documentDragState.pointerId) {
-    return;
-  }
-
-  const wasDragging = documentDragState.phase === "dragging";
-
+  const state = documentDragState;
+  if (!state || event.pointerId !== state.pointerId) return;
+  const wasDragging = state.phase === "dragging";
+  let deletedItem = null;
+  let dissolvedFolderId = null;
   if (wasDragging) {
-    const state = documentDragState;
-    const droppedOnTrash = getDocumentTrashTarget(event, state.listNode);
-    const item = state.originalDocuments.find((entry) => entry.id === state.documentId);
-
     event.preventDefault();
     suppressDocumentClickUntil = Date.now() + 450;
-
-    if (droppedOnTrash) {
-      documents = state.originalDocuments.slice();
-      clearDocumentDragState();
-      renderDocumentList();
-
-      if (item && typeof openDeleteDocumentDialog === "function") {
-        openDeleteDocumentDialog(item);
+    if (event.type !== "pointercancel") {
+      const dropTarget = getShelfDropTarget(event, state);
+      const trash = getDocumentTrashTarget(event, state.listNode);
+      if (trash) {
+        if (state.kind === "folder") dissolvedFolderId = state.folderId;
+        else {
+          const item = documents.find((entry) => entry.id === state.documentId);
+          if (canEditDocument(item)) deletedItem = item;
+        }
+      } else if (dropTarget) {
+        moveShelfEntry(state.kind, state.kind === "folder" ? state.folderId : state.documentId, dropTarget.dataset.folderId || "");
+      } else {
+        syncShelfOrderFromList(state.listNode);
+        saveShelfState();
       }
-      return;
     }
-
-    syncDocumentOrderFromList(state.listNode);
-    persist();
   }
-
   clearDocumentDragState();
+  if (wasDragging) renderDocumentList();
+  if (deletedItem && typeof openDeleteDocumentDialog === "function") openDeleteDocumentDialog(deletedItem);
+  if (dissolvedFolderId && requestDissolveShelfFolder(dissolvedFolderId)) renderDocumentList();
+}
 
-  if (wasDragging) {
-    renderDocumentList();
-  }
+function handleDocumentDragKeydown(event) {
+  if (event.key !== "Escape" || !documentDragState) return;
+  event.preventDefault();
+  finishDocumentDrag({ type: "pointercancel", pointerId: documentDragState.pointerId, preventDefault() {} });
 }
 
 function clearDocumentDragState() {
-  if (!documentDragState) {
-    return;
-  }
-
+  if (!documentDragState) return;
   window.clearTimeout(documentDragState.timer);
+  window.clearTimeout(documentDragState.reorderTimer);
+  window.cancelAnimationFrame?.(documentDragState.scrollFrame);
   try {
     documentDragState.card.releasePointerCapture?.(documentDragState.pointerId);
   } catch {
-    // 指针操作取消时，浏览器可能已经释放了捕获状态。
+    // The browser may have released capture when the pointer was cancelled.
   }
   documentDragState.card.classList.remove("dragging");
   documentDragState.card.setAttribute("aria-grabbed", "false");
   documentDragState.listNode.classList.remove("is-reordering");
+  documentDragState.dropTarget?.classList.remove("shelf-drop-hover");
   setDocumentTrashMode(documentDragState.listNode, false);
   documentDragState.previewNode?.remove();
   document.body.classList.remove("document-drag-active");
   document.removeEventListener("pointermove", handleDocumentDragMove);
   document.removeEventListener("pointerup", finishDocumentDrag);
   document.removeEventListener("pointercancel", finishDocumentDrag);
+  document.removeEventListener("keydown", handleDocumentDragKeydown);
   documentDragState = null;
-}
-
-function syncDocumentOrderFromList(listNode) {
-  const orderedIds = Array.from(listNode.querySelectorAll(".book-card[data-document-id]"))
-    .map((card) => card.dataset.documentId);
-
-  if (orderedIds.length !== documents.length) {
-    return false;
-  }
-
-  const documentsById = new Map(documents.map((item) => [item.id, item]));
-  const nextDocuments = orderedIds.map((id) => documentsById.get(id)).filter(Boolean);
-
-  if (nextDocuments.length !== documents.length) {
-    return false;
-  }
-
-  documents = nextDocuments;
-  return true;
 }
 
 function getDocumentTrashTarget(event, listNode) {
   const target = document
     .elementFromPoint(event.clientX, event.clientY)
-    ?.closest(".add-card");
+    ?.closest(".shelf-trash-card");
 
   if (!target || target.closest(".document-list") !== listNode) {
     return null;
@@ -630,68 +624,17 @@ function getDocumentTrashTarget(event, listNode) {
 }
 
 function updateDocumentTrashHover(event) {
-  if (!documentDragState) {
-    return;
-  }
-
-  const trashTarget = getDocumentTrashTarget(event, documentDragState.listNode);
-  const addCard = documentDragState.listNode.querySelector(".add-card");
-
-  if (addCard) {
-    addCard.classList.toggle("trash-hover", Boolean(trashTarget));
-  }
+  if (!documentDragState) return;
+  const state = documentDragState;
+  const canDelete = state.kind === "folder" || canEditDocument(documents.find((item) => item.id === state.documentId));
+  const trash = state.listNode.querySelector(".shelf-trash-card");
+  trash?.classList.toggle("trash-hover", canDelete && Boolean(getDocumentTrashTarget(event, state.listNode)));
 }
 
 function setDocumentTrashMode(listNode, isActive) {
-  const addCard = listNode.querySelector(".add-card");
-
-  if (!addCard) {
-    return;
-  }
-
-  const addButton = addCard.querySelector(".add-document");
-  const plus = addCard.querySelector(".add-plus");
-  const title = addCard.querySelector(".book-meta strong");
-
-  addCard.classList.toggle("trash-card", isActive);
-  addCard.classList.remove("trash-hover");
-
-  if (plus) {
-    plus.textContent = isActive ? "×" : "+";
-  }
-
-  if (title) {
-    title.textContent = isActive ? "故纸堆" : "新增文献";
-  }
-
-  if (addButton) {
-    if (isActive) {
-      addButton.title = "拖到此处删除文献";
-      return;
-    }
-
-    addButton.removeAttribute("title");
-  }
-}
-
-function createAddBookCard() {
-  const article = document.createElement("article");
-  const button = document.createElement("button");
-  const plus = document.createElement("span");
-  const label = document.createElement("span");
-
-  article.className = "book-card add-card";
-  button.className = "book-open add-document";
-  button.type = "button";
-  plus.className = "add-plus";
-  plus.textContent = "+";
-  label.className = "book-meta";
-  label.innerHTML = "<strong>新增文献</strong>";
-
-  button.append(plus, label);
-  button.addEventListener("click", openDocumentForm);
-  article.append(button);
-  return article;
+  const trash = listNode.querySelector(".shelf-trash-card");
+  trash?.classList.toggle("trash-active", isActive);
+  trash?.classList.remove("trash-hover");
 }
 
 function openDocumentForm() {
@@ -699,6 +642,7 @@ function openDocumentForm() {
     window.location.assign(new URL("documents.html?new=1", window.location.href).href);
     return;
   }
+  formSheet.dataset.shelfFolderId = (documentList || allDocumentList)?.dataset.folderId || "";
   formSheet.classList.remove("hidden");
   document.querySelector("#file-input").focus();
 }

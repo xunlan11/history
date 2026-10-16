@@ -12,6 +12,7 @@
     "../js/retrieval.js",
   ];
   const documentScripts = [
+    "../js/shelf.js",
     "../js/documents.js",
     "../js/processing.js",
     "../js/registration.js",

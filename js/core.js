@@ -503,6 +503,7 @@ function cacheCurrentState() {
   persistDocumentsCache();
   persistConversationsCache();
   persistDeletedIdCache();
+  if (typeof cacheShelfState === "function") cacheShelfState();
 }
 
 function persistDeletedIdCache() {
@@ -521,6 +522,7 @@ function applyServerState(payload) {
 
   documents = nextDocuments;
   conversations = nextConversations;
+  if (typeof applyShelfState === "function" && Object.hasOwn(payload, "shelf")) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -697,6 +699,7 @@ async function pushServerSnapshot() {
   const payload = {
     schemaVersion: DATA_SCHEMA_VERSION,
     clientId: getClientId(),
+    ...(typeof getShelfState === "function" ? { shelf: getShelfState() } : {}),
     documents,
     conversations,
     deletedDocumentIds: Array.from(deletedDocumentIds),
