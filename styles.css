@@ -1646,15 +1646,18 @@ body {
   -webkit-appearance: none;
 }
 
+/* × 清空按钮只在有输入时显示（JS 切 hidden），所以它不能比静态子元素高
+   （svg 18px / input 行盒 19px），否则按钮一出现整行就从 37px 撑到 42px，
+   下方内容整块下移。尺寸必须保持 ≤ 19px。 */
 .shelf-search button {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1;
 }
 
