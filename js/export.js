@@ -205,7 +205,7 @@ async function buildPrintHtml(item, { preview = false } = {}) {
         <button type="button" onclick="window.print()">保存为 PDF</button>
         <button type="button" onclick="window.close()">关闭</button>
       </div>
-      ${preview ? '<p id="public-download-status" role="status">下载后将生成默认私密、可编辑的个人副本。</p>' : ""}
+      ${preview ? '<p id="public-download-status" role="status"></p>' : ""}
     </header>
     <main>
       <h1>${escapeHtml(heading)}</h1>

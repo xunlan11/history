@@ -192,7 +192,6 @@ function renderReferenceDocumentOptions() {
     const body = document.createElement("span");
     const title = document.createElement("strong");
     const meta = document.createElement("span");
-    const processedCount = item.pages.filter((page) => getPageProcessedText(page).trim()).length;
 
     label.className = "reference-document-option";
     checkbox.type = "checkbox";
@@ -206,11 +205,7 @@ function renderReferenceDocumentOptions() {
       updateReferenceSelectionSummary();
     });
     title.textContent = getDocumentDisplayTitle(item);
-    meta.textContent = [
-      item.author || "著者未录",
-      item.year || "年份未录",
-      `处理后文本 ${processedCount}/${item.pages.length} 页`,
-    ].join(" · ");
+    meta.textContent = [item.author || "著者未录", item.year || "年份未录"].join(" · ");
     body.append(title, meta);
     label.append(checkbox, body);
     referenceDocumentList.append(label);
