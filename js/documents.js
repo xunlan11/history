@@ -385,10 +385,12 @@ function createBookCard(item, index) {
   card.setAttribute("aria-grabbed", "false");
   const uploadState = typeof getDocumentUploadState === "function" ? getDocumentUploadState(item.id) : null;
   const uploadText = typeof describeDocumentUploadState === "function" ? describeDocumentUploadState(item.id) : "";
+  const preparationText = typeof describeDocumentPreparation === "function" ? describeDocumentPreparation(item.id) : "";
   const backendStatusPending = item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item));
-  const statusText = uploadText || (backendStatusPending ? item.status : "");
+  const statusText = uploadText || preparationText || (backendStatusPending ? item.status : "");
   card.classList.toggle("is-uploading", Boolean(uploadState && uploadState.active));
   card.classList.toggle("is-upload-failed", Boolean(uploadState && !uploadState.active && uploadState.error));
+  card.classList.toggle("is-preparing", Boolean(!uploadText && preparationText));
   if (!canEditDocument(item)) {
     card.classList.add("read-only");
     openButton.title = "预览公开文献，可下载到我的文献库后编辑";

@@ -23,6 +23,7 @@ function endpoint(proxiedPath) {
 }
 
 const DATA_PROCESSING_URL = endpoint("/data/api/documents");
+const DOCUMENT_PREPARATION_URL = endpoint("/data/api/documents/preparation");
 const OCR_SERVICE_URL = endpoint("/ocr/ocr");
 const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");

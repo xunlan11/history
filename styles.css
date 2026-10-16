@@ -1793,6 +1793,11 @@ body {
   font-weight: 700;
 }
 
+/* 下载副本正在后台重建索引：文献已可用，只提示进度，不遮封面也不拦进入阅读页 */
+.book-card.is-preparing .book-pages {
+  color: var(--primary);
+}
+
 .upload-toast {
   position: fixed;
   left: 50%;

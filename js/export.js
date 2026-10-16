@@ -24,6 +24,8 @@ async function downloadPublicDocument(documentId, { folderId = "" } = {}) {
       moveShelfDocument(item.id, folderId);
     }
     renderDocumentList();
+    // 副本的文件与阅览器索引已经在下载请求里复制完成，剩下的是后台重建语义索引。
+    if (typeof markDocumentPreparationPending === "function") markDocumentPreparationPending(item.id);
     return item;
   })();
   publicDocumentDownloads.set(documentId, request);
@@ -72,19 +74,16 @@ async function openPrintWindow(item, printWindow, options = {}) {
   printWindow.document.close();
   if (options.preview) {
     const button = printWindow.document.querySelector("#download-public-document");
-    const status = printWindow.document.querySelector("#public-download-status");
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.textContent = "正在下载…";
-      status.textContent = "正在将文献保存到你的文献库…";
       try {
         await downloadPublicDocument(item.id, options);
         button.textContent = "已下载到我的文献库";
-        status.textContent = "副本默认私密，可在你的文献库中完整编辑。";
       } catch (error) {
         button.disabled = false;
         button.textContent = "重试下载到我的文献库";
-        status.textContent = error.message || "下载失败，请稍后重试。";
+        printWindow.alert(error.message || "下载失败，请稍后重试。");
       }
     });
   }
@@ -181,7 +180,6 @@ async function buildPrintHtml(item, { preview = false } = {}) {
       .meta-block { display: grid; grid-template-columns: 1fr; margin-bottom: 28px; border-top: 2px solid #2f6f5e; border-bottom: 1px solid #d9e0dc; padding: 12px 0; }
       .meta-row { display: grid; grid-template-columns: 88px 1fr; gap: 8px; border-bottom: 1px solid #edf1ef; padding: 7px 0; }
       .attribution-row { grid-template-columns: 88px minmax(0, 1fr) 88px minmax(0, 1fr); }
-      #public-download-status { flex-basis: 100%; margin: 0; font-size: 14px; }
       button:disabled { cursor: default; opacity: .65; }
       dt { color: #66736d; font-weight: 700; }
       dd { margin: 0; }
@@ -194,7 +192,7 @@ async function buildPrintHtml(item, { preview = false } = {}) {
       .no-image { margin: 6px 0 0; color: #66736d; font-size: 12px; }
       .text-layer { margin-bottom: 14px; }
       .transcription { min-height: 88px; white-space: pre-wrap; border: 1px solid #d9e0dc; padding: 12px; background: #fbfcfb; }
-      @media print { #public-download-status { display: none; } .print-header { position: static; margin-bottom: 24px; } .print-actions { display: none; } main { padding: 0; } }
+      @media print { .print-header { position: static; margin-bottom: 24px; } .print-actions { display: none; } main { padding: 0; } }
     </style>
   </head>
   <body>
@@ -205,7 +203,6 @@ async function buildPrintHtml(item, { preview = false } = {}) {
         <button type="button" onclick="window.print()">保存为 PDF</button>
         <button type="button" onclick="window.close()">关闭</button>
       </div>
-      ${preview ? '<p id="public-download-status" role="status"></p>' : ""}
     </header>
     <main>
       <h1>${escapeHtml(heading)}</h1>

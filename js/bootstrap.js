@@ -16,6 +16,7 @@
     "../js/documents.js",
     "../js/processing.js",
     "../js/registration.js",
+    "../js/preparation.js",
     "../js/service.js",
     "../js/export.js",
     "../js/main.js",

@@ -1633,6 +1633,92 @@ def download_public_document(document_id: str) -> dict[str, Any]:
         raise
 
 
+# 下载副本的同步阶段（复制文件、重建阅览器索引、建立语义分块）在下载请求返回时就已完成，
+# 因此整体进度从这个百分比起步，其余留给后台重建。
+PREPARATION_SYNC_PERCENT = 25
+
+
+def preparation_percent(ready: int, total: int) -> int:
+    if total <= 0:
+        return PREPARATION_SYNC_PERCENT
+    scaled = PREPARATION_SYNC_PERCENT + round((100 - PREPARATION_SYNC_PERCENT) * ready / total)
+    # 全部完成的任务不再汇报；仍报 100 只会让卡片在收尾时闪一下。
+    return min(99, scaled)
+
+
+def document_preparation_state(connection, document_id: str, fingerprint: str) -> dict[str, Any] | None:
+    """下载副本的后台重建进度；已完成或没有可索引内容时返回 None。"""
+    with_sources = connection.execute(
+        "SELECT count(DISTINCT s.page_id) FROM semantic_sources s JOIN document_pages p ON p.id=s.page_id "
+        "WHERE s.document_id=? AND p.deleted_at IS NULL", (document_id,)).fetchone()[0]
+    counts = {row["status"]: row["total"] for row in connection.execute(
+        "SELECT j.status, count(*) AS total FROM document_pages p JOIN semantic_jobs j ON j.page_id=p.id "
+        "WHERE p.document_id=? AND p.deleted_at IS NULL AND j.model_fingerprint=? GROUP BY j.status",
+        (document_id, fingerprint))}
+    total = sum(counts.values())
+    ready = counts.get("ready", 0)
+    if total and ready == total:
+        return None
+    if not total and not with_sources:
+        return None
+    if counts.get("running"):
+        stage = "running"
+    elif counts.get("pending"):
+        stage = "queued"
+    elif counts.get("waiting"):
+        stage = "waiting"
+    elif counts.get("failed"):
+        stage = "failed"
+    else:
+        stage = "queued"
+    return {"documentId": document_id, "stage": stage, "ready": ready, "total": total,
+            "percent": preparation_percent(ready, total),
+            "message": f"{counts['failed']} 页" if counts.get("failed") else ""}
+
+
+@app.get("/api/documents/preparation")
+def document_preparation() -> dict[str, Any]:
+    """汇报「下载来的文献」下载后的后台重建进度，供卡片显示。
+
+    只处理 provenance.sourceDocumentId 存在的文献（即公开文献下载生成的副本），
+    上传/新登记的文献有自己的上传与登记进度，不走这里。
+    """
+    user = current_user()
+    if not semantic_enabled():
+        return {"items": []}
+    items: list[dict[str, Any]] = []
+    with database() as connection:
+        row = connection.execute(
+            "SELECT fingerprint FROM semantic_models ORDER BY created_at DESC LIMIT 1").fetchone()
+        if not row:
+            # 嵌入模型从未跑起来，队列里不会有任务；此时报进度只会永远停在排队中。
+            return {"items": []}
+        fingerprint = row["fingerprint"]
+        # 先用语义表圈出候选文献，避免为了读 provenance 逐个解析大 payload。
+        # 一律先用 owner 过滤，既省扫描也避免读别人的行。
+        candidates = {r["document_id"] for r in connection.execute(
+            "SELECT DISTINCT p.document_id FROM document_pages p JOIN documents d ON d.id=p.document_id "
+            "JOIN semantic_jobs j ON j.page_id=p.id "
+            "WHERE d.owner_id=? AND d.deleted_at IS NULL AND p.deleted_at IS NULL "
+            "AND j.model_fingerprint=? AND j.status<>'ready'", (user["id"], fingerprint))}
+        candidates |= {r["document_id"] for r in connection.execute(
+            "SELECT DISTINCT s.document_id FROM semantic_sources s JOIN documents d ON d.id=s.document_id "
+            "WHERE d.owner_id=? AND d.deleted_at IS NULL AND NOT EXISTS "
+            "(SELECT 1 FROM semantic_jobs j WHERE j.page_id=s.page_id AND j.model_fingerprint=?)",
+            (user["id"], fingerprint))}
+        for document_id in sorted(candidates):
+            owned = connection.execute("SELECT payload FROM documents WHERE id=? AND owner_id=? AND deleted_at IS NULL",
+                                       (document_id, user["id"])).fetchone()
+            if not owned:
+                continue
+            if not (json_load(owned["payload"]).get("provenance") or {}).get("sourceDocumentId"):
+                continue
+            state = document_preparation_state(connection, document_id, fingerprint)
+            if state:
+                items.append(state)
+    return {"items": items}
+
+
 @app.post("/api/documents/{document_id}/processing")
 def submit_document_processing(document_id: str, payload: ProcessingSubmission):
     user = current_user()

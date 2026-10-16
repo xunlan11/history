@@ -461,6 +461,9 @@ async function initializeApplication() {
   resumePendingProcessingTasks();
   flushPendingProcessingCancels();
   startPeriodicSync();
+  if (document.body.dataset.page !== "reader" && typeof initializeDocumentPreparation === "function") {
+    initializeDocumentPreparation();
+  }
 }
 
 function resumePendingProcessingTasks() {

@@ -173,6 +173,10 @@ function shortenDocumentCardStatus(text) {
     label = "未完成";
   } else if (/登记失败|处理失败/.test(base)) {
     label = "处理失败";
+  } else if (/语义索引失败/.test(base)) {
+    label = "索引失败";
+  } else if (/重建语义索引中/.test(base)) {
+    label = "索引中";
   } else if (/等待服务恢复|等候中/.test(base)) {
     label = "等候中";
   } else if (/排队中/.test(base)) {
@@ -238,7 +242,7 @@ function updateDocumentUploadState(documentId, patch, options = {}) {
   const paintedRecently = now - (previous.lastPaintAt || 0) < UPLOAD_PROGRESS_PAINT_INTERVAL_MS;
   if (options.force || !next.active || !paintedRecently) {
     next.lastPaintAt = now;
-    refreshDocumentUploadIndicators(documentId);
+    refreshDocumentCardStatusIndicators(documentId);
     return next;
   }
 
@@ -250,7 +254,7 @@ function updateDocumentUploadState(documentId, patch, options = {}) {
     }
     current.lastPaintAt = Date.now();
     current.paintTimer = 0;
-    refreshDocumentUploadIndicators(documentId);
+    refreshDocumentCardStatusIndicators(documentId);
   }, UPLOAD_PROGRESS_PAINT_INTERVAL_MS);
 
   return next;
@@ -268,7 +272,7 @@ function beginDocumentUpload(item, file) {
     startedAt: new Date().toISOString(),
     lastPaintAt: 0,
   });
-  refreshDocumentUploadIndicators(item.id);
+  refreshDocumentCardStatusIndicators(item.id);
 }
 
 function markDocumentUploadFinished(documentId) {
@@ -280,7 +284,7 @@ function markDocumentUploadFinished(documentId) {
   if (typeof renderAll === "function") {
     renderAll();
   } else {
-    refreshDocumentUploadIndicators(documentId);
+    refreshDocumentCardStatusIndicators(documentId);
   }
 }
 
@@ -301,9 +305,12 @@ function markDocumentUploadFailed(documentId, error) {
   );
 }
 
-function refreshDocumentUploadIndicators(documentId) {
+function refreshDocumentCardStatusIndicators(documentId) {
   const state = getDocumentUploadState(documentId);
-  const text = describeDocumentUploadState(documentId);
+  const uploadText = describeDocumentUploadState(documentId);
+  // 另一处来源是下载副本的后台重建进度（js/preparation.js）；上传/登记优先级更高。
+  const preparationText = typeof describeDocumentPreparation === "function" ? describeDocumentPreparation(documentId) : "";
+  const text = uploadText || preparationText;
 
   document.querySelectorAll(".book-card").forEach((card) => {
     if (card.dataset.documentId !== documentId) {
@@ -311,6 +318,7 @@ function refreshDocumentUploadIndicators(documentId) {
     }
     card.classList.toggle("is-uploading", Boolean(state && state.active));
     card.classList.toggle("is-upload-failed", Boolean(state && !state.active && state.error));
+    card.classList.toggle("is-preparing", Boolean(!uploadText && preparationText));
     const pages = card.querySelector(".book-pages");
     if (pages) {
       pages.classList.toggle("is-status", Boolean(text));
