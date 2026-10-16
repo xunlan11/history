@@ -475,9 +475,10 @@ function openShelfNameDialog(folderId = "") {
   const state = getShelfState();
   const folder = folderId ? state.folders.find((entry) => entry.id === folderId) : null;
   if (folderId && !folder) return;
-  // 传空 folderId 就是重命名根目录（文献库）的显示名。
-  dialog.querySelector("h2").textContent = folderId ? "重命名文件夹" : "重命名文献库";
-  input.value = folder ? folder.name : getShelfRootName(state);
+  // 传空 folderId 就是重命名根目录（文献库）的显示名；标题统一成「重命名 + 当前名字」。
+  const currentName = folder ? folder.name : getShelfRootName(state);
+  dialog.querySelector("h2").textContent = `重命名 ${currentName}`;
+  input.value = currentName;
   input.setCustomValidity("");
   input.oninput = () => input.setCustomValidity("");
   form.onsubmit = (event) => {
