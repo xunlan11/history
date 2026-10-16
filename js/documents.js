@@ -342,11 +342,13 @@ function renderBookShelf(listNode, countNode) {
   countNode.textContent = `共 ${countShelfDocuments(state, folder?.id || "")} 项`;
   // 层级信息放在页面大标题里；书架里只排卡片。
   renderShelfTitle(listNode, folder, state);
+  const query = getShelfSearchQuery(listNode);
   if (listNode.dataset.publicLibrary === "true") {
     const publicDocuments = getPublicLibraryDocuments();
     countNode.textContent = `共 ${publicDocuments.length} 项`;
     listNode.append(createPublicLibraryReturnCard(listNode, folder, state));
-    for (const item of publicDocuments) listNode.append(createBookCard(item, documents.indexOf(item)));
+    if (query) renderShelfSearchResults(listNode, countNode, publicDocuments, query);
+    else for (const item of publicDocuments) listNode.append(createBookCard(item, documents.indexOf(item)));
     return;
   }
   // 固定顺序：新增文献 → 新建文件夹 →（文件夹内）上一级 → 公开文献库。
@@ -354,6 +356,10 @@ function renderBookShelf(listNode, countNode) {
   listNode.append(createShelfCreateCard(folder?.id || ""));
   if (folder) listNode.append(createShelfParentCard(listNode, folder, state));
   listNode.append(createPublicLibraryCard(listNode));
+  if (query) {
+    renderShelfSearchResults(listNode, countNode, getShelfSearchDocuments(state, folder?.id || ""), query);
+    return;
+  }
   const documentsById = new Map(documents.map((item, index) => [item.id, { item, index }]));
   const foldersById = new Map(state.folders.map((entry) => [entry.id, entry]));
   const keys = folder ? folder.order : state.order;
@@ -365,6 +371,17 @@ function renderBookShelf(listNode, countNode) {
       const entry = documentsById.get(key.slice(9));
       if (entry) listNode.append(createBookCard(entry.item, entry.index));
     }
+  }
+}
+
+function renderShelfSearchResults(listNode, countNode, scopedDocuments, query) {
+  const matches = scopedDocuments.filter((item) => matchesShelfSearch(item, query));
+  countNode.textContent = `匹配 ${matches.length} / ${scopedDocuments.length} 项`;
+  for (const item of matches) listNode.append(createBookCard(item, documents.indexOf(item)));
+  if (!matches.length) {
+    const empty = emptyState("没有匹配的文献，请尝试其他关键词或清空搜索。");
+    empty.classList.add("shelf-search-empty");
+    listNode.append(empty);
   }
 }
 
@@ -472,7 +489,7 @@ function prepareDocumentDrag(event, card, itemId, kind = "document") {
   if (event.button !== 0 || !event.isPrimary) return;
   if (kind === "document" && !canEditDocument(documents.find((item) => item.id === itemId))) return;
   const listNode = card.closest(".document-list");
-  if (!listNode) return;
+  if (!listNode || getShelfSearchQuery(listNode)) return;
   clearDocumentDragState();
   documentDragState = {
     phase: "pending", kind,

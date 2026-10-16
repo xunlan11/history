@@ -187,6 +187,72 @@ function setShelfFolder(listNode, folderId = "") {
   listNode.closest("[data-shelf-stage]").scrollTop = 0;
 }
 
+// 搜索只读取文献信息，不读取正文；可见性与其他栏目使用同样的匹配规则。
+function normalizeShelfSearchText(value) {
+  return String(value ?? "").normalize("NFKC").toLowerCase();
+}
+
+function getShelfSearchQuery(listNode) {
+  return (listNode?.dataset.searchQuery || "").trim();
+}
+
+function matchesShelfSearch(item, query) {
+  const text = normalizeShelfSearchText([
+    item.title || "未识别", item.author || "未录", item.year || "未录",
+    item.publisher || "未录", item.creator?.username || "创建者信息不可用",
+    item.modifier?.username || "", item.tags || "未录",
+    item.visibility === "public" ? "公开" : "私密",
+  ].join("\n"));
+  return normalizeShelfSearchText(query).trim().split(/\s+/).filter(Boolean)
+    .every((term) => text.includes(term));
+}
+
+// 按各层书架顺序展开当前目录，搜索结果不包含文件夹卡片。
+function getShelfSearchDocuments(state, folderId = "") {
+  const foldersById = new Map(state.folders.map((folder) => [folder.id, folder]));
+  const documentsById = new Map(documents.filter(canEditDocument).map((item) => [item.id, item]));
+  const visited = new Set();
+  const results = [];
+  const visit = (id) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const keys = id ? foldersById.get(id)?.order || [] : state.order;
+    for (const key of keys) {
+      if (key.startsWith("folder:")) visit(key.slice(7));
+      else {
+        const item = documentsById.get(key.slice(9));
+        if (item) results.push(item);
+      }
+    }
+  };
+  visit(folderId);
+  return results;
+}
+
+const shelfSearchForm = document.querySelector("#shelf-search-form");
+const shelfSearchInput = document.querySelector("#shelf-search-input");
+const shelfSearchClear = document.querySelector("#shelf-search-clear");
+
+function updateShelfSearch() {
+  const listNode = document.querySelector("[data-shelf-list]");
+  if (!listNode || !shelfSearchInput) return;
+  listNode.dataset.searchQuery = shelfSearchInput.value.trim();
+  if (shelfSearchClear) shelfSearchClear.hidden = !getShelfSearchQuery(listNode);
+  renderDocumentList();
+  listNode.closest("[data-shelf-stage]").scrollTop = 0;
+}
+
+shelfSearchInput?.addEventListener("input", updateShelfSearch);
+shelfSearchForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  updateShelfSearch();
+});
+shelfSearchClear?.addEventListener("click", () => {
+  shelfSearchInput.value = "";
+  updateShelfSearch();
+  shelfSearchInput.focus();
+});
+
 // 根目录显示名：没自定义过就是「文献库」。
 function getShelfRootName(state = getShelfState()) {
   return state.rootName || "文献库";
