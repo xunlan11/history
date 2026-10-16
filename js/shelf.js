@@ -182,15 +182,58 @@ function getShelfPathParts(folder, state = getShelfState()) {
   return ["文献库", ...ancestors.map((entry) => entry.name)];
 }
 
+// 当前目录及其所有子目录下的文献总数（不含文件夹本身）。
+function countShelfDocuments(state = getShelfState(), folderId = "") {
+  const childrenByParent = new Map();
+  for (const folder of state.folders) {
+    const key = folder.parentId || "";
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(folder);
+  }
+  const inAnyFolder = new Set(state.folders.flatMap((folder) => folder.documentIds));
+  const countFrom = (id) => {
+    const own = id
+      ? state.folders.find((folder) => folder.id === id)?.documentIds.length || 0
+      : documents.filter((item) => !inAnyFolder.has(item.id)).length;
+    return own + (childrenByParent.get(id) || []).reduce((sum, child) => sum + countFrom(child.id), 0);
+  };
+  return countFrom(folderId || "");
+}
+
+// 标题里的层级：整条放得下就显示完整路径；放不下只留最后一层，
+// 前面用重复的「›」标出省略了几层（不加省略号），最后一层从头显示、尾部省略。
+function renderShelfTitle(listNode, folder, state = getShelfState()) {
+  const node = document.querySelector("#shelf-title");
+  if (!node) return;
+  const parts = getShelfPathParts(folder, state);
+  node.classList.remove("is-collapsed");
+  node.textContent = parts.join(" › ");
+  if (parts.length < 2 || node.scrollWidth <= node.clientWidth + 1) return;
+  node.classList.add("is-collapsed");
+  node.textContent = `${"›".repeat(parts.length - 1)}${parts[parts.length - 1]}`;
+}
+
+// 窗口尺寸变了要重新决定要不要折叠（宽度变了服务端同步不会及时重渲染）。
+let shelfTitleResizeFrame = 0;
+window.addEventListener("resize", () => {
+  window.cancelAnimationFrame(shelfTitleResizeFrame);
+  shelfTitleResizeFrame = window.requestAnimationFrame(() => {
+    const listNode = document.querySelector("[data-shelf-list]");
+    if (!listNode) return;
+    const state = getShelfState();
+    renderShelfTitle(listNode, state.folders.find((entry) => entry.id === listNode.dataset.folderId), state);
+  });
+});
+
 function renderShelfToolbar(listNode, folder, state = getShelfState()) {
   const stage = listNode.closest("[data-shelf-stage]");
-  // 左侧只做定位提示（文献库 › 一级 › 二级），返回上一层由书架里的「上层文件夹」卡片负责。
-  const path = stage.querySelector("[data-shelf-path]");
-  const pathText = getShelfPathParts(folder, state).join(" › ");
-  path.textContent = pathText;
-  path.title = pathText;
+  // 层级信息放在页面大标题里（首页是侧栏标题，文献库页是顶部标题），这里只管文件夹级操作。
+  renderShelfTitle(listNode, folder, state);
+  const toolbar = stage.querySelector(".shelf-toolbar");
   const rename = stage.querySelector("[data-shelf-rename]");
   const dissolve = stage.querySelector("[data-shelf-dissolve]");
+  // 根目录没有文件夹级操作，整条工具栏收起。
+  toolbar.hidden = !folder;
   rename.hidden = !folder;
   rename.onclick = () => openShelfNameDialog(folder.id);
   dissolve.hidden = !folder;
@@ -215,6 +258,8 @@ function createShelfUtilityCard(className, symbol, name, description) {
   label.title = name;
   const hint = document.createElement("small");
   hint.textContent = description;
+  // 缺省状态的小字提示一律不显示，只有拖拽变形成故纸堆/解散时才由 setDocumentTrashMode 打开。
+  hint.hidden = !description;
   button.append(icon, label, hint);
   card.append(button);
   return card;
@@ -223,7 +268,7 @@ function createShelfUtilityCard(className, symbol, name, description) {
 // 同一个入口两种状态：平时是「新增文献」，开始拖拽后由 setDocumentTrashMode 变成「故纸堆」删除区。
 // 每一层文件夹（含根目录）都渲染同一张卡片，行为完全一致。
 function createShelfAddCard() {
-  const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献", "点击登记新文献");
+  const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献", "");
   const button = card.querySelector("button");
   button.title = "点击登记新文献";
   button.onclick = () => {
@@ -233,24 +278,118 @@ function createShelfAddCard() {
   return card;
 }
 
+// 不弹窗，直接在当前层建一个叫「新建文件夹」的文件夹，改名用文件夹卡片上的 ✎。
+function createShelfFolder(parentId = "") {
+  const state = getShelfState();
+  const targetId = state.folders.some((entry) => entry.id === parentId) ? parentId : "";
+  const id = newId();
+  state.folders.push({ id, name: "新建文件夹", parentId: targetId, documentIds: [], order: [] });
+  getShelfContainerOrder(state, targetId).push(`folder:${id}`);
+  saveShelfState();
+  renderDocumentList();
+  return id;
+}
+
+const SHELF_CREATE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v4M10 13h4"/></svg>';
+const SHELF_DISSOLVE_ICON = "↑";
+
 // 「新建子文件夹」同样做成书架卡片，排在「新增文献 / 故纸堆」的下一个。
 function createShelfCreateCard(folderId = "") {
-  const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹", "点击新建子文件夹");
-  card.querySelector(".shelf-utility-icon").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v4M10 13h4"/></svg>';
+  const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹", "");
+  card.querySelector(".shelf-utility-icon").innerHTML = SHELF_CREATE_ICON;
   const button = card.querySelector("button");
-  button.title = "点击新建子文件夹";
+  button.title = "点击即新建子文件夹";
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
-    openShelfNameDialog("", folderId);
+    createShelfFolder(folderId);
   };
   return card;
+}
+
+// 拖拽文件夹时把这张卡切成「解散文件夹」：拖到它上面松手 = 删掉该文件夹、内容上移一层。
+function setShelfDissolveMode(listNode, isActive) {
+  const card = listNode.querySelector(".shelf-create-card");
+  if (!card) return;
+  card.classList.toggle("dissolve-active", isActive);
+  card.classList.remove("dissolve-hover");
+  const icon = card.querySelector(".shelf-utility-icon");
+  if (icon) icon.innerHTML = isActive ? SHELF_DISSOLVE_ICON : SHELF_CREATE_ICON;
+  const name = card.querySelector(".folder-name");
+  if (name) name.textContent = isActive ? "解散" : "新建文件夹";
+  const hint = card.querySelector("small");
+  if (hint) {
+    hint.textContent = isActive ? "内容移到上层" : "";
+    hint.hidden = !isActive;
+  }
+  const button = card.querySelector("button");
+  if (button) button.title = isActive ? "拖到此处解散文件夹，内容移到上一层" : "点击即新建子文件夹";
+}
+
+// 递归取得某个文件夹下的全部文件夹与文献（不含自身以外的前置节点）。
+function collectShelfFolder(state, folderId) {
+  const folders = [];
+  const documentIds = [];
+  const seen = new Set();
+  const walk = (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const folder = state.folders.find((entry) => entry.id === id);
+    if (!folder) return;
+    folders.push(folder);
+    documentIds.push(...folder.documentIds);
+    for (const child of state.folders) if (child.parentId === id) walk(child.id);
+  };
+  walk(folderId);
+  return { folders, documentIds };
+}
+
+// 递归删除文件夹：文件夹及其子文件夹全部移除，里面的文献交给 deleteDocument
+// （不可编辑的文献 deleteDocument 会忽略，随后 normalizeShelfState 把它们退回根目录）。
+function deleteShelfFolder(folderId) {
+  const state = getShelfState();
+  if (!state.folders.some((entry) => entry.id === folderId)) return false;
+  const { folders, documentIds } = collectShelfFolder(state, folderId);
+  const folderIds = new Set(folders.map((entry) => entry.id));
+  const removedKeys = new Set([
+    ...folders.map((entry) => `folder:${entry.id}`),
+    ...documentIds.map((id) => `document:${id}`),
+  ]);
+  const dropRemoved = (order) => order.filter((key) => !removedKeys.has(key));
+  state.folders = state.folders.filter((entry) => !folderIds.has(entry.id));
+  state.order = dropRemoved(state.order);
+  for (const survivor of state.folders) {
+    survivor.order = dropRemoved(survivor.order);
+    survivor.documentIds = survivor.documentIds.filter((id) => !documentIds.includes(id));
+  }
+  saveShelfState();
+  for (const id of documentIds) deleteDocument(id);
+  // 文献删除后重存一次，把已不存在的文献键从顺序里清掉。
+  saveShelfState();
+  return true;
+}
+
+function requestDeleteShelfFolder(folderId) {
+  const state = getShelfState();
+  const folder = state.folders.find((entry) => entry.id === folderId);
+  if (!folder) return false;
+  const { folders, documentIds } = collectShelfFolder(state, folderId);
+  const subCount = folders.length - 1;
+  const ownedCount = documentIds.filter((id) => canEditDocument(documents.find((item) => item.id === id))).length;
+  const keptCount = documentIds.length - ownedCount;
+  const bits = [];
+  if (subCount) bits.push(`${subCount} 个子文件夹`);
+  if (ownedCount) bits.push(`${ownedCount} 篇文献`);
+  const what = bits.length ? `及 ${bits.join("、")}` : "";
+  const note = keptCount ? `（其中 ${keptCount} 篇非本人文献会移到上层）` : "";
+  if (!window.confirm(`删除“${folder.name}”${what}？删除后不可找回。${note}`)) return false;
+  return deleteShelfFolder(folderId);
 }
 
 // 只在文件夹内渲染：一级文件夹显示「文献库」，更深层显示上一级文件夹名；根目录没有上级，不渲染本卡片。
 function createShelfParentCard(listNode, folder, state) {
   const parent = state.folders.find((entry) => entry.id === folder.parentId);
   const parentName = parent?.name || "文献库";
-  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, "返回上一级");
+  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, "");
   card.dataset.shelfParent = "";
   card.dataset.folderId = parent?.id || "";
   const button = card.querySelector("button");
@@ -260,6 +399,18 @@ function createShelfParentCard(listNode, folder, state) {
     if (Date.now() >= suppressDocumentClickUntil) setShelfFolder(listNode, parent?.id || "");
   };
   return card;
+}
+
+// 拖拽时这张卡也进入可投放态：拖文献或文件夹到它上面松手，就把拖的东西移到上一层。
+function setShelfParentMode(listNode, isActive) {
+  const card = listNode.querySelector(".shelf-parent-card");
+  if (!card) return;
+  card.classList.toggle("move-active", isActive);
+  const hint = card.querySelector("small");
+  if (hint) {
+    hint.textContent = isActive ? "移到上层" : "";
+    hint.hidden = !isActive;
+  }
 }
 
 function createShelfFolderCard(folder, state = getShelfState()) {
@@ -300,37 +451,41 @@ function createShelfFolderCard(folder, state = getShelfState()) {
   name.className = "folder-name";
   name.textContent = folder.name;
   name.title = folder.name;
-  const count = document.createElement("span");
-  count.className = "folder-count";
-  count.textContent = countText;
-  count.title = countText;
-  cover.append(icon, name, count);
-  button.append(cover);
-  button.onclick = () => {
-    if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") return;
-    setShelfFolder(card.closest(".document-list"), folder.id);
-  };
   const rename = document.createElement("button");
   rename.type = "button";
   rename.className = "folder-rename";
   rename.textContent = "✎";
-  rename.title = "重命名文件夹";
   rename.setAttribute("aria-label", `重命名文件夹：${folder.name}`);
   rename.onpointerdown = (event) => event.stopPropagation();
   rename.onclick = () => openShelfNameDialog(folder.id);
-  card.append(button, rename);
+  const nameRow = document.createElement("span");
+  nameRow.className = "folder-name-row";
+  nameRow.append(name, rename);
+  const count = document.createElement("span");
+  count.className = "folder-count";
+  count.textContent = countText;
+  count.title = countText;
+  cover.append(icon, nameRow, count);
+  // 打开按钮做成覆盖整张卡片的透明层：<button> 里不能嵌 <button>，改名按钮只能与它并列。
+  card.append(button, cover);
+  button.onclick = () => {
+    if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") return;
+    setShelfFolder(card.closest(".document-list"), folder.id);
+  };
   card.addEventListener("pointerdown", (event) => prepareDocumentDrag(event, card, folder.id, "folder"));
   card.addEventListener("contextmenu", (event) => event.preventDefault());
   return card;
 }
 
-function openShelfNameDialog(folderId = "", parentId = "") {
+// 只用于重命名（新建文件夹已改成点击即建，不再走弹窗）。
+function openShelfNameDialog(folderId = "") {
   const dialog = document.querySelector("#shelf-name-dialog");
   const form = dialog.querySelector("form");
   const input = dialog.querySelector("input");
   const folder = getShelfState().folders.find((entry) => entry.id === folderId);
-  dialog.querySelector("h2").textContent = folder ? "重命名文件夹" : "新建文件夹";
-  input.value = folder?.name || "";
+  if (!folder) return;
+  dialog.querySelector("h2").textContent = "重命名文件夹";
+  input.value = folder.name;
   input.setCustomValidity("");
   input.oninput = () => input.setCustomValidity("");
   form.onsubmit = (event) => {
@@ -341,15 +496,8 @@ function openShelfNameDialog(folderId = "", parentId = "") {
       input.reportValidity();
       return;
     }
-    const state = getShelfState();
-    const liveFolder = state.folders.find((entry) => entry.id === folderId);
+    const liveFolder = getShelfState().folders.find((entry) => entry.id === folderId);
     if (liveFolder) liveFolder.name = name.slice(0, 80);
-    else if (!folderId) {
-      const id = newId();
-      const targetId = state.folders.some((entry) => entry.id === parentId) ? parentId : "";
-      state.folders.push({ id, name: name.slice(0, 80), parentId: targetId, documentIds: [], order: [] });
-      getShelfContainerOrder(state, targetId).push(`folder:${id}`);
-    }
     saveShelfState();
     dialog.close();
     renderDocumentList();

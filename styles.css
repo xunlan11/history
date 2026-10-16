@@ -2567,13 +2567,23 @@ body {
 }
 
 .status-title {
+  min-width: 0;
   text-align: center;
 }
 
+/* 标题里要放文件夹层级：中间轨道随内容增长，但最多占 60%，避免把两侧压成 0 宽。 */
+.documents-topbar {
+  grid-template-columns: minmax(0, 1fr) fit-content(60%) minmax(0, 1fr);
+}
+
+/* 文献库页大标题：显示当前文件夹层级，过长就省略号。 */
 .status-title .eyebrow {
+  overflow: hidden;
   color: var(--text);
   font-size: 24px;
   font-family: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-topbar-actions {
@@ -3019,9 +3029,28 @@ body {
 }
 
 .sidebar-heading h2 {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
   margin: 0;
   font-size: 22px;
   line-height: 1.2;
+}
+
+/* 标题里的文件夹层级：整条放不下时由 renderShelfTitle 折叠成「››最后一层」，这里只负责尾部省略。 */
+#shelf-title {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-heading h2 .sidebar-count {
+  flex: 0 0 auto;
+  margin-left: 0;
 }
 
 .sidebar-count {
@@ -4204,30 +4233,18 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px 12px;
   margin: 0 0 8px;
 }
+.shelf-toolbar[hidden] { display: none; }
 
-.shelf-path,
 .shelf-folder-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
-}
-
-/* 左侧只做定位提示（文献库 › 一级 › 二级），不可点击；返回上一层由书架里的卡片负责。 */
-.shelf-path {
-  flex: 1 1 100px;
-  overflow: hidden;
-  margin: 0;
-  color: #3f4a3d;
-  font-size: 15px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .shelf-folder-actions [hidden] { display: none; }
 
@@ -4321,9 +4338,9 @@ body {
 }
 .folder-count { color: #8b7b61; font-size: 11px; }
 .folder-rename {
-  position: absolute;
-  top: 4px;
-  right: 4px;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
   width: 25px;
   height: 25px;
   padding: 0;
@@ -4335,6 +4352,33 @@ body {
   cursor: pointer;
 }
 .folder-rename:hover { background: #fff; }
+
+/* 文件夹卡片：打开按钮是覆盖整张卡片的透明层，名字行里只有名字和改名按钮。 */
+.folder-card .folder-open {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  height: 100%;
+}
+/* 名字占满除按钮外的剩余宽度，改名按钮固定贴在这一行的末尾，各文件夹位置一致。 */
+.folder-card .folder-name-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+/* 名字右对齐（紧贴改名按钮），单行显示，放不下时省略号正好落在按钮前面。 */
+.folder-card .folder-name {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .folder-card.shelf-drop-hover .folder-cover {
   outline: 3px solid #6e8c68;
   outline-offset: 2px;
@@ -4427,11 +4471,30 @@ body {
   outline-offset: 2px;
   background: #f7dfd7;
 }
+/* 拖拽文件夹时「新建文件夹」变「解散文件夹」：绿调区分于红色的「故纸堆」，表示内容上移。 */
+.shelf-create-card.dissolve-active .shelf-utility-cover {
+  border: 1px dashed #a9bb9f;
+  background: #f5f8f1;
+  color: #4f6349;
+}
+.shelf-create-card.dissolve-active .shelf-utility-icon { color: #6e8c68; }
+.shelf-create-card.dissolve-hover .shelf-utility-cover {
+  outline: 3px solid #6e8c68;
+  outline-offset: 2px;
+  background: #e7eedb;
+}
 .shelf-parent-card.shelf-drop-hover .shelf-utility-cover {
   outline: 3px solid #6e8c68;
   outline-offset: 2px;
   background: #e7eedb;
 }
+/* 拖拽时「返回上一级」也进入可投放态（拖到它上面松手 = 内容移到上一层）。 */
+.shelf-parent-card.move-active .shelf-utility-cover {
+  border: 1px dashed #a9bb9f;
+  background: #f5f8f1;
+  color: #4f6349;
+}
+.shelf-parent-card.move-active .shelf-utility-icon { color: #6e8c68; }
 .library-sidebar .shelf-utility-cover,
 .documents-stage .shelf-utility-cover {
   height: 160px;

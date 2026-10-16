@@ -316,7 +316,7 @@ function renderBookShelf(listNode, countNode) {
   const folder = state.folders.find((entry) => entry.id === listNode.dataset.folderId);
   listNode.dataset.folderId = folder?.id || "";
   listNode.innerHTML = "";
-  countNode.textContent = `${documents.length} 项在库`;
+  countNode.textContent = `共 ${countShelfDocuments(state, folder?.id || "")} 项`;
   renderShelfToolbar(listNode, folder, state);
   // 卡片顺序固定：新增文献/故纸堆 → 新建文件夹 → （文件夹内才有）返回上一级。
   listNode.append(createShelfAddCard());
@@ -477,8 +477,10 @@ function startDocumentDrag() {
   state.card.classList.add("dragging");
   state.card.setAttribute("aria-grabbed", "true");
   state.listNode.classList.add("is-reordering");
+  // 「返回上一级」对文献和文件夹都能投放（把这一项移到上层），所以不受可删除与否影响。
+  setShelfParentMode(state.listNode, true);
   if (state.kind === "folder" || canEditDocument(documents.find((item) => item.id === state.documentId))) {
-    setDocumentTrashMode(state.listNode, true);
+    setDocumentTrashMode(state.listNode, true, state.kind);
   }
   document.body.classList.add("document-drag-active");
   updateDocumentDragPreview(state.startX, state.startY);
@@ -557,18 +559,24 @@ function finishDocumentDrag(event) {
   const wasDragging = state.phase === "dragging";
   let deletedItem = null;
   let dissolvedFolderId = null;
+  let deletedFolderId = null;
   if (wasDragging) {
     event.preventDefault();
     suppressDocumentClickUntil = Date.now() + 450;
     if (event.type !== "pointercancel") {
       const dropTarget = getShelfDropTarget(event, state);
       const trash = getDocumentTrashTarget(event, state.listNode);
+      const dissolve = state.kind === "folder" ? getDocumentDissolveTarget(event, state.listNode) : null;
       if (trash) {
-        if (state.kind === "folder") dissolvedFolderId = state.folderId;
+        // 故纸堆：文献按原有确认流程删除；文件夹连内容一起递归删除。
+        if (state.kind === "folder") deletedFolderId = state.folderId;
         else {
           const item = documents.find((entry) => entry.id === state.documentId);
           if (canEditDocument(item)) deletedItem = item;
         }
+      } else if (dissolve) {
+        // 解散文件夹：只删掉这一层，文献和子文件夹移到上一层。
+        dissolvedFolderId = state.folderId;
       } else if (dropTarget) {
         moveShelfEntry(state.kind, state.kind === "folder" ? state.folderId : state.documentId, dropTarget.dataset.folderId || "");
       } else {
@@ -580,6 +588,7 @@ function finishDocumentDrag(event) {
   clearDocumentDragState();
   if (wasDragging) renderDocumentList();
   if (deletedItem && typeof openDeleteDocumentDialog === "function") openDeleteDocumentDialog(deletedItem);
+  if (deletedFolderId && requestDeleteShelfFolder(deletedFolderId)) renderDocumentList();
   if (dissolvedFolderId && requestDissolveShelfFolder(dissolvedFolderId)) renderDocumentList();
 }
 
@@ -604,6 +613,7 @@ function clearDocumentDragState() {
   documentDragState.listNode.classList.remove("is-reordering");
   documentDragState.dropTarget?.classList.remove("shelf-drop-hover");
   setDocumentTrashMode(documentDragState.listNode, false);
+  setShelfParentMode(documentDragState.listNode, false);
   documentDragState.previewNode?.remove();
   document.body.classList.remove("document-drag-active");
   document.removeEventListener("pointermove", handleDocumentDragMove);
@@ -625,28 +635,54 @@ function getDocumentTrashTarget(event, listNode) {
   return target;
 }
 
+// 拖拽文件夹时「新建文件夹」卡片会变成「解散文件夹」，它就是解散的投放目标。
+function getDocumentDissolveTarget(event, listNode) {
+  const target = document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest(".shelf-create-card");
+
+  if (!target || target.closest(".document-list") !== listNode) {
+    return null;
+  }
+
+  return target;
+}
+
 function updateDocumentTrashHover(event) {
   if (!documentDragState) return;
   const state = documentDragState;
   const canDelete = state.kind === "folder" || canEditDocument(documents.find((item) => item.id === state.documentId));
   const card = state.listNode.querySelector(".shelf-add-card");
   card?.classList.toggle("trash-hover", canDelete && Boolean(getDocumentTrashTarget(event, state.listNode)));
+  const dissolveCard = state.listNode.querySelector(".shelf-create-card");
+  dissolveCard?.classList.toggle(
+    "dissolve-hover",
+    state.kind === "folder" && Boolean(getDocumentDissolveTarget(event, state.listNode)),
+  );
 }
 
-// 拖拽期间把「新增文献」卡片切换成「故纸堆」删除区，拖拽结束后再切回。
-function setDocumentTrashMode(listNode, isActive) {
+// 拖拽期间切换两张卡片的第二形态：
+// 新增文献 → 故纸堆（拖入即删除；文件夹则递归删除其全部内容）；
+// 新建文件夹 → 解散文件夹（拖入即删掉这一层，内容上移）。只在拖文件夹时启用解散。
+function setDocumentTrashMode(listNode, isActive, kind = "document") {
   const card = listNode.querySelector(".shelf-add-card");
-  if (!card) return;
-  card.classList.toggle("trash-active", isActive);
-  card.classList.remove("trash-hover");
-  const icon = card.querySelector(".shelf-utility-icon");
-  if (icon) icon.textContent = isActive ? "×" : "＋";
-  const name = card.querySelector(".folder-name");
-  if (name) name.textContent = isActive ? "故纸堆" : "新增文献";
-  const hint = card.querySelector("small");
-  if (hint) hint.textContent = isActive ? "拖到此处删除" : "点击登记新文献";
-  const button = card.querySelector("button");
-  if (button) button.title = isActive ? "拖到此处删除文献；拖入文件夹可解散并将内容移到上层" : "点击登记新文献";
+  if (card) {
+    card.classList.toggle("trash-active", isActive);
+    card.classList.remove("trash-hover");
+    const icon = card.querySelector(".shelf-utility-icon");
+    if (icon) icon.textContent = isActive ? "×" : "＋";
+    const name = card.querySelector(".folder-name");
+    if (name) name.textContent = isActive ? "故纸堆" : "新增文献";
+    const hint = card.querySelector("small");
+    if (hint) {
+      // 拖文献进去是删除，拖文件夹进去是递归删除（连里面的内容一起删）。
+      hint.textContent = isActive ? (kind === "folder" ? "递归删除" : "删除") : "";
+      hint.hidden = !isActive;
+    }
+    const button = card.querySelector("button");
+    if (button) button.title = isActive ? "拖到此处删除文献，或连同内容递归删除文件夹" : "点击登记新文献";
+  }
+  setShelfDissolveMode(listNode, isActive && kind === "folder");
 }
 
 function openDocumentForm() {
