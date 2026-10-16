@@ -326,7 +326,10 @@ function refreshDocumentCardStatusIndicators(documentId) {
         pages.textContent = shortenDocumentCardStatus(text);
         pages.title = text;
       } else {
+        // 文案清空后必须把「N 页」放回去：进度来源（下载副本重建）消失时不会触发整列表重绘。
         pages.removeAttribute("title");
+        const item = typeof getLiveDocument === "function" ? getLiveDocument(documentId) : null;
+        pages.textContent = `${item?.pages?.length || 0} 页`;
       }
     }
   });
