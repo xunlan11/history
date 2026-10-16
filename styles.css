@@ -284,7 +284,41 @@ label {
 
 .reader-search-panel .section-heading { margin-bottom: 0; }
 .reader-search-form { display: flex; gap: 8px; }
-.reader-search-form input { min-width: 0; width: 100%; padding: 5px 9px; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+/* 放大镜 + 输入框同处一个描边框内：边框、圆角、焦点环都画在容器上，
+   内层 input 去边框去背景，避免出现「框中框」 */
+.reader-search-field {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  transition: border-color 0.15s ease;
+}
+.reader-search-field:hover { border-color: #bac7c0; }
+/* 焦点环画在容器上（与全局 input:focus 的三黄色描边一致），内层 input 不再画 */
+.reader-search-field:focus-within { border-color: var(--focus); outline: 3px solid rgba(209, 154, 56, 0.28); outline-offset: 2px; }
+.reader-search-icon { flex: 0 0 auto; width: 15px; height: 15px; }
+.reader-search-field:focus-within .reader-search-icon { color: var(--primary); }
+.reader-search-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 14px;
+}
+.reader-search-field input:focus,
+.reader-search-field input:focus-visible { outline: none; }
+/* 保留浏览器自带的搜索清除按钮（输入非空时出现），只把它的边距压掉 */
+.reader-search-field input::-webkit-search-cancel-button { margin-right: 0; }
 .reader-search-form button { flex-shrink: 0; min-height: 30px; padding: 4px 14px; font-size: 14px; }
 .reader-search-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .reader-search-status { max-height: 100px; overflow: auto; flex-shrink: 0; }

@@ -81,7 +81,13 @@
                 <div class="section-heading"><h3 id="reader-search-title">文内检索</h3></div>
                 <form class="reader-search-form" id="reader-search-form" role="search">
                   <label class="sr-only" for="reader-search-input">检索当前文献的整理文本</label>
-                  <input id="reader-search-input" type="search" maxlength="2000" autocomplete="off" />
+                  <div class="reader-search-field">
+                    <svg class="reader-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <circle cx="10.5" cy="10.5" r="6.5"></circle>
+                      <path d="m16 16 5 5"></path>
+                    </svg>
+                    <input id="reader-search-input" type="search" maxlength="2000" autocomplete="off" />
+                  </div>
                   <button class="secondary-button" type="submit" id="reader-search-submit">检索</button>
                 </form>
                 <div class="reader-search-action-row">
