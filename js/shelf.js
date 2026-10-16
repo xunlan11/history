@@ -225,23 +225,6 @@ window.addEventListener("resize", () => {
   });
 });
 
-function renderShelfToolbar(listNode, folder, state = getShelfState()) {
-  const stage = listNode.closest("[data-shelf-stage]");
-  // 层级信息放在页面大标题里（首页是侧栏标题，文献库页是顶部标题），这里只管文件夹级操作。
-  renderShelfTitle(listNode, folder, state);
-  const toolbar = stage.querySelector(".shelf-toolbar");
-  const rename = stage.querySelector("[data-shelf-rename]");
-  const dissolve = stage.querySelector("[data-shelf-dissolve]");
-  // 根目录没有文件夹级操作，整条工具栏收起。
-  toolbar.hidden = !folder;
-  rename.hidden = !folder;
-  rename.onclick = () => openShelfNameDialog(folder.id);
-  dissolve.hidden = !folder;
-  dissolve.onclick = () => {
-    if (requestDissolveShelfFolder(folder.id)) setShelfFolder(listNode, folder.parentId);
-  };
-}
-
 function createShelfUtilityCard(className, symbol, name, description) {
   const card = document.createElement("article");
   card.className = `book-card shelf-utility-card ${className}`;

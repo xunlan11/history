@@ -317,7 +317,8 @@ function renderBookShelf(listNode, countNode) {
   listNode.dataset.folderId = folder?.id || "";
   listNode.innerHTML = "";
   countNode.textContent = `共 ${countShelfDocuments(state, folder?.id || "")} 项`;
-  renderShelfToolbar(listNode, folder, state);
+  // 层级信息放在页面大标题里；书架里只排卡片。
+  renderShelfTitle(listNode, folder, state);
   // 卡片顺序固定：新增文献/故纸堆 → 新建文件夹 → （文件夹内才有）返回上一级。
   listNode.append(createShelfAddCard());
   listNode.append(createShelfCreateCard(folder?.id || ""));
@@ -333,12 +334,6 @@ function renderBookShelf(listNode, countNode) {
       const entry = documentsById.get(key.slice(9));
       if (entry) listNode.append(createBookCard(entry.item, entry.index));
     }
-  }
-  if (folder && !folder.order.length) {
-    const empty = document.createElement("p");
-    empty.className = "shelf-empty";
-    empty.textContent = "文件夹还是空的。可在这里新建子文件夹，或返回上层拖入书籍和文件夹。";
-    listNode.append(empty);
   }
 }
 

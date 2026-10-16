@@ -4215,40 +4215,12 @@ body {
 
 
 /* Shared personal bookshelf folders. */
-.shelf-stage .shelf-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  padding: 5px 0;
-  background: #fbfcf9f5;
-  border-radius: 8px;
-}
 .book-card[data-shelf-key] {
   cursor: grab;
   touch-action: none;
   user-select: none;
 }
 
-.shelf-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px 12px;
-  margin: 0 0 8px;
-}
-.shelf-toolbar[hidden] { display: none; }
-
-.shelf-folder-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-.shelf-folder-actions [hidden] { display: none; }
-
-.shelf-toolbar button,
 .shelf-name-actions button {
   padding: 7px 10px;
   border: 1px solid #dce2d9;
@@ -4259,8 +4231,6 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
-
-.shelf-toolbar button:hover { background: #eef3ea; }
 
 .folder-cover {
   display: flex;
@@ -4369,13 +4339,13 @@ body {
   max-width: 100%;
   min-width: 0;
 }
-/* 名字右对齐（紧贴改名按钮），单行显示，放不下时省略号正好落在按钮前面。 */
+/* 名字左对齐，占满除按钮外的剩余宽度；单行显示，放不下时省略号正好落在按钮前面。 */
 .folder-card .folder-name {
   display: block;
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-align: right;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4384,13 +4354,6 @@ body {
   outline-offset: 2px;
   background: #e7eedb;
   box-shadow: 0 8px 24px #476a3c30;
-}
-.shelf-empty {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.7;
 }
 .library-sidebar .folder-cover,
 .documents-stage .folder-cover {
