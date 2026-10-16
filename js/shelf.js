@@ -58,7 +58,9 @@ function normalizeShelfState(value, items = documents) {
     folder.order = normalizeOrder(folder.order, validByParent.get(folder.id));
     folder.documentIds = folder.order.filter((key) => key.startsWith("document:")).map((key) => key.slice(9));
   }
-  return { folders, order };
+  // 根目录（文献库）的显示名，可由标题行的重命名按钮自定义；空串表示用默认名。
+  const rootName = typeof value?.rootName === "string" ? value.rootName.trim().slice(0, 80) : "";
+  return { folders, order, rootName };
 }
 
 function getShelfStorageKey() {
@@ -175,11 +177,16 @@ function setShelfFolder(listNode, folderId = "") {
   listNode.closest("[data-shelf-stage]").scrollTop = 0;
 }
 
+// 根目录显示名：没自定义过就是「文献库」。
+function getShelfRootName(state = getShelfState()) {
+  return state.rootName || "文献库";
+}
+
 function getShelfPathParts(folder, state = getShelfState()) {
   const byId = new Map(state.folders.map((entry) => [entry.id, entry]));
   const ancestors = [];
   for (let current = folder; current; current = byId.get(current.parentId)) ancestors.unshift(current);
-  return ["文献库", ...ancestors.map((entry) => entry.name)];
+  return [getShelfRootName(state), ...ancestors.map((entry) => entry.name)];
 }
 
 // 当前目录及其所有子目录下的文献总数（不含文件夹本身）。
@@ -371,7 +378,7 @@ function requestDeleteShelfFolder(folderId) {
 // 只在文件夹内渲染：一级文件夹显示「文献库」，更深层显示上一级文件夹名；根目录没有上级，不渲染本卡片。
 function createShelfParentCard(listNode, folder, state) {
   const parent = state.folders.find((entry) => entry.id === folder.parentId);
-  const parentName = parent?.name || "文献库";
+  const parentName = parent?.name || getShelfRootName(state);
   const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, "");
   card.dataset.shelfParent = "";
   card.dataset.folderId = parent?.id || "";
@@ -465,22 +472,29 @@ function openShelfNameDialog(folderId = "") {
   const dialog = document.querySelector("#shelf-name-dialog");
   const form = dialog.querySelector("form");
   const input = dialog.querySelector("input");
-  const folder = getShelfState().folders.find((entry) => entry.id === folderId);
-  if (!folder) return;
-  dialog.querySelector("h2").textContent = "重命名文件夹";
-  input.value = folder.name;
+  const state = getShelfState();
+  const folder = folderId ? state.folders.find((entry) => entry.id === folderId) : null;
+  if (folderId && !folder) return;
+  // 传空 folderId 就是重命名根目录（文献库）的显示名。
+  dialog.querySelector("h2").textContent = folderId ? "重命名文件夹" : "重命名文献库";
+  input.value = folder ? folder.name : getShelfRootName(state);
   input.setCustomValidity("");
   input.oninput = () => input.setCustomValidity("");
   form.onsubmit = (event) => {
     event.preventDefault();
     const name = input.value.trim();
     if (!name) {
-      input.setCustomValidity("请输入文件夹名称");
+      input.setCustomValidity("请输入名称");
       input.reportValidity();
       return;
     }
-    const liveFolder = getShelfState().folders.find((entry) => entry.id === folderId);
-    if (liveFolder) liveFolder.name = name.slice(0, 80);
+    const live = getShelfState();
+    if (folderId) {
+      const liveFolder = live.folders.find((entry) => entry.id === folderId);
+      if (liveFolder) liveFolder.name = name.slice(0, 80);
+    } else {
+      live.rootName = name.slice(0, 80);
+    }
     saveShelfState();
     dialog.close();
     renderDocumentList();
@@ -490,6 +504,13 @@ function openShelfNameDialog(folderId = "") {
   input.focus();
   input.select();
 }
+
+// 标题行里的「重命名当前文件夹」按钮（根目录时改的是「文献库」这个显示名）。
+document.querySelector("#rename-shelf-folder")?.addEventListener("click", () => {
+  const listNode = document.querySelector("[data-shelf-list]");
+  if (!listNode) return;
+  openShelfNameDialog(listNode.dataset.folderId || "");
+});
 
 function getShelfDropTarget(event, state) {
   const hit = document.elementFromPoint(event.clientX, event.clientY);

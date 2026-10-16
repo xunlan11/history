@@ -1238,7 +1238,11 @@ def normalize_shelf(value: dict[str, Any], document_ids: list[str]) -> dict[str,
     for folder in folders:
         folder["order"] = normalize_order(folder["order"], valid_by_parent[folder["id"]])
         folder["documentIds"] = [key[9:] for key in folder["order"] if key.startswith("document:")]
-    return {"folders": folders, "order": order}
+    # 根目录（文献库）的自定义显示名；空串表示用前端默认名。
+    root_name = value.get("rootName")
+    if not isinstance(root_name, str):
+        root_name = ""
+    return {"folders": folders, "order": order, "rootName": root_name.strip()[:80]}
 
 
 def save_shelf(connection: sqlite3.Connection, user: dict[str, Any], value: dict[str, Any]) -> None:

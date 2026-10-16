@@ -20,6 +20,11 @@ function returnFromReader() {
   setView(readerReturnView);
 }
 
+// 当前书架所在的文件夹（首页↔文献库互跳时带上它，落到对面还是同一层）。
+function getCurrentShelfFolderId() {
+  return (documentList || allDocumentList)?.dataset.folderId || "";
+}
+
 function setView(name) {
   const route = PAGE_ROUTES[name];
   if (!route) {
@@ -29,6 +34,9 @@ function setView(name) {
   const url = new URL(route, window.location.href);
   if (name === "reader" && selectedDocumentId) {
     url.searchParams.set("document", selectedDocumentId);
+  } else if (name === "documents" || name === "library") {
+    const folderId = getCurrentShelfFolderId();
+    if (folderId) url.searchParams.set("folder", folderId);
   }
 
   const currentFrom = new URL(window.location.href).searchParams.get("from");
@@ -44,6 +52,15 @@ function applyRouteSelection() {
   const params = new URL(window.location.href).searchParams;
   const documentId = params.get("document");
   const pageId = params.get("page");
+
+  // 从对面页带过来的文件夹：确认存在就先把书架切到那一层，后面的首次渲染就是它。
+  const folderId = params.get("folder");
+  if (folderId) {
+    const listNode = documentList || allDocumentList;
+    if (listNode && getShelfState().folders.some((entry) => entry.id === folderId)) {
+      listNode.dataset.folderId = folderId;
+    }
+  }
 
   if (documentId && documents.some((item) => item.id === documentId)) {
     selectedDocumentId = documentId;

@@ -12,12 +12,15 @@
         <section class="view active" id="documents-view" aria-label="文献库">
           <header class="documents-topbar">
             <div class="documents-nav">
-              <button class="ghost-link" type="button" data-view="library">‹ 返回首页</button>
+              <button class="ghost-link" type="button" data-view="library">‹ 返回</button>
             </div>
             <div class="status-title">
               <p class="eyebrow" id="shelf-title">文献库</p>
             </div>
-            <span class="documents-count" id="all-document-count">共 0 项</span>
+            <div class="documents-actions">
+              <button class="ghost-link shelf-rename-current" id="rename-shelf-folder" type="button" aria-label="重命名当前文件夹">✎</button>
+              <span class="documents-count" id="all-document-count">共 0 项</span>
+            </div>
           </header>
 
           <div id="document-shelf-slot" data-list-id="all-document-list" data-stage-class="shelf-stage documents-stage"></div>

@@ -3031,12 +3031,36 @@ body {
 .sidebar-heading h2 {
   display: flex;
   flex: 1 1 auto;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
   min-width: 0;
   margin: 0;
   font-size: 22px;
   line-height: 1.2;
+}
+
+/* 拼在图标题行右侧：先计数、再「展开」，两个都在这一行垂直居中。 */
+.sidebar-shelf-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 标题行的「重命名当前文件夹」按钮。 */
+.shelf-rename-current {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 文献库页顶栏右侧：重命名按钮 + 计数。 */
+.documents-actions {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 10px;
+  min-width: 0;
 }
 
 /* 标题里的文件夹层级：整条放不下时由 renderShelfTitle 折叠成「››最后一层」，这里只负责尾部省略。 */
@@ -3048,17 +3072,12 @@ body {
   white-space: nowrap;
 }
 
-.sidebar-heading h2 .sidebar-count {
-  flex: 0 0 auto;
-  margin-left: 0;
-}
-
 .sidebar-count {
   display: inline;
-  margin-left: 8px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.25;
+  white-space: nowrap;
 }
 
 .conversation-list {
@@ -3770,6 +3789,7 @@ body {
     overflow: hidden;
   }
 
+  .documents-actions,
   .documents-count,
   .documents-nav {
     justify-self: center;
