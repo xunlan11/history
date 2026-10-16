@@ -94,7 +94,7 @@ function applyPlatformReloadSignal(force = false) {
     return;
   }
   acknowledgeReloadSignal(signal);
-  window.location.reload();
+  reloadWithFreshAssets();
 }
 
 // 发布完成后调用：标记本页已处理，并通知其它页面刷新
@@ -107,6 +107,29 @@ function broadcastPlatformReload() {
     /* 存储不可用时仅本页刷新 */
   }
   return signal;
+}
+
+// 普通 reload() 只强制主文档回源，styles.css / js/*.js 仍可能吃 HTTP 缓存
+// （服务端漏配 Cache-Control 时尤其明显，表现成「部分页面看着没更新」）。
+// 这里先用 cache:"reload" 把本页引用的同源资源重新拉一遍（顺带刷新缓存条目），
+// 再刷新页面，等价于 Ctrl+F5，不依赖服务端响应头。
+let platformReloadInFlight = false;
+
+async function reloadWithFreshAssets() {
+  if (platformReloadInFlight) {
+    return;
+  }
+  platformReloadInFlight = true;
+  const urls = new Set([location.href]);
+  for (const node of document.querySelectorAll('link[rel="stylesheet"][href], script[src]')) {
+    const url = node.href || node.src;
+    if (url) {
+      urls.add(url);
+    }
+  }
+  const sameOrigin = [...urls].filter((url) => url.startsWith(`${location.origin}/`));
+  await Promise.allSettled(sameOrigin.map((url) => fetch(url, { cache: "reload" })));
+  window.location.reload();
 }
 
 window.addEventListener("storage", (event) => {

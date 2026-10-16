@@ -1,4 +1,49 @@
 let versionUpdateRequested = false;
+// 本页加载时线上发布的提交；轮询发现它变了，说明别人（或别的浏览器）发布了新版本
+let loadedCommit = "";
+let versionRefreshPending = false;
+
+// 有未保存的整理文本编辑 / 进行中的上传时不能强刷，否则会丢内容。
+// （上传还有 registration.js 的 beforeunload 兜底，但这里直接跳过更干净。）
+function versionRefreshBlocked() {
+  if (typeof readerEditing !== "undefined" && readerEditing) {
+    return true;
+  }
+  return typeof hasActiveDocumentUpload === "function" && hasActiveDocumentUpload();
+}
+
+function refreshPageWithFreshAssets() {
+  if (typeof reloadWithFreshAssets === "function") {
+    reloadWithFreshAssets();
+    return;
+  }
+  window.location.reload();
+}
+
+// 发布版本变了：先广播给同一浏览器的其它页面，再刷新本页。
+// 本页后台标签页、或没有未保存内容时立即刷新；可见且正在编辑则挂起，
+// 等编辑结束（下次轮询，≤30s）或页面转到后台时再刷。
+function applyVersionRefresh() {
+  if (!versionRefreshPending) {
+    return;
+  }
+  if (document.visibilityState !== "hidden" && versionRefreshBlocked()) {
+    return;
+  }
+  refreshPageWithFreshAssets();
+}
+
+function requestVersionRefresh() {
+  if (!versionRefreshPending) {
+    versionRefreshPending = true;
+    if (typeof broadcastPlatformReload === "function") {
+      broadcastPlatformReload();
+    }
+  }
+  applyVersionRefresh();
+}
+
+document.addEventListener("visibilitychange", applyVersionRefresh);
 
 function setServiceStatus(node, text, className) {
   if (!node) {
@@ -89,12 +134,24 @@ function showVersionUpdateButton() {
 }
 
 async function refreshVersionStatus() {
-  if (!versionServiceStatus || !versionUpdateButton) {
-    return;
-  }
-
   try {
     const result = await fetchServiceJson(VERSION_STATUS_URL, "Version check failed");
+
+    // 别人发布了新版本（currentCommit 变了）→ 全站自动跟上，无需手工强刷。
+    // 这段不依赖版本状态节点，所以阅读页等没有该节点的页面也照样自动刷新。
+    // 本页自己的「更新」流程走下面的 versionUpdateRequested 分支，不在这里处理。
+    if (!versionUpdateRequested) {
+      if (!loadedCommit) {
+        loadedCommit = result.currentCommit || "";
+      } else if (result.currentCommit && result.currentCommit !== loadedCommit) {
+        requestVersionRefresh();
+        return;
+      }
+    }
+
+    if (!versionServiceStatus || !versionUpdateButton) {
+      return;
+    }
 
     if (result.updating) {
       showVersionStatus("更新中", "service-warn");
@@ -114,7 +171,7 @@ async function refreshVersionStatus() {
       if (typeof broadcastPlatformReload === "function") {
         broadcastPlatformReload();
       }
-      window.location.reload();
+      refreshPageWithFreshAssets();
       return;
     }
 
