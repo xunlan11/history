@@ -10,33 +10,39 @@ function isReferenceScopeActive(conversation = getSelectedConversation()) {
   return getConversationReferenceDocumentIds(conversation).length > 0;
 }
 
+function getOwnReferenceDocuments() {
+  return documents.filter((item) => canEditDocument(item));
+}
+
 function getSmartScopeDocuments(conversation = getSelectedConversation()) {
+  const ownDocuments = getOwnReferenceDocuments();
   if (Array.isArray(conversation?.materialDocumentIds)) {
     const ids = new Set(conversation.materialDocumentIds);
-    return documents.filter((item) => ids.has(item.id));
+    return ownDocuments.filter((item) => ids.has(item.id));
   }
   const referenceIds = getConversationReferenceDocumentIds(conversation);
   if (!referenceIds.length) {
-    return documents;
+    return ownDocuments;
   }
 
   const referenceIdSet = new Set(referenceIds);
-  return documents.filter((item) => referenceIdSet.has(item.id));
+  return ownDocuments.filter((item) => referenceIdSet.has(item.id));
 }
 
 function getReferenceScopeReport(conversation = getSelectedConversation()) {
+  const ownDocuments = getOwnReferenceDocuments();
   const referenceIds = getConversationReferenceDocumentIds(conversation);
   if (!referenceIds.length) {
     return {
       active: false,
-      documents,
-      usableDocuments: documents,
+      documents: ownDocuments,
+      usableDocuments: ownDocuments,
       warnings: [],
       error: "",
     };
   }
 
-  const documentsById = new Map(documents.map((item) => [item.id, item]));
+  const documentsById = new Map(ownDocuments.map((item) => [item.id, item]));
   const selectedDocuments = referenceIds.map((id) => documentsById.get(id)).filter(Boolean);
   const missingCount = referenceIds.length - selectedDocuments.length;
   const usableDocuments = [];
@@ -61,7 +67,7 @@ function getReferenceScopeReport(conversation = getSelectedConversation()) {
   const warnings = [];
 
   if (missingCount) {
-    warnings.push(`${missingCount} 篇已选文献已不存在`);
+    warnings.push(`${missingCount} 篇已选文献不在个人文献库中，请先下载或重新选择`);
   }
   if (emptyDocuments.length) {
     warnings.push(`${emptyDocuments.map(getDocumentDisplayTitle).join("、")}暂无处理后文本`);
@@ -84,7 +90,8 @@ function openReferenceDocumentDialog() {
     return;
   }
 
-  pendingReferenceDocumentIds = new Set(getConversationReferenceDocumentIds());
+  const ownIds = new Set(getOwnReferenceDocuments().map((item) => item.id));
+  pendingReferenceDocumentIds = new Set(getConversationReferenceDocumentIds().filter((id) => ownIds.has(id)));
   referenceDocumentSearch.value = "";
   renderReferenceDocumentOptions();
   referenceDocumentDialog.classList.remove("hidden");
@@ -98,7 +105,8 @@ function closeReferenceDocumentDialog() {
 
 function confirmReferenceDocuments() {
   const conversation = ensureReferenceConversation();
-  setConversationReferenceDocumentIds(Array.from(pendingReferenceDocumentIds), conversation);
+  const ids = getOwnReferenceDocuments().filter((item) => pendingReferenceDocumentIds.has(item.id)).map((item) => item.id);
+  setConversationReferenceDocumentIds(ids, conversation);
   closeReferenceDocumentDialog();
   renderReferenceDocuments();
   renderConversationList();
@@ -111,7 +119,7 @@ function renderReferenceDocuments() {
 
   const conversation = getSelectedConversation();
   const referenceIds = getConversationReferenceDocumentIds(conversation);
-  const documentsById = new Map(documents.map((item) => [item.id, item]));
+  const documentsById = new Map(getOwnReferenceDocuments().map((item) => [item.id, item]));
   referenceDocumentChips.innerHTML = "";
 
   referenceIds.forEach((id) => {
@@ -122,7 +130,7 @@ function renderReferenceDocuments() {
 
     chip.className = "reference-chip";
     chip.classList.toggle("reference-chip-warning", !item);
-    label.textContent = item ? getDocumentDisplayTitle(item) : "文献已不存在";
+    label.textContent = item ? getDocumentDisplayTitle(item) : "文献不在个人文献库中";
     remove.type = "button";
     remove.textContent = "×";
     remove.title = `移除${label.textContent}`;
@@ -161,7 +169,8 @@ function renderReferenceDocumentOptions() {
   }
 
   const query = (referenceDocumentSearch?.value || "").trim().toLowerCase();
-  const matchedDocuments = documents.filter((item) => {
+  const ownDocuments = getOwnReferenceDocuments();
+  const matchedDocuments = ownDocuments.filter((item) => {
     const haystack = [item.title, item.author, item.year, item.tags, item.fileName]
       .filter(Boolean)
       .join("\n")
@@ -173,7 +182,7 @@ function renderReferenceDocumentOptions() {
   if (!matchedDocuments.length) {
     const empty = document.createElement("p");
     empty.className = "reference-document-empty";
-    empty.textContent = documents.length ? "没有匹配的文献" : "文献库为空，请先登记并处理文献";
+    empty.textContent = ownDocuments.length ? "没有匹配的文献" : "个人文献库为空，请先登记文献或从公开文献库下载";
     referenceDocumentList.append(empty);
   }
 
@@ -215,7 +224,7 @@ function updateReferenceSelectionSummary() {
     return;
   }
   const count = pendingReferenceDocumentIds.size;
-  referenceSelectionSummary.textContent = count ? `已选择 ${count} 篇文献` : "未选择文献，将使用整个文献库";
+  referenceSelectionSummary.textContent = count ? `已选择 ${count} 篇文献` : "未选择文献，将使用自己的文献库";
 }
 
 openReferenceDocumentsButton?.addEventListener("click", openReferenceDocumentDialog);
@@ -933,6 +942,12 @@ async function captureConversationTurnRequest(conversation, mode, prompt, before
     documentIds: getSmartScopeDocuments(conversation).map((item) => item.id),
     textPolicy: isReferenceScopeActive(conversation) ? "processed" : "primary",
   };
+  if (previousRequest) {
+    // Edited prompts may contain document IDs captured before the personal scope rule.
+    const ownIds = new Set(getOwnReferenceDocuments().map((item) => item.id));
+    retrieval.documentIds = Array.isArray(retrieval.documentIds)
+      ? retrieval.documentIds.filter((id) => ownIds.has(id)) : [...ownIds];
+  }
   const fullMatches = mode === "chat" || mode === "search";
   const attachmentSources = fullMatches ? JSON.parse(JSON.stringify(previousRequest?.attachmentSources ||
     report.attachments.ready.map(({ id, fileName, extractedText }) => ({ id, fileName, extractedText })))) : null;

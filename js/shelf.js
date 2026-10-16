@@ -2,7 +2,16 @@
 let shelfState = { folders: [], order: [] };
 let shelfStorageKey = null;
 
+function isPublicLibraryDocument(item) {
+  return item?.visibility === "public" && !canEditDocument(item);
+}
+
+function getPublicLibraryDocuments() {
+  return documents.filter(isPublicLibraryDocument);
+}
+
 function normalizeShelfState(value, items = documents) {
+  items = items.filter((item) => canEditDocument(item));
   const documentIds = new Set(items.map((item) => item.id));
   const assigned = new Set();
   const byId = new Map();
@@ -118,7 +127,7 @@ function moveShelfEntry(kind, itemId, folderId = "") {
   if (folderId && !target) return false;
   if (kind === "folder") {
     if (!canMoveShelfFolder(itemId, folderId, state)) return false;
-  } else if (kind !== "document" || !documents.some((item) => item.id === itemId)) return false;
+  } else if (kind !== "document" || !documents.some((item) => item.id === itemId && canEditDocument(item))) return false;
   const key = `${kind}:${itemId}`;
   state.order = state.order.filter((entry) => entry !== key);
   for (const folder of state.folders) {
@@ -172,6 +181,7 @@ function syncShelfOrderFromList(listNode) {
 }
 
 function setShelfFolder(listNode, folderId = "") {
+  delete listNode.dataset.publicLibrary;
   listNode.dataset.folderId = folderId;
   renderDocumentList();
   listNode.closest("[data-shelf-stage]").scrollTop = 0;
@@ -201,7 +211,7 @@ function countShelfDocuments(state = getShelfState(), folderId = "") {
   const countFrom = (id) => {
     const own = id
       ? state.folders.find((folder) => folder.id === id)?.documentIds.length || 0
-      : documents.filter((item) => !inAnyFolder.has(item.id)).length;
+      : documents.filter((item) => canEditDocument(item) && !inAnyFolder.has(item.id)).length;
     return own + (childrenByParent.get(id) || []).reduce((sum, child) => sum + countFrom(child.id), 0);
   };
   return countFrom(folderId || "");
@@ -210,9 +220,12 @@ function countShelfDocuments(state = getShelfState(), folderId = "") {
 // 标题里的层级：整条放得下就显示完整路径；放不下只留最后一层，
 // 前面用重复的「›」标出省略了几层（不加省略号），最后一层从头显示、尾部省略。
 function renderShelfTitle(listNode, folder, state = getShelfState()) {
+  const renameButton = document.querySelector("#rename-shelf-folder");
+  if (renameButton) renameButton.hidden = listNode.dataset.publicLibrary === "true";
   const node = document.querySelector("#shelf-title");
   if (!node) return;
   const parts = getShelfPathParts(folder, state);
+  if (listNode.dataset.publicLibrary === "true") parts.push("公开文献库");
   node.classList.remove("is-collapsed");
   node.textContent = parts.join(" › ");
   if (parts.length < 2 || node.scrollWidth <= node.clientWidth + 1) return;
@@ -293,6 +306,29 @@ function createShelfCreateCard(folderId = "") {
     if (Date.now() < suppressDocumentClickUntil) return;
     createShelfFolder(folderId);
   };
+  return card;
+}
+
+// 公共入口固定在个人书架的工具卡片之后，不参与排序或拖拽。
+function createPublicLibraryCard(listNode) {
+  const card = createShelfUtilityCard("shelf-public-card", "◎", "公开文献库", "");
+  const button = card.querySelector("button");
+  button.title = `浏览其他用户的公开文献（${getPublicLibraryDocuments().length} 项）`;
+  button.onclick = () => {
+    if (Date.now() < suppressDocumentClickUntil) return;
+    listNode.dataset.publicLibrary = "true";
+    renderDocumentList();
+    listNode.closest("[data-shelf-stage]").scrollTop = 0;
+  };
+  return card;
+}
+
+function createPublicLibraryReturnCard(listNode, folder, state) {
+  const name = folder?.name || getShelfRootName(state);
+  const card = createShelfUtilityCard("shelf-parent-card", "↰", name, "");
+  const button = card.querySelector("button");
+  button.title = `返回：${name}`;
+  button.onclick = () => setShelfFolder(listNode, folder?.id || "");
   return card;
 }
 

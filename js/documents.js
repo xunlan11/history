@@ -37,6 +37,7 @@ function setView(name) {
   } else if (name === "documents" || name === "library") {
     const folderId = getCurrentShelfFolderId();
     if (folderId) url.searchParams.set("folder", folderId);
+    if ((documentList || allDocumentList)?.dataset.publicLibrary === "true") url.searchParams.set("publicLibrary", "true");
   }
 
   const currentFrom = new URL(window.location.href).searchParams.get("from");
@@ -60,6 +61,11 @@ function applyRouteSelection() {
     if (listNode && getShelfState().folders.some((entry) => entry.id === folderId)) {
       listNode.dataset.folderId = folderId;
     }
+  }
+
+  if (params.get("publicLibrary") === "true") {
+    const listNode = documentList || allDocumentList;
+    if (listNode) listNode.dataset.publicLibrary = "true";
   }
 
   if (documentId && documents.some((item) => item.id === documentId)) {
@@ -336,10 +342,18 @@ function renderBookShelf(listNode, countNode) {
   countNode.textContent = `共 ${countShelfDocuments(state, folder?.id || "")} 项`;
   // 层级信息放在页面大标题里；书架里只排卡片。
   renderShelfTitle(listNode, folder, state);
-  // 卡片顺序固定：新增文献/故纸堆 → 新建文件夹 → （文件夹内才有）返回上一级。
+  if (listNode.dataset.publicLibrary === "true") {
+    const publicDocuments = getPublicLibraryDocuments();
+    countNode.textContent = `共 ${publicDocuments.length} 项`;
+    listNode.append(createPublicLibraryReturnCard(listNode, folder, state));
+    for (const item of publicDocuments) listNode.append(createBookCard(item, documents.indexOf(item)));
+    return;
+  }
+  // 固定顺序：新增文献 → 新建文件夹 →（文件夹内）上一级 → 公开文献库。
   listNode.append(createShelfAddCard());
   listNode.append(createShelfCreateCard(folder?.id || ""));
   if (folder) listNode.append(createShelfParentCard(listNode, folder, state));
+  listNode.append(createPublicLibraryCard(listNode));
   const documentsById = new Map(documents.map((item, index) => [item.id, { item, index }]));
   const foldersById = new Map(state.folders.map((entry) => [entry.id, entry]));
   const keys = folder ? folder.order : state.order;
@@ -377,7 +391,7 @@ function createBookCard(item, index) {
   card.classList.toggle("is-upload-failed", Boolean(uploadState && !uploadState.active && uploadState.error));
   if (!canEditDocument(item)) {
     card.classList.add("read-only");
-    openButton.title = "公开文献，仅可查看";
+    openButton.title = "预览公开文献，可下载到我的文献库后编辑";
   }
   node.querySelector(".book-title").textContent = getDocumentDisplayTitle(item);
   node.querySelector(".book-year").textContent = item.year || "年份未录";
@@ -399,6 +413,11 @@ function createBookCard(item, index) {
 
   const openDocumentFromCard = async () => {
     if (Date.now() < suppressDocumentClickUntil || documentDragState?.phase === "dragging") {
+      return;
+    }
+
+    if (isPublicLibraryDocument(item)) {
+      openPublicDocumentPreview(getLiveDocument(item.id) || item, { folderId: getCurrentShelfFolderId() });
       return;
     }
 
@@ -449,6 +468,7 @@ function createBookCard(item, index) {
 
 function prepareDocumentDrag(event, card, itemId, kind = "document") {
   if (event.button !== 0 || !event.isPrimary) return;
+  if (kind === "document" && !canEditDocument(documents.find((item) => item.id === itemId))) return;
   const listNode = card.closest(".document-list");
   if (!listNode) return;
   clearDocumentDragState();
@@ -842,7 +862,13 @@ function appendDocumentDetailRow(container, entries, className = "") {
   container.append(row);
 }
 
-// 信息栏可编辑字段（创建者、处理进度等由系统维护，不在这里）
+function appendDocumentAttribution(container, item) {
+  const entries = [["创建者", item.creator?.username || "创建者信息不可用"]];
+  if (item.modifier?.username) entries.push(["修改者", item.modifier.username]);
+  appendDocumentDetailRow(container, entries, entries.length > 1 ? "metadata-pair-row" : "");
+}
+
+// 信息栏可编辑字段（创建者、修改者、处理进度等由系统维护，不在这里）
 const READER_DETAIL_FIELDS = [
   { key: "title", label: "文献名", placeholder: "未识别" },
   { key: "author", label: "作者", placeholder: "未录" },
@@ -854,7 +880,7 @@ const READER_DETAIL_FIELDS = [
 let readerDetailEditing = false;
 let readerDetailEditingDocumentId = "";
 
-// 编辑按钮只对文献创建者显示（canEditDocument 已按 ownerId 判定）。
+// 编辑按钮只对文献所有者显示（canEditDocument 已按 ownerId 判定）。
 function renderReaderDetailActions(item, canEdit, editing) {
   if (!readerDetailActions) {
     return;
@@ -914,7 +940,7 @@ const READER_DETAIL_EDIT_ORDER = ["title", "author", "year", "publisher", "creat
 function appendReaderDetailEditor(item) {
   READER_DETAIL_EDIT_ORDER.forEach((key) => {
     if (key === "creator") {
-      appendDocumentDetailRow(readerDetailNode, [["创建者", item.creator?.username || "创建者信息不可用"]]);
+      appendDocumentAttribution(readerDetailNode, item);
       return;
     }
 
@@ -1021,8 +1047,8 @@ function renderReaderSidebar() {
       ["出版社", item.publisher || "未录"],
     ];
     rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+    appendDocumentAttribution(readerDetailNode, item);
     [
-      ["创建者", item.creator?.username || "创建者信息不可用"],
       ["标签", item.tags || "未录"],
       ["处理进度", getProcessingTaskLabel(item)],
     ]

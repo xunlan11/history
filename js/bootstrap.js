@@ -17,6 +17,7 @@
     "../js/processing.js",
     "../js/registration.js",
     "../js/service.js",
+    "../js/export.js",
     "../js/main.js",
   ];
 

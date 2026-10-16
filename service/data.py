@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -929,14 +930,20 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
     if table == "documents":
         result = []
         for row, payload in zip(rows, payloads):
+            provenance = payload.pop("provenance", {})
             payload.pop("creator", None)
+            payload.pop("modifier", None)
             payload.pop("ownerId", None)
             payload.pop("canEdit", None)
             is_owner = bool(user and row["owner_id"] == user.get("id"))
             payload["ownerId"] = row["owner_id"] if is_owner else None
             payload["canEdit"] = is_owner
-            if row["owner_username"]:
+            if provenance.get("creator"):
+                payload["creator"] = provenance["creator"]
+            elif row["owner_username"]:
                 payload["creator"] = {"username": row["owner_username"]}
+            if provenance.get("modifier"):
+                payload["modifier"] = provenance["modifier"]
             result.append(rehydrate_document_assets(connection, payload))
         return result
     result = []
@@ -967,14 +974,20 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             continue
 
         existing = connection.execute(
-            "SELECT version, owner_id FROM documents WHERE id = ?",
+            "SELECT version, owner_id, payload FROM documents WHERE id = ?",
             (document_id,),
         ).fetchone()
         if existing and existing["owner_id"] != user["id"]:
             continue
 
         stored_document = processing_scheduler.preserve_server_fields(connection, dict(document))
-        stored_document.pop("creator", None)
+        # Attribution is server-owned: a sync cannot create, change or erase it.
+        for field in ("creator", "modifier", "provenance"):
+            stored_document.pop(field, None)
+        if existing:
+            provenance = json_load(existing["payload"]).get("provenance")
+            if provenance:
+                stored_document["provenance"] = provenance
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
         materialize_document_assets(connection, document_id, stored_document, timestamp)
@@ -1176,7 +1189,7 @@ def load_shelf(connection: sqlite3.Connection, user: dict[str, Any] | None) -> d
     row = connection.execute(
         "SELECT value FROM app_meta WHERE key = ?", (f"shelf.user-{user['id']}",)
     ).fetchone()
-    return json.loads(row["value"]) if row else {"folders": [], "order": []}
+    return normalize_shelf(json.loads(row["value"]), owned_shelf_document_ids(connection, user)) if row else {"folders": [], "order": []}
 
 
 def normalize_shelf(value: dict[str, Any], document_ids: list[str]) -> dict[str, Any]:
@@ -1245,13 +1258,15 @@ def normalize_shelf(value: dict[str, Any], document_ids: list[str]) -> dict[str,
     return {"folders": folders, "order": order, "rootName": root_name.strip()[:80]}
 
 
-def save_shelf(connection: sqlite3.Connection, user: dict[str, Any], value: dict[str, Any]) -> None:
-    # Layout and nesting belong to the account, independently of document ownership.
-    document_ids = [row["id"] for row in connection.execute(
-        "SELECT id FROM documents WHERE deleted_at IS NULL AND (owner_id = ? OR visibility = 'public') "
-        "ORDER BY sort_order ASC, updated_at DESC",
-        (user["id"],),
+def owned_shelf_document_ids(connection: sqlite3.Connection, user: dict[str, Any]) -> list[str]:
+    return [row["id"] for row in connection.execute(
+        "SELECT id FROM documents WHERE deleted_at IS NULL AND owner_id = ? "
+        "ORDER BY sort_order ASC, updated_at DESC", (user["id"],),
     )]
+
+
+def save_shelf(connection: sqlite3.Connection, user: dict[str, Any], value: dict[str, Any]) -> None:
+    document_ids = owned_shelf_document_ids(connection, user)
     connection.execute(
         "INSERT INTO app_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (f"shelf.user-{user['id']}", json_dump(normalize_shelf(value, document_ids))),
@@ -1530,12 +1545,92 @@ def require_owned_document(connection, document_id: str, user):
     if not row:
         raise HTTPException(status_code=404, detail="文献不存在")
     if row["owner_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="只有创建者可以修改文献")
+        raise HTTPException(status_code=403, detail="只有文献所有者可以修改文献")
 
 
 def public_processing_document(connection, document_id, user):
     # 使用与初始化流程相同的可见性和资产投影。
     return next(doc for doc in active_payloads(connection, "documents", user) if doc["id"] == document_id)
+
+
+def copy_document_assets(connection, source_id, document, page_ids, timestamp, copied_paths):
+    rows = connection.execute(
+        "SELECT * FROM document_files WHERE document_id=? AND deleted_at IS NULL", (source_id,),
+    ).fetchall()
+    for row in rows:
+        old_page_id = row["page_id"] or ""
+        if old_page_id and old_page_id not in page_ids:
+            continue
+        page_id = page_ids.get(old_page_id, "")
+        source_path = (FILE_STORAGE_DIR / row["storage_path"]).resolve()
+        if not source_path.is_relative_to(FILE_STORAGE_DIR.resolve()) or not source_path.is_file():
+            raise HTTPException(status_code=409, detail="文献文件缺失，暂时无法下载")
+        storage_path = relative_storage_path(document["id"], row["role"], row["sha256"],
+                                             row["mime_type"], row["original_name"], page_id)
+        target = FILE_STORAGE_DIR / storage_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        copied_paths.append(target)
+        shutil.copyfile(source_path, target)
+        asset = upsert_file_record(connection, document_id=document["id"], page_id=page_id,
+            role=row["role"], timestamp=timestamp, asset={
+                "storagePath": storage_path.as_posix(), "sha256": row["sha256"],
+                "size": row["size_bytes"], "mimeType": row["mime_type"], "fileName": row["original_name"],
+            })
+        apply_asset_to_document(document, asset)
+
+
+@app.post("/api/documents/{document_id}/download")
+def download_public_document(document_id: str) -> dict[str, Any]:
+    user = current_user()
+    copied_paths: list[Path] = []
+    try:
+        with database() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT documents.*, users.username AS owner_username FROM documents "
+                "LEFT JOIN users ON users.id=documents.owner_id "
+                "WHERE documents.id=? AND documents.deleted_at IS NULL "
+                "AND (documents.visibility='public' OR documents.owner_id=?)", (document_id, user["id"]),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="公开文献不存在或已取消公开")
+            if row["owner_id"] == user["id"]:
+                raise HTTPException(status_code=409, detail="这篇文献已属于你的文献库")
+            document = json_load(row["payload"])
+            provenance = document.get("provenance") or {}
+            creator = provenance.get("creator") or {"username": row["owner_username"] or "创建者信息不可用"}
+            timestamp = now_iso()
+            document.update(id=f"doc-{secrets.token_hex(16)}", visibility="private",
+                            createdAt=timestamp, updatedAt=timestamp, processingTask=None, registration=None)
+            for field in ("ownerId", "canEdit", "creator", "modifier", "provenance"):
+                document.pop(field, None)
+            page_ids = {}
+            for page in document.get("pages") or []:
+                old_id = page["id"]
+                page["id"] = f"page-{secrets.token_hex(16)}"
+                page_ids[old_id] = page["id"]
+            # File records and page identifiers are independent from the public source.
+            copy_document_assets(connection, document_id, document, page_ids, timestamp, copied_paths)
+            document["status"] = "已整理" if document.get("pages") and all(
+                page.get("punctuatedText") for page in document["pages"]) else "待整理"
+            upsert_documents(connection, [document], timestamp, user)
+            stored = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
+            payload = json_load(stored["payload"])
+            old_page_ids = {new_id: old_id for old_id, new_id in page_ids.items()}
+            for page in payload.get("pages") or []:
+                reader_index.copy_reader_index(connection, document_id, old_page_ids[page["id"]],
+                                               document["id"], page, timestamp)
+            upsert_document_pages(connection, document["id"], payload.get("pages") or [], timestamp)
+            payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
+                                     "sourceDocumentId": document_id}
+            connection.execute("UPDATE documents SET payload=? WHERE id=?", (json_dump(payload), document["id"]))
+            cursor = bump_sync_version(connection)
+            result = public_processing_document(connection, document["id"], user)
+        return {"document": result, "syncCursor": str(cursor)}
+    except Exception:
+        for path in copied_paths:
+            path.unlink(missing_ok=True)
+        raise
 
 
 @app.post("/api/documents/{document_id}/processing")
@@ -1585,7 +1680,7 @@ def cancel_document_processing(document_id: str):
         if not row:
             return {"status": "ok"}
         if row["owner_id"] != user["id"]:
-            raise HTTPException(status_code=403, detail="只有创建者可以停止文献任务")
+            raise HTTPException(status_code=403, detail="只有文献所有者可以停止文献任务")
         connection.execute("UPDATE processing_jobs SET status='cancelled',updated_at=? WHERE document_id=?", (now_iso(), document_id))
         if row["deleted_at"] is None:
             doc = json_load(row["payload"])
@@ -1683,7 +1778,7 @@ async def upload_file(
     if not existing:
         raise HTTPException(status_code=409, detail="请先保存文献记录再上传原件")
     if existing["owner_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="只有创建者可以修改文献")
+        raise HTTPException(status_code=403, detail="只有文献所有者可以修改文献")
 
     mime_type = document.content_type or mimetypes.guess_type(document.filename or "")[0] or "application/octet-stream"
     timestamp = now_iso()

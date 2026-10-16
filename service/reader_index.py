@@ -312,6 +312,25 @@ def save_ocr_layout(connection, document_id, page, result, timestamp):
     _set_metadata(page, status, revision, "", timestamp)
 
 
+def copy_reader_index(connection, source_document_id, source_page_id, document_id, page, timestamp):
+    """Copy the OCR layout and index while rebinding the independent page image."""
+    row = connection.execute(
+        "SELECT * FROM page_reader_indexes WHERE document_id=? AND page_id=?",
+        (source_document_id, source_page_id),
+    ).fetchone()
+    if not row:
+        return
+    layout = json.loads(row["layout"])
+    if layout:
+        layout["imageIdentity"] = _image_identity(page)
+    connection.execute("""INSERT INTO page_reader_indexes
+        (page_id,document_id,status,source_revision,text_hash,layout,payload,error,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?)""",
+        (page["id"], document_id, row["status"], row["source_revision"], row["text_hash"],
+         _json(layout), row["payload"], row["error"], timestamp))
+    reconcile_reader_index(connection, document_id, page, timestamp)
+
+
 def _stored_index_version(payload: str) -> int:
     try:
         return int(json.loads(payload or "{}").get("indexVersion") or 0)

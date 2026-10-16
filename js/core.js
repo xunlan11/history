@@ -368,6 +368,7 @@ function normalizeDocuments(items) {
         year: item.year || "",
         publisher: item.publisher || "",
         creator: item.creator && item.creator.username ? { username: String(item.creator.username) } : null,
+        modifier: item.modifier?.username ? { username: String(item.modifier.username) } : null,
         ownerId: item.ownerId ?? null,
         canEdit: item.canEdit === true,
         tags: item.tags || "",
@@ -818,6 +819,7 @@ async function syncFromServer(options = {}) {
     return false;
   }
 
+  const requestedRevision = syncRevision;
   const url = `${DATA_SYNC_URL}?cursor=${encodeURIComponent(syncCursor)}`;
   syncPullInFlight = fetch(url)
     .then(async (response) => {
@@ -826,6 +828,7 @@ async function syncFromServer(options = {}) {
       }
 
       const payload = await response.json();
+      if (syncDirty || syncRevision !== requestedRevision) return false;
       if (payload.changed === false) {
         syncCursor = String(payload.syncCursor || syncCursor);
         localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
