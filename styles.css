@@ -2528,8 +2528,7 @@ body {
 
 .home-statusbar,
 .documents-topbar,
-.reader-topbar,
-.documents-bottombar {
+.reader-topbar {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -3573,7 +3572,7 @@ body {
 
 #documents-view.active {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
   gap: 14px;
   padding: 14px;
@@ -3582,20 +3581,6 @@ body {
 
 .reader-topbar {
   margin-bottom: 0;
-}
-
-.documents-bottombar {
-  min-height: 58px;
-}
-
-.documents-hint {
-  grid-column: 1 / -1;
-  justify-self: center;
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
 }
 
 .documents-nav {
@@ -3745,13 +3730,12 @@ body {
   .home-statusbar,
   .documents-topbar,
   .reader-topbar,
-  .documents-bottombar,
   .home-board {
     grid-template-columns: 1fr;
   }
 
   #documents-view.active {
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
     height: 100vh;
     min-height: 0;
     overflow: hidden;
@@ -4234,8 +4218,17 @@ body {
   min-width: 0;
 }
 
-.shelf-path { flex: 1 1 100px; }
-.shelf-path [hidden],
+/* 左侧只做定位提示（文献库 › 一级 › 二级），不可点击；返回上一层由书架里的卡片负责。 */
+.shelf-path {
+  flex: 1 1 100px;
+  overflow: hidden;
+  margin: 0;
+  color: #3f4a3d;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .shelf-folder-actions [hidden] { display: none; }
 
 .shelf-toolbar button,
@@ -4251,22 +4244,6 @@ body {
 }
 
 .shelf-toolbar button:hover { background: #eef3ea; }
-.shelf-root { flex-shrink: 0; }
-.shelf-current {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #5c6659;
-  font-size: 13px;
-  font-weight: 700;
-}
-.shelf-hint {
-  margin: 0 0 22px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
 
 .folder-cover {
   display: flex;
@@ -4364,10 +4341,6 @@ body {
   background: #e7eedb;
   box-shadow: 0 8px 24px #476a3c30;
 }
-.shelf-root.shelf-drop-hover {
-  outline: 3px solid #6e8c68;
-  background: #e7eedb;
-}
 .shelf-empty {
   grid-column: 1 / -1;
   margin: 0;
@@ -4413,7 +4386,7 @@ body {
 .shelf-name-actions button[type="submit"] { background: #425c47; color: #fff; }
 
 
-/* Fixed trash and parent entries inside the nested bookshelf. */
+/* Fixed add/parent entries inside the nested bookshelf. */
 .shelf-utility-cover {
   display: flex;
   flex-direction: column;
@@ -4442,14 +4415,14 @@ body {
 }
 .shelf-utility-icon svg { width: 48px; height: 48px; }
 .shelf-utility-cover small { color: var(--muted); font-size: 11px; }
-.shelf-trash-card .shelf-utility-cover {
+/* 「新增文献」平静态沿用默认配色，只有拖拽变成「故纸堆」时才转为可删除的红调。 */
+.shelf-add-card.trash-active .shelf-utility-cover {
+  border: 1px dashed #c08d7b;
   background: #fcf7f4;
-  border-color: #eaded7;
   color: #875d50;
 }
-.shelf-trash-card .shelf-utility-icon { color: #af8575; }
-.shelf-trash-card.trash-active .shelf-utility-cover { border: 1px dashed #c08d7b; }
-.shelf-trash-card.trash-hover .shelf-utility-cover {
+.shelf-add-card.trash-active .shelf-utility-icon { color: #af8575; }
+.shelf-add-card.trash-hover .shelf-utility-cover {
   outline: 3px solid #bc6c59;
   outline-offset: 2px;
   background: #f7dfd7;
@@ -4467,23 +4440,6 @@ body {
   gap: 8px;
   padding: 14px 10px;
 }
-.shelf-current {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  overflow: visible;
-  white-space: normal;
-}
-.shelf-toolbar .shelf-crumb {
-  max-width: 150px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.shelf-crumb[aria-current="location"] { background: #e8eee3; font-weight: 700; }
-.shelf-crumb.shelf-drop-hover { outline: 3px solid #6e8c68; background: #e7eedb; }
 .folder-mini-folder { background: #b48e47; border-color: #eed9aa; }
 
 .folder-count {

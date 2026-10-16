@@ -175,46 +175,28 @@ function setShelfFolder(listNode, folderId = "") {
   listNode.closest("[data-shelf-stage]").scrollTop = 0;
 }
 
-function renderShelfToolbar(listNode, folder, state = getShelfState()) {
-  const stage = listNode.closest("[data-shelf-stage]");
-  const root = stage.querySelector("[data-shelf-root]");
-  const path = stage.querySelector("[data-shelf-current]");
-  const rename = stage.querySelector("[data-shelf-rename]");
-  const dissolve = stage.querySelector("[data-shelf-dissolve]");
-  root.textContent = "文献库";
-  root.dataset.shelfDestination = "";
-  root.dataset.folderId = "";
-  root.title = "返回文献库；可将卡片拖到此处移回根目录";
-  root.onclick = () => { if (Date.now() >= suppressDocumentClickUntil) setShelfFolder(listNode); };
-  path.replaceChildren();
-  path.hidden = !folder;
+function getShelfPathParts(folder, state = getShelfState()) {
   const byId = new Map(state.folders.map((entry) => [entry.id, entry]));
   const ancestors = [];
   for (let current = folder; current; current = byId.get(current.parentId)) ancestors.unshift(current);
-  for (const ancestor of ancestors) {
-    const separator = document.createElement("span");
-    separator.textContent = "›";
-    separator.setAttribute("aria-hidden", "true");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "shelf-crumb";
-    button.textContent = ancestor.name;
-    button.title = ancestor.name;
-    button.dataset.shelfDestination = "";
-    button.dataset.folderId = ancestor.id;
-    if (ancestor.id === folder.id) button.setAttribute("aria-current", "location");
-    button.onclick = () => { if (Date.now() >= suppressDocumentClickUntil) setShelfFolder(listNode, ancestor.id); };
-    path.append(separator, button);
-  }
-  stage.querySelector("[data-shelf-create]").onclick = () => openShelfNameDialog("", folder?.id || "");
-  stage.querySelector("[data-shelf-add]").onclick = openDocumentForm;
+  return ["文献库", ...ancestors.map((entry) => entry.name)];
+}
+
+function renderShelfToolbar(listNode, folder, state = getShelfState()) {
+  const stage = listNode.closest("[data-shelf-stage]");
+  // 左侧只做定位提示（文献库 › 一级 › 二级），返回上一层由书架里的「上层文件夹」卡片负责。
+  const path = stage.querySelector("[data-shelf-path]");
+  const pathText = getShelfPathParts(folder, state).join(" › ");
+  path.textContent = pathText;
+  path.title = pathText;
+  const rename = stage.querySelector("[data-shelf-rename]");
+  const dissolve = stage.querySelector("[data-shelf-dissolve]");
   rename.hidden = !folder;
   rename.onclick = () => openShelfNameDialog(folder.id);
   dissolve.hidden = !folder;
   dissolve.onclick = () => {
     if (requestDissolveShelfFolder(folder.id)) setShelfFolder(listNode, folder.parentId);
   };
-  stage.querySelector("[data-shelf-hint]").textContent = "拖入文件夹可分类，拖到上层文件夹可移出，拖入垃圾桶可删除";
 }
 
 function createShelfUtilityCard(className, symbol, name, description) {
@@ -238,25 +220,42 @@ function createShelfUtilityCard(className, symbol, name, description) {
   return card;
 }
 
-function createShelfTrashCard() {
-  const card = createShelfUtilityCard("shelf-trash-card", "", "垃圾桶", "拖入以删除");
-  card.querySelector(".shelf-utility-icon").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
-  card.querySelector("button").title = "拖入文献后确认删除；拖入文件夹可解散并将内容移到上层";
-  card.querySelector("button").onclick = () => {
-    if (typeof showUploadToast === "function") showUploadToast("将文献拖入垃圾桶后确认删除；文件夹解散后，内容会保留在上层。");
+// 同一个入口两种状态：平时是「新增文献」，开始拖拽后由 setDocumentTrashMode 变成「故纸堆」删除区。
+// 每一层文件夹（含根目录）都渲染同一张卡片，行为完全一致。
+function createShelfAddCard() {
+  const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献", "点击登记新文献");
+  const button = card.querySelector("button");
+  button.title = "点击登记新文献";
+  button.onclick = () => {
+    if (Date.now() < suppressDocumentClickUntil) return;
+    openDocumentForm();
   };
   return card;
 }
 
+// 「新建子文件夹」同样做成书架卡片，排在「新增文献 / 故纸堆」的下一个。
+function createShelfCreateCard(folderId = "") {
+  const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹", "点击新建子文件夹");
+  card.querySelector(".shelf-utility-icon").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v4M10 13h4"/></svg>';
+  const button = card.querySelector("button");
+  button.title = "点击新建子文件夹";
+  button.onclick = () => {
+    if (Date.now() < suppressDocumentClickUntil) return;
+    openShelfNameDialog("", folderId);
+  };
+  return card;
+}
+
+// 只在文件夹内渲染：一级文件夹显示「文献库」，更深层显示上一级文件夹名；根目录没有上级，不渲染本卡片。
 function createShelfParentCard(listNode, folder, state) {
-  const parent = state.folders.find((entry) => entry.id === folder?.parentId);
+  const parent = state.folders.find((entry) => entry.id === folder.parentId);
   const parentName = parent?.name || "文献库";
-  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, folder ? "上层文件夹" : "当前为根目录");
+  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, "返回上一级");
   card.dataset.shelfParent = "";
   card.dataset.folderId = parent?.id || "";
   const button = card.querySelector("button");
-  button.disabled = !folder;
-  button.setAttribute("aria-label", folder ? `返回上层文件夹：${parentName}` : "文献库根目录");
+  button.title = `返回上一级文件夹：${parentName}`;
+  button.setAttribute("aria-label", `返回上一级文件夹：${parentName}`);
   button.onclick = () => {
     if (Date.now() >= suppressDocumentClickUntil) setShelfFolder(listNode, parent?.id || "");
   };
@@ -363,7 +362,7 @@ function openShelfNameDialog(folderId = "", parentId = "") {
 
 function getShelfDropTarget(event, state) {
   const hit = document.elementFromPoint(event.clientX, event.clientY);
-  const navigation = hit?.closest("[data-shelf-parent], [data-shelf-destination]");
+  const navigation = hit?.closest("[data-shelf-parent]");
   let target = null;
   if (navigation?.closest("[data-shelf-stage]") === state.listNode.closest("[data-shelf-stage]") &&
       navigation.dataset.folderId !== (state.listNode.dataset.folderId || "")) {

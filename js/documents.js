@@ -318,7 +318,9 @@ function renderBookShelf(listNode, countNode) {
   listNode.innerHTML = "";
   countNode.textContent = `${documents.length} 项在库`;
   renderShelfToolbar(listNode, folder, state);
-  listNode.append(createShelfTrashCard());
+  // 卡片顺序固定：新增文献/故纸堆 → 新建文件夹 → （文件夹内才有）返回上一级。
+  listNode.append(createShelfAddCard());
+  listNode.append(createShelfCreateCard(folder?.id || ""));
   if (folder) listNode.append(createShelfParentCard(listNode, folder, state));
   const documentsById = new Map(documents.map((item, index) => [item.id, { item, index }]));
   const foldersById = new Map(state.folders.map((entry) => [entry.id, entry]));
@@ -614,7 +616,7 @@ function clearDocumentDragState() {
 function getDocumentTrashTarget(event, listNode) {
   const target = document
     .elementFromPoint(event.clientX, event.clientY)
-    ?.closest(".shelf-trash-card");
+    ?.closest(".shelf-add-card");
 
   if (!target || target.closest(".document-list") !== listNode) {
     return null;
@@ -627,14 +629,24 @@ function updateDocumentTrashHover(event) {
   if (!documentDragState) return;
   const state = documentDragState;
   const canDelete = state.kind === "folder" || canEditDocument(documents.find((item) => item.id === state.documentId));
-  const trash = state.listNode.querySelector(".shelf-trash-card");
-  trash?.classList.toggle("trash-hover", canDelete && Boolean(getDocumentTrashTarget(event, state.listNode)));
+  const card = state.listNode.querySelector(".shelf-add-card");
+  card?.classList.toggle("trash-hover", canDelete && Boolean(getDocumentTrashTarget(event, state.listNode)));
 }
 
+// 拖拽期间把「新增文献」卡片切换成「故纸堆」删除区，拖拽结束后再切回。
 function setDocumentTrashMode(listNode, isActive) {
-  const trash = listNode.querySelector(".shelf-trash-card");
-  trash?.classList.toggle("trash-active", isActive);
-  trash?.classList.remove("trash-hover");
+  const card = listNode.querySelector(".shelf-add-card");
+  if (!card) return;
+  card.classList.toggle("trash-active", isActive);
+  card.classList.remove("trash-hover");
+  const icon = card.querySelector(".shelf-utility-icon");
+  if (icon) icon.textContent = isActive ? "×" : "＋";
+  const name = card.querySelector(".folder-name");
+  if (name) name.textContent = isActive ? "故纸堆" : "新增文献";
+  const hint = card.querySelector("small");
+  if (hint) hint.textContent = isActive ? "拖到此处删除" : "点击登记新文献";
+  const button = card.querySelector("button");
+  if (button) button.title = isActive ? "拖到此处删除文献；拖入文件夹可解散并将内容移到上层" : "点击登记新文献";
 }
 
 function openDocumentForm() {

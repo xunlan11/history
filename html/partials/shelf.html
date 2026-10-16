@@ -1,17 +1,11 @@
 <section class="shelf-stage" data-shelf-stage aria-label="书架">
   <div class="shelf-toolbar">
-    <nav class="shelf-path" aria-label="文件夹位置">
-      <button type="button" class="shelf-root" data-shelf-root>文献库</button>
-      <span class="shelf-current" data-shelf-current hidden></span>
-    </nav>
+    <p class="shelf-path" data-shelf-path>文献库</p>
     <div class="shelf-folder-actions">
-      <button type="button" data-shelf-add>＋ 新增文献</button>
-      <button type="button" data-shelf-create>＋ 新建文件夹</button>
       <button type="button" data-shelf-rename hidden>重命名</button>
       <button type="button" data-shelf-dissolve hidden>解散文件夹</button>
     </div>
   </div>
-  <p class="shelf-hint" data-shelf-hint></p>
   <dialog class="shelf-name-dialog" id="shelf-name-dialog" aria-labelledby="shelf-name-title">
     <form>
       <h2 id="shelf-name-title">新建文件夹</h2>
