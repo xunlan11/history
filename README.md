@@ -24,7 +24,16 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 ### 待做
 
-1. 失败恢复。
+1. 失败恢复：上传、处理。
 2. 图表还原。
 3. 文献合并。
-4. 测试编年。
+4. 大串小并自动分解处理。
+5. 补充上传。
+
+### 测试
+
+1. 编年。
+2. 水印。
+3. 星火spark x2.5。
+4. 文献信息修改可用时间？
+5. 速度优化。
