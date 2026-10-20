@@ -272,6 +272,8 @@ systemctl --user daemon-reload
 systemctl --user enable --now history-ocr.service history-llm.service history-embedding.service
 ```
 
+OCR 保留文档预处理、版面与区域检测、文字识别和表格识别；公式识别、印章识别、图表转表格固定关闭，YAML 不再包含这三个模型的配置。版面检测仍可标出公式、印章和图表区域，供数据端保留区域类型和正文过滤语义。
+
 CPU OCR 首次启动可能下载 YAML 所需模型；迁移已有 `~/.paddlex` 可减少下载。检查日志直到加载完成。OCR `--device cpu`；嵌入 unit 屏蔽 CUDA/Vulkan/ROCm；生成 unit 不限制为 CPU。嵌入与生成各最多加载一个模型、并行数为 1，上下文配置为 4096，`OLLAMA_KEEP_ALIVE=-1` 在首次推理后保持驻留。预留总 RAM 时计入 OCR、生成 CPU 分担和嵌入同时运行，不能用下载体积代替运行占用。
 
 ### 5.2 准备两个模型并真实推理
@@ -455,6 +457,21 @@ Environment=OCR_UPSTREAM_URL=http://模型内网地址:8080
 ```
 
 位置分别是 `/etc/systemd/system/history-ocr.service.d/upstream.conf`、`/etc/systemd/system/literature-ocr.service.d/upstream.conf`。同机直连使用第 6.2 节的 loopback 地址，同样覆盖两个 OCR unit；反向隧道分支保持 `OCR_UPSTREAM_URL=http://127.0.0.1:18080`。OCR 使用 PaddleX `/layout-parsing`，健康路径默认 `/health`；遇到版本差异先核对实际 API，不能将不可用的上游伪装为就绪。
+
+整页方向分类与校正、文档去畸变按识别模式固定：正式识别开启，快速识别关闭，不再由 `OCR_UPSTREAM_GEOMETRY_FIX` 控制。正式识别返回的坐标以矫正后的图像为准；当前数据端仍保存原图。
+
+正式识别请求开启 `useWiredTableCellsTransToHtml` 和 `useWirelessTableCellsTransToHtml`，有线、无线表格均根据单元格位置重建 HTML 结构；快速识别关闭表格处理。此项由数据端请求控制，更新代码并重启数据端 OCR API 后生效。
+
+两种模式的请求均固定关闭公式识别、印章识别和图表转表格。模型端的 YAML 开关决定启动时加载哪些模型，请求开关决定本次识别执行哪些能力；精简已有部署时需要同步实际运行目录中的 YAML，并重启模型端 OCR：
+
+```bash
+# 在模型端仓库根目录执行；只重启 OCR 模型服务。
+install -m 0644 deploy/service/PP-StructureV3-cpu.yaml "$HOME/history-service/PP-StructureV3-cpu.yaml"
+systemctl --user restart history-ocr.service
+curl --fail http://127.0.0.1:8080/health
+```
+
+等待模型加载完成再检查健康接口。数据端更新 `service/ocr_upstream.py` 后，重启历史站和文学站的 OCR API（`sudo systemctl restart history-ocr.service literature-ocr.service`）；仅更新模型端 YAML 不会加载数据端代码。已有模型缓存可保留，停用后不会因缓存存在而自动加载。
 
 Data API 的 `PROCESSING_OCR_URL` 指向本机 OCR 编排（历史站 `8765`，文学站 `18765`），`PROCESSING_LLM_URL` 指向共享编排 `8865`；这两个地址不能改成模型服务的端口。后台调度默认启用，HTTP 超时默认 1000 秒，需容纳上游调用。上传、登记和正文任务由后端持久化，不需要额外常驻 CLI worker。
 
