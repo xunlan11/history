@@ -24,7 +24,7 @@ const readerSearchState = {
 };
 
 function getReaderSearchText(page) {
-  return [page?.punctuatedText, page?.cleanText].find((text) => typeof text === "string" && text.trim()) || "";
+  return typeof page?.punctuatedText === "string" && page.punctuatedText.trim() ? page.punctuatedText : "";
 }
 
 function readerSearchSnapshot(item) {
@@ -53,7 +53,7 @@ async function resolveReaderMatches(item, hits) {
       const points = Array.from(text), offsets = [0];
       for (const point of points) offsets.push(offsets.at(-1) + point.length);
       pagesById.set(page.id, { page, pageIndex, text, points, offsets, hash: await hashEvidenceText(text),
-        layer: page.punctuatedText?.trim() ? "punctuatedText" : "cleanText" });
+        layer: "punctuatedText" });
     }
     const cached = pagesById.get(hit.pageId);
     if (!cached || hit.sourceLayer !== cached.layer || hit.sourceHash !== cached.hash) continue;

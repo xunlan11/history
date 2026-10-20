@@ -165,22 +165,22 @@ class HttpServices:
             result = self._llm("punctuate", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
-                "sourceLayer": "clean"})
+                "sourceLayer": "normalized"})
             if page.get("normalizedText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("标点服务没有返回正文")
             return result
         if operation == "proofreading":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             previous = sorted((p for p in document["pages"] if p["pageNumber"] < page_number and (
-                p.get("cleanText") or p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText"))),
+                p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText"))),
                 key=lambda p: p["pageNumber"])[-2:]
             result = self._llm("finalize-page", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
                 "normalizedText": page.get("normalizedText", ""),
                 "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
-                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("cleanText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
-            if page.get("ocrText", "").strip() and not (result.get("cleanText") or result.get("punctuatedText")):
+                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
+            if page.get("ocrText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("校对服务没有返回正文")
             return result
         raise ProcessingFailure(f"未知阶段：{operation}")
@@ -215,12 +215,10 @@ def preserve_server_fields(connection, document):
         merged = dict(page)
         if edit:
             merged["notes"] = edit.get("notes", page.get("notes", ""))
-            if not active or page.get("llmDone"):
-                for key in ("cleanText", "punctuatedText"):
-                    if key in edit:
-                        # 过期的未处理快照不能删除刚生成的文本；显式文本编辑仍予以保留。
-                        if edit.get("processingRevision", -1) == page.get("processingRevision", 0):
-                            merged[key] = edit[key]
+            if (not active or page.get("llmDone")) and "punctuatedText" in edit:
+                # 过期的未处理快照不能删除刚生成的文本；显式文本编辑仍予以保留。
+                if edit.get("processingRevision", -1) == page.get("processingRevision", 0):
+                    merged["punctuatedText"] = edit["punctuatedText"]
         pages.append(merged)
     document["pages"] = pages
     return document
@@ -281,7 +279,7 @@ class Scheduler:
         page = {
             "id": f"{doc['id']}-page-{number}", "pageNumber": number,
             "ocrText": "", "normalizedText": "", "punctuationDraftText": "",
-            "cleanText": "", "punctuatedText": "", "notes": "",
+            "punctuatedText": "", "notes": "",
             "stageStatus": {}, "status": "待整理",
         }
         doc["pages"].append(page)
@@ -371,8 +369,7 @@ class Scheduler:
                         if failed_stage in {"ocr", "variant"}:
                             self._skip_downstream(page, failed_stage)
                         elif failed_stage == "proofreading":
-                            page["cleanText"] = page.get("normalizedText", "")
-                            page["punctuatedText"] = page.get("punctuationDraftText") or page.get("normalizedText", "")
+                            page["punctuatedText"] = ""
                         cp.setdefault("stageErrors", {})[failed_stage] = str(exc)
                         cp.get("retries", {}).pop(key, None)
                     else:
@@ -423,15 +420,14 @@ class Scheduler:
                 elif operation == "punctuation":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
-                    page["punctuationDraftText"] = to_simplified(str(result.get("punctuatedText") or "").strip())
+                    page["punctuationDraftText"] = str(result.get("punctuatedText") or "").strip()
                     page["punctuationWarnings"] = result.get("warnings") or []
                     page["status"] = "已完成标点"
                     self._set_stage(page, "punctuation", "done")
                 elif operation == "proofreading":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
-                    page.update(cleanText=to_simplified(str(result.get("cleanText") or "").strip()),
-                                punctuatedText=to_simplified(str(result.get("punctuatedText") or "").strip()),
+                    page.update(punctuatedText=str(result.get("punctuatedText") or "").strip(),
                                 proofreadingWarnings=result.get("warnings") or [], status="已生成整理稿")
                     self._set_stage(page, "proofreading", "done")
             self._update_status(job, doc, cp)

@@ -52,7 +52,6 @@ function applyBackendProcessingDocument(documentId, payload) {
       if (!local) continue;
       page.notes = local.notes || "";
       if (local.llmDone && local.processingRevision === page.processingRevision) {
-        page.cleanText = local.cleanText;
         page.punctuatedText = local.punctuatedText;
       }
     }

@@ -424,7 +424,6 @@ function normalizeDocuments(items) {
             ocrText: page.ocrText || "",
             normalizedText: page.normalizedText || "",
             punctuationDraftText: page.punctuationDraftText || "",
-            cleanText: page.cleanText || "",
             punctuatedText: page.punctuatedText || "",
             notes: page.notes || "",
             status: page.status || "待整理",
@@ -1129,7 +1128,6 @@ function createPage(pageNumber) {
     id: newId(),
     pageNumber,
     ocrText: "",
-    cleanText: "",
     punctuatedText: "",
     notes: "",
     status: "待整理",
@@ -1218,20 +1216,19 @@ function getPageImageSource(page) {
 }
 
 function hasPageText(page) {
-  return Boolean(page.ocrText || page.cleanText || page.punctuatedText);
+  return Boolean(page.ocrText || page.punctuatedText);
 }
 
 function getPagePrimaryText(page) {
-  return page?.punctuatedText || page?.cleanText || page?.ocrText || "";
+  return page?.punctuatedText || page?.ocrText || "";
 }
 
 function getPageProcessedText(page) {
-  return page?.cleanText || page?.punctuatedText || "";
+  return page?.punctuatedText || "";
 }
 
 function getPageProcessedSearchText(page) {
   return [
-    page?.cleanText,
     page?.punctuatedText,
     page?.notes,
   ].filter(Boolean).join("\n");
@@ -1240,7 +1237,6 @@ function getPageProcessedSearchText(page) {
 function getPageSearchText(page) {
   return [
     page?.ocrText,
-    page?.cleanText,
     page?.punctuatedText,
     page?.notes,
   ].filter(Boolean).join("\n");

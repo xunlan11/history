@@ -69,7 +69,7 @@ class EvidenceLocator(BaseModel):
     chunkId: str
     documentId: str
     pageId: str
-    sourceLayer: Literal["ocrText", "cleanText", "punctuatedText", "notes"]
+    sourceLayer: Literal["ocrText", "punctuatedText", "notes"]
     sourceHash: str
 
 

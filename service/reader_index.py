@@ -346,7 +346,7 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
             page.pop(key, None)
         return
     revision = int(page.get("processingRevision") or 0)
-    displayed = page.get("punctuatedText") or page.get("cleanText") or page.get("ocrText") or ""
+    displayed = page.get("punctuatedText") or page.get("ocrText") or ""
     digest = text_hash(displayed)
     layout = json.loads(row["layout"])
     status, error, payload = row["status"], row["error"], row["payload"]
@@ -390,7 +390,7 @@ def load_reader_index(connection, document_id, page_id):
     if not row:
         return reader_index_status_payload("unavailable", 0)
     page = json.loads(row["page_payload"])
-    displayed = page.get("punctuatedText") or page.get("cleanText") or page.get("ocrText") or ""
+    displayed = page.get("punctuatedText") or page.get("ocrText") or ""
     status = row["status"]
     layout = json.loads(row["layout"])
     asset = connection.execute("""SELECT sha256,storage_path FROM document_files

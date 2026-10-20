@@ -32,9 +32,9 @@ DEFAULT_MIN_COSINE = 0.45
 # 字面打分视为“长查询”的二字片段个数：达到该长度后，只重合一个片段不再算命中。
 LONG_QUERY_GRAM_COUNT = 6
 
-# 同一页正文可能存成多个层（原始 OCR / 校对 / 标点）。它们是同一段内容的多种 rendition，
+# 同一页正文可能存成多个层（原始 OCR / 整理正文）。它们是同一段内容的多种 rendition，
 # 检索时只能挑一个层代表正文命中，否则同一句会重复出现。
-CONTENT_LAYERS = ("ocrText", "cleanText", "punctuatedText")
+CONTENT_LAYERS = ("ocrText", "punctuatedText")
 
 
 # Source selection and lossless chunking.
@@ -48,9 +48,9 @@ def make_source(document_id: str, page_id: str, layer: str, text: str) -> Source
 
 
 def select_page_source(page: dict, policy: TextPolicy, document_id: str = "") -> SourceText | None:
-    layers = {"processed": ("cleanText", "punctuatedText"),
-              "reader": ("punctuatedText", "cleanText"),
-              "primary": ("punctuatedText", "cleanText", "ocrText")}[policy]
+    layers = {"processed": ("punctuatedText",),
+              "reader": ("punctuatedText",),
+              "primary": ("punctuatedText", "ocrText")}[policy]
     for layer in layers:
         text = page.get(layer)
         if isinstance(text, str) and text.strip():
@@ -60,7 +60,7 @@ def select_page_source(page: dict, policy: TextPolicy, document_id: str = "") ->
 
 def page_sources(document_id: str, page: dict) -> dict[str, SourceText]:
     return {layer: make_source(document_id, str(page["id"]), layer, text)
-            for layer in ("ocrText", "cleanText", "punctuatedText", "notes")
+            for layer in ("ocrText", "punctuatedText", "notes")
             if isinstance(text := page.get(layer), str) and text.strip()}
 
 
@@ -366,7 +366,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         if full_mode and any(match["matchStart"] < hit["end"] and match["matchEnd"] > hit["start"]
                              for match in literal_ranges.get((hit["pageId"], hit["sourceLayer"]), [])):
             continue
-        # Identical text in clean/punctuated layers must not take every slot.
+        # Repeated passages must not take every result slot.
         key = (hit["pageId"], hit["start"], hit["end"]) if reader_mode or full_mode else (hit["pageId"], normalized(hit["text"]))
         if key in seen_ranges or (not reader_mode and not full_mode and per_page[hit["pageId"]] >= 3):
             continue

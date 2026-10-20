@@ -110,7 +110,7 @@ async function hashEvidenceText(text) {
 
 async function resolveEvidenceAnchor(page, locator) {
   const layer = locator.sourceLayer;
-  if (!["ocrText", "cleanText", "punctuatedText", "notes"].includes(layer)) return { status: "missing" };
+  if (!["ocrText", "punctuatedText", "notes"].includes(layer)) return { status: "missing" };
   const text = page[layer] || "";
   if (await hashEvidenceText(text) !== locator.sourceHash) return { status: "stale", sourceLayer: layer };
   const start = Number(locator.start), end = Number(locator.end);
@@ -182,7 +182,7 @@ async function showReaderEvidence(page, readerIndex = null) {
     panel.textContent = anchor.status === "stale" ? "原文已更新，先前引用位置已失效。" : "无法定位片段，已打开来源页。";
     return;
   }
-  const labels = { ocrText: "OCR 原文", cleanText: "校对文本", punctuatedText: "标点文本", notes: "笔记" };
+  const labels = { ocrText: "OCR 原文", punctuatedText: "整理正文", notes: "笔记" };
   const label = document.createElement("p");
   label.className = "meta-line";
   label.textContent = "引用来自：" + (labels[anchor.sourceLayer] || anchor.sourceLayer);

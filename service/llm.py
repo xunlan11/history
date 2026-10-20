@@ -55,7 +55,7 @@ class LlmTaskRequest(BaseModel):
 
 class PunctuateRequest(LlmTaskRequest):
     sourceText: str
-    sourceLayer: Literal["ocr", "clean", "punctuated"] = "clean"
+    sourceLayer: Literal["ocr", "normalized", "punctuated"] = "normalized"
 
 
 class PreviousPageContext(BaseModel):
@@ -75,7 +75,7 @@ class FinalizePageRequest(LlmTaskRequest):
 
 class ExtractMetadataRequest(LlmTaskRequest):
     text: str
-    source: Literal["filename", "ocr", "clean", "punctuated"] = "ocr"
+    source: Literal["filename", "ocr", "normalized", "punctuated"] = "ocr"
 
 
 class ChronicleRequest(BaseModel):
@@ -272,7 +272,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 1. 先通读整页、读懂全文再动手。竖排 OCR 的一列、一行只是版面，不要按行读、不要按行断句：凡是被换行切断的同一句话都要接起来读，读完整段才算一段结束。
 2. 在读懂的基础上逐句加标点，一句都不能落下。长段落尤其重要——例如连续罗列官名、人名、职务、履历的长句，必须逐处给出顿号或逗号；整段只在末尾补一个句号是错误结果。
 3. 加标点正是本次要新增的内容，标点不算增删文字。除标点外，不增字、不删字、不改字、不润色、不概括、不翻译、不补写；原文的汉字、数字、字母、专名和排列顺序保持不变。
-4. 输入已经由 OpenCC 完成简体转换；不要再次做简繁转换，也不要改写字形。
+4. 输入已经由 OpenCC 完成简体转换；输出必须使用简体中文，不得混入繁体字。保持输入字词及顺序，不要再次做简繁转换，也不要改写字形。
 5. 输出里不要残留版面换行：接起来的句子直接相连，只在自然段之间空一行（JSON 字符串中写作 \\n\\n）。
 6. 按语义分段，每段通常 2 至 5 句；不要把整页压成一段，也不要按 OCR 的行分组分段、逐行成段。
 7. 人名、地名、官署名、机构名、部队番号、职务、年号、日期、档案号等专名原样保留，不要把专名拆开。
@@ -349,7 +349,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 任务：
 1. OCR 原始录文仅作为核对底本；输入文本已经由 OpenCC 完成简体转换，并已经完成一次断句和标点。
 2. 修正常见 OCR 错字、漏字、重复字、断行和明显排版噪声，但只能依据 OCR 底本、当前页文本和上下文作出有依据的修改。只改确有把握的字词，不要整段改写，也不要把正文写成摘要。
-3. 保持简体输出，不要重新进行大范围简繁转换；只有在明确修正 OCR 字符时才修改个别字。
+3. 校对结果必须使用简体中文，修正错字、补回漏字时也必须使用简体，不得混入繁体字；OCR 原始录文、文献信息和前页上下文中的繁体字形仅供参考，不得照搬到正文。
 4. 以已有标点文本为基础，只有内容修正导致句界变化时才调整相关标点；输入已经逐句标点，不要退回成整段无标点，也不要在行尾只补句号。
 5. 保留原文意思和专名信息，不增补史实。
 6. OCR 原始录文和简体文本是版面文本：每一行的换行来自原书的一列、一行，或为抬头（抬格）而单独排出的字词，都不是句子或自然段的边界。参考层不要照抄成逐行排版，也不要按原版式逆序；正文只保留自然段分隔，不要按行分组或按行成段。
@@ -360,7 +360,6 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 
 返回格式：
 {{
-  "cleanText": "忠实整理文本",
   "punctuatedText": "简体标点文本",
   "warnings": ["处理提示"]
 }}
@@ -380,20 +379,15 @@ OpenCC 简体文本：
 
 已有标点文本：
 {punctuation_draft}
-
-优先处理文本：
-{source_text}
 """.strip()
 
     try:
         result = call_json_task(prompt)
-        clean_text = normalize_generated_text(result.get("cleanText"))
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
-        validate_finalize_result(source_text, punctuated_text or clean_text)
+        validate_finalize_result(source_text, punctuated_text)
         warnings = list_value(result.get("warnings"))
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
-        clean_text = ""
         punctuated_text = ""
         warnings = [str(exc)]
         response = failure_response("finalize-page", exc)
@@ -405,7 +399,6 @@ OpenCC 简体文本：
             "pageNumber": payload.pageNumber,
             "normalizedText": normalized_text,
             "punctuationDraftText": punctuation_draft,
-            "cleanText": clean_text,
             "punctuatedText": punctuated_text,
             "warnings": warnings,
         }

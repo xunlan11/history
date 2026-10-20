@@ -75,7 +75,7 @@ class SemanticWorker:
                     batch = [c for c in batch if not connection.execute("SELECT 1 FROM semantic_vectors WHERE chunk_id=? AND model_fingerprint=?", (c["chunk_id"], identity.fingerprint)).fetchone()]
                 if not batch:
                     continue
-                # Identical clean/punctuated passages share computation even
+                # Identical passages share computation even
                 # though their source anchors remain distinct.
                 by_text, missing = {}, []
                 with self.connection_factory() as connection:
