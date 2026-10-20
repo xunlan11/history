@@ -14,9 +14,11 @@
 - `OCR_UPSTREAM_TIMEOUT`：单页识别超时秒数，默认 180。
 - `OCR_UPSTREAM_HEALTH_TIMEOUT`：健康检查超时秒数，默认 5。
 - `OCR_UPSTREAM_HEALTH_PATH`：健康检查路径，默认 `/health`；设为 `none` 跳过探活。
-- `OCR_UPSTREAM_GEOMETRY_FIX`：`1` 时让服务端做整页方向分类与去扭曲。
-  默认关闭：保证服务端返回的坐标与数据端保存的原图一致。开启后坐标以矫正后的
-  图像为准（数据端不保存矫正图）。
+
+整页方向分类与去畸变按识别模式固定：正式识别开启，快速识别关闭。
+正式识别中的有线、无线表格均根据单元格位置生成 HTML 结构；快速识别不处理表格。
+两种模式均关闭公式识别、印章识别和图表转表格，与模型端精简配置一致。
+正式识别返回的坐标以矫正后的图像为准（数据端不保存矫正图）。
 
 输出统一为内部结构（供 `service/ocr.py` 组对外响应）：
 
@@ -155,8 +157,8 @@ def health_path() -> str:
     return os.getenv("OCR_UPSTREAM_HEALTH_PATH", "/health").strip()
 
 
-def geometry_fix_enabled() -> bool:
-    return os.getenv("OCR_UPSTREAM_GEOMETRY_FIX", "").strip() in {"1", "true", "True", "yes"}
+def geometry_fix_enabled(mode: str = "formal") -> bool:
+    return mode == "formal"
 
 
 def not_configured_error() -> OcrUpstreamNotConfigured:
@@ -172,6 +174,9 @@ def describe() -> dict[str, Any]:
         "url": upstream_url() or None,
         "style": upstream_style(),
         "geometryFix": geometry_fix_enabled(),
+        "geometryFixByMode": {
+            mode: geometry_fix_enabled(mode) for mode in ("formal", "quick")
+        },
         "healthPath": health_path(),
     }
 
@@ -279,7 +284,7 @@ def _call_paddlex(
 ) -> dict[str, Any]:
     """PaddleX / PaddleOCR 官方 serving：POST /layout-parsing。"""
     quick = mode == "quick"
-    geometry_fix = geometry_fix_enabled()
+    geometry_fix = geometry_fix_enabled(mode)
     payload = {
         "file": image_base64,
         "fileType": 1,
@@ -287,6 +292,8 @@ def _call_paddlex(
         "useDocUnwarping": geometry_fix,
         "useLayoutDetection": not quick,
         "useTableRecognition": not quick,
+        "useWiredTableCellsTransToHtml": not quick,
+        "useWirelessTableCellsTransToHtml": not quick,
         "useFormulaRecognition": False,
         "useSealRecognition": False,
         "useChartRecognition": False,
