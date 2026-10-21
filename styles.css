@@ -2678,7 +2678,7 @@ body {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px 18px;
+  gap: 8px 28px;
   min-width: 0;
   color: #69716a;
   font-size: 14px;
@@ -2692,7 +2692,6 @@ body {
   align-items: center;
   column-gap: 4px;
   flex: 0 0 auto;
-  min-width: 112px;
 }
 
 .service-label {
@@ -2719,10 +2718,9 @@ body {
 
 .service-item-version {
   display: inline-flex;
-  flex-basis: 118px;
   flex-direction: row;
   align-items: center;
-  min-width: 118px;
+  gap: 4px;
 }
 
 .status-title {

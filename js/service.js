@@ -65,7 +65,6 @@ function setServiceTarget(node, text) {
   }
 
   node.textContent = text;
-  node.title = text;
 }
 
 async function fetchServiceJson(url, errorMessage, options = {}) {
