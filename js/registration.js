@@ -191,11 +191,16 @@ function shortenDocumentCardStatus(text) {
   }
   return percent ? `${label} ${percent}` : label;
 }
-// 登记进度统一显示：保存占 5%，上传占 20%，后端登记占 75%。
+// 登记进度只覆盖耗时阶段：上传 0→20%，候选页 OCR 20→50%，元数据识别 50→100%。
+// 保存记录、落库排队都很短，不再单独占用百分比；没有实测值时退回各阶段起点值。
 const BACKEND_REGISTRATION_STAGES = {
-  "": { percent: 25 },
-  metadata_candidate: { percent: 40 },
+  "": { percent: 20 },
+  metadata_candidate: { percent: 35 },
   metadata: { percent: 75 },
+};
+const REGISTRATION_STAGE_RANGES = {
+  metadata_candidate: { from: 20, to: 50 },
+  metadata: { from: 50, to: 100 },
 };
 
 function describeBackendRegistration(item) {
@@ -203,7 +208,14 @@ function describeBackendRegistration(item) {
   if (registration.status === "failed") {
     return "登记失败，点击继续";
   }
-  const stage = BACKEND_REGISTRATION_STAGES[item.processingTask?.currentPageStage || ""] || BACKEND_REGISTRATION_STAGES[""];
+  const task = item.processingTask || {};
+  const live = task.registrationProgress;
+  const range = live ? REGISTRATION_STAGE_RANGES[live.stage] : null;
+  if (range) {
+    const percent = range.from + (range.to - range.from) * (Number(live.percent) || 0) / 100;
+    return `登记中 ${Math.round(percent)}%`;
+  }
+  const stage = BACKEND_REGISTRATION_STAGES[task.currentPageStage || ""] || BACKEND_REGISTRATION_STAGES[""];
   return `登记中 ${stage.percent}%`;
 }
 
@@ -538,11 +550,12 @@ function setUploadStage(documentId, stage, fraction) {
   const progress = Math.min(1, Math.max(0, Number(fraction) || 0));
   let percent;
   if (stage === "保存文献记录") {
-    percent = 5;
+    // 保存只占一瞬间，不给它分配区间，避免进度先跳到 5% 再重新走。
+    percent = 0;
   } else if (stage === "上传原件") {
-    percent = 5 + progress * 20;
+    percent = progress * 20;
   } else {
-    percent = 25;
+    percent = 20;
   }
   updateDocumentUploadState(documentId, { active: true, stage, percent });
 }

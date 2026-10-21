@@ -8,7 +8,7 @@ import socket
 import unicodedata
 import urllib.error
 import urllib.request
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from service.chronology import normalize_chronicle_entries
 from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, validate_result_citations
+from service.task_progress import progress_reporter, read_progress
 
 
 # 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
@@ -112,6 +113,9 @@ class LlmServiceError(RuntimeError):
 
 class LlmServiceUnavailable(LlmServiceError):
     """无法建立连接或探测超时；区别于服务已响应但未就绪。"""
+
+
+# 单页阶段任务的实时进度：由 service.task_progress 提供，调度器轮询 GET /llm/progress/{key}。
 
 
 # 用于校验“模型只加了标点”的正文比较：标点与空白都不算正文字符。
@@ -255,6 +259,13 @@ def llm_health() -> dict[str, Any]:
     return health()
 
 
+@app.get("/llm/progress/{key}")
+def task_progress(key: str) -> dict[str, Any]:
+    """调度器轮询用：返回该请求键当前的生成百分比。"""
+    entry = read_progress(key)
+    return {"key": key, "percent": entry["percent"], "updatedAt": entry["updatedAt"]}
+
+
 @app.post("/llm/punctuate")
 def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
     # 逐行、逐列的换行是 OCR 版面信息（抬头字还常单独成行），不能在这里盲目合并。
@@ -300,8 +311,9 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 {format_metadata(payload.metadata)}
 """.strip()
 
+    report = progress_reporter(payload.options, len(content_characters(source_text)))
     try:
-        result = call_json_task(prompt)
+        result = call_json_task(prompt, on_progress=report)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         validate_punctuation_result(source_text, punctuated_text)
         uncertain_items = list_value(result.get("uncertainItems"))
@@ -381,8 +393,9 @@ OpenCC 简体文本：
 {punctuation_draft}
 """.strip()
 
+    report = progress_reporter(payload.options, len(content_characters(source_text)))
     try:
-        result = call_json_task(prompt)
+        result = call_json_task(prompt, on_progress=report)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         validate_finalize_result(source_text, punctuated_text)
         warnings = list_value(result.get("warnings"))
@@ -436,7 +449,10 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
 """.strip()
 
     try:
-        result = call_json_task(prompt)
+        # 元数据结果只是一小段 JSON（约 100 多字），用固定量级做分母，进度才能跟随生成推进；
+        # 输入正文再长也不会让百分比停在个位数。
+        report = progress_reporter(payload.options, 120)
+        result = call_json_task(prompt, on_progress=report)
         metadata = {
             "title": string_value(result.get("title")),
             "author": string_value(result.get("author")),
@@ -556,7 +572,7 @@ def search(payload: SearchRequest) -> dict[str, Any]:
 def chat(payload: ChatRequest) -> dict[str, Any]:
     return run_evidence_task(payload, "chat")
 
-def call_json_task(prompt: str) -> dict[str, Any]:
+def call_json_task(prompt: str, on_progress: Any = None) -> dict[str, Any]:
     content = call_chat_completion(
         [
             {
@@ -570,6 +586,7 @@ def call_json_task(prompt: str) -> dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         temperature=0.1,
+        on_progress=on_progress,
     )
     return parse_json_object(content)
 
@@ -580,12 +597,13 @@ def call_chat_completion(
     json_response: bool = True,
     context_tokens: int | None = None,
     output_tokens: int | None = None,
+    on_progress: Any = None,
 ) -> str:
     if not provider_configured():
         raise LlmServiceError("尚未配置大模型服务（服务端地址 / 模型名）。")
 
     if LLM_PROVIDER == "ollama":
-        return call_ollama_chat_completion(messages, temperature, json_response, context_tokens, output_tokens)
+        return call_ollama_chat_completion(messages, temperature, json_response, context_tokens, output_tokens, on_progress)
 
     url = f"{LLM_API_BASE.rstrip('/')}/chat/completions"
     payload = {
@@ -613,6 +631,7 @@ def call_ollama_chat_completion(
     json_response: bool = True,
     context_tokens: int | None = None,
     output_tokens: int | None = None,
+    on_progress: Any = None,
 ) -> str:
     base = LLM_API_BASE.rstrip("/")
     ollama_root = base.removesuffix("/v1")
@@ -620,7 +639,8 @@ def call_ollama_chat_completion(
     payload = {
         "model": LLM_MODEL,
         "messages": normalize_ollama_messages(messages),
-        "stream": False,
+        # 有进度回调时用流式，才能按已生成字数回报进度；没有回调保持原样一次拿完。
+        "stream": bool(on_progress),
         # 关掉思考链：只对思考型模型有效，非思考模型传 false 同样安全。
         "think": LLM_OLLAMA_THINK,
         "options": {
@@ -634,12 +654,62 @@ def call_ollama_chat_completion(
     if json_response:
         payload["format"] = "json"
 
-    result = request_json("POST", url, payload=payload, timeout=LLM_TIMEOUT_SECONDS)
+    if not on_progress:
+        result = request_json("POST", url, payload=payload, timeout=LLM_TIMEOUT_SECONDS)
+
+        try:
+            return str(result["message"]["content"])
+        except (KeyError, TypeError) as exc:
+            raise LlmServiceError("Ollama 返回格式异常。") from exc
+
+    parts: list[str] = []
+    generated = 0
+    for chunk in iter_ollama_chat_stream(url, payload, LLM_TIMEOUT_SECONDS):
+        piece = str((chunk.get("message") or {}).get("content") or "")
+        if not piece:
+            continue
+        parts.append(piece)
+        generated += len(piece)
+        on_progress(generated, False)
+    if not parts:
+        raise LlmServiceError("Ollama 返回格式异常。")
+    on_progress(generated, True)
+    return "".join(parts)
+
+
+def iter_ollama_chat_stream(url: str, payload: dict[str, Any], timeout: int) -> Iterator[dict[str, Any]]:
+    """Ollama /api/chat 的流式响应是逐行 JSON（NDJSON）。"""
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("LLM_API_KEY", "")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
     try:
-        return str(result["message"]["content"])
-    except (KeyError, TypeError) as exc:
-        raise LlmServiceError("Ollama 返回格式异常。") from exc
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            for raw in response:
+                line = raw.decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(chunk, dict) and chunk.get("error"):
+                    raise LlmServiceError(f"大模型流式返回错误：{chunk['error']}")
+                if isinstance(chunk, dict):
+                    yield chunk
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        cls = LlmServiceUnavailable if exc.code in {429, 502, 503, 504} else LlmServiceError
+        raise cls(f"大模型接口请求失败：HTTP {exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise LlmServiceUnavailable(f"无法连接大模型服务：{exc.reason}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise LlmServiceUnavailable("大模型请求超时。") from exc
+    except OSError as exc:
+        raise LlmServiceUnavailable(f"无法连接大模型服务：{exc}") from exc
 
 
 def normalize_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

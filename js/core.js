@@ -1277,6 +1277,27 @@ function normalizeStageProgress(value, total = 0) {
     }];
   }));
 }
+// 单页阶段任务的实时进度（调度器内存快照，只在 /processing 轮询里出现）。
+function normalizeStagePages(value) {
+  const stages = ["ocr", "variant", "punctuation", "proofreading"];
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(stages.map((stage) => {
+    const entry = source[stage];
+    if (!entry || typeof entry !== "object") return [stage, null];
+    return [stage, {
+      pageNumber: Number(entry.pageNumber) || 0,
+      percent: Math.min(100, Math.max(0, Number(entry.percent) || 0)),
+    }];
+  }));
+}
+// 登记阶段的实时进度（候选页 OCR 逐页、元数据识别流式），同样只在 /processing 里出现。
+function normalizeRegistrationProgress(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    stage: String(value.stage || ""),
+    percent: Math.min(100, Math.max(0, Number(value.percent) || 0)),
+  };
+}
 function normalizeProcessingTask(task) {
   if (!task) {
     return null;
@@ -1290,6 +1311,8 @@ function normalizeProcessingTask(task) {
     metadataSnapshot: task.metadataSnapshot || null,
     activeStages: task.activeStages || {},
     stageProgress: normalizeStageProgress(task.stageProgress, task.totalPages),
+    stagePages: normalizeStagePages(task.stagePages),
+    registrationProgress: normalizeRegistrationProgress(task.registrationProgress),
     finalizedPages: Number(task.finalizedPages) || 0,
     failedPages: Array.isArray(task.failedPages) ? task.failedPages : [],
     queueSequence: Number(task.queueSequence) || 0,

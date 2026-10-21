@@ -36,6 +36,7 @@ from PIL import Image
 
 from service import ocr_upstream
 from service import reader_content
+from service.task_progress import read_progress, set_progress
 
 APP_DIR = Path(__file__).resolve().parent.parent
 # OCR 存储目录可用 OCR_STORAGE_DIR 环境变量覆盖（/literature 实例指向独立目录）
@@ -206,6 +207,13 @@ def health():
     }
 
 
+@app.get("/ocr/progress/{key}")
+def task_progress(key: str) -> dict[str, Any]:
+    """调度器轮询用：返回登记候选页识别等任务的当前百分比。"""
+    entry = read_progress(key)
+    return {"key": key, "percent": entry["percent"], "updatedAt": entry["updatedAt"]}
+
+
 @app.post("/ocr")
 async def recognize_page(
     image: UploadFile = File(...),
@@ -223,11 +231,19 @@ async def recognize_page(
 
 
 @app.post("/ocr/metadata-candidate")
-async def extract_metadata_candidate(document: UploadFile = File(...)):
+async def extract_metadata_candidate(document: UploadFile = File(...), progressKey: str = Form("")):
     """登记候选文字：有限拆页/OCR，不创建整本任务，不计入正文处理进度。"""
     source_path = await save_upload(document, prefix=f"metadata-{uuid.uuid4().hex[:12]}")
+    key = (progressKey or "").strip()
+
+    def report(done: int, total: int) -> None:
+        if not key:
+            return
+        total = max(1, int(total or 1))
+        set_progress(key, 100 if done >= total else min(96, max(1, int(done * 96 / total))))
+
     try:
-        candidate = await run_in_threadpool(call_upstream, build_metadata_candidate, source_path)
+        candidate = await run_in_threadpool(call_upstream, build_metadata_candidate, source_path, report if key else None)
         candidate["sourceFileName"] = document.filename
         return JSONResponse(candidate)
     finally:
@@ -508,10 +524,16 @@ def process_pdf(
     return pages, total_pages
 
 
-def build_metadata_candidate(path: Path) -> dict[str, Any]:
+def build_metadata_candidate(path: Path, on_progress: Any = None) -> dict[str, Any]:
     """最多读取前三页；有文字层时直接提取，扫描页才调用现有远端 OCR。"""
+    def report(done: int, total: int) -> None:
+        if on_progress:
+            on_progress(done, total)
+
     if path.suffix.lower() != ".pdf":
+        report(0, 1)
         result = recognize_image(path, page_number=1, quick_read=True)
+        report(1, 1)
         return {"text": str(result.get("text") or ""), "pagesRead": 1, "totalPages": 1}
 
     try:
@@ -538,6 +560,7 @@ def build_metadata_candidate(path: Path) -> dict[str, Any]:
                     text = str(result.get("text") or "").strip()
                 if text:
                     texts.append(f"[第 {index + 1} 页]\n{text}")
+                report(index + 1, page_limit)
         return {"text": "\n\n".join(texts), "pagesRead": page_limit, "totalPages": doc.page_count}
 
 

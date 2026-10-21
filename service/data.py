@@ -1814,7 +1814,17 @@ def document_processing_status(document_id: str):
         row = connection.execute("SELECT owner_id,visibility FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
         if not row or (row["owner_id"] != user["id"] and row["visibility"] != "public"):
             raise HTTPException(status_code=404, detail="文献不存在")
-        return {"document": public_processing_document(connection, document_id, user)}
+        document = public_processing_document(connection, document_id, user)
+    # 单页阶段进度只存在调度器内存里：读取时叠加到任务快照，避免为了刷进度频繁重写 payload。
+    task = document.get("processingTask")
+    if isinstance(task, dict) and _scheduler_worker is not None:
+        stage_pages = _scheduler_worker.progress_snapshot(document_id)
+        if stage_pages:
+            task["stagePages"] = stage_pages
+        registration = _scheduler_worker.registration_snapshot(document_id)
+        if registration:
+            task["registrationProgress"] = registration
+    return {"document": document}
 
 
 @app.post("/api/documents/{document_id}/processing/retry")

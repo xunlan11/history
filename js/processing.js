@@ -247,6 +247,27 @@ function renderFailedProcessingPages(item) {
   }
 }
 
+// 页是否已走过某个阶段（与后端 _stage_terminal 对齐：完成、失败、跳过都算终结）。
+function isStagePageTerminal(page, stageKey) {
+  if (page?.[`${stageKey}Done`]) return true;
+  if (stageKey === "proofreading" && page?.llmDone) return true;
+  const status = page?.stageStatus?.[stageKey];
+  return status === "done" || status === "failed" || status === "skipped";
+}
+
+// 环显示的是「该阶段当前处理到第几页」，环长表示这一页在该阶段的进展：
+// · 正在处理该页 → 小圆弧 + 转圈动画（后端正文阶段不报页内百分比，只有开始/完成）；
+// · 该阶段已全部完成 → 满环，数字为总页数；
+// · 该阶段还没轮到该页 → 空环，数字为下一页（而不是已完成页数）。
+function stagePageState(item, task, stageKey, done, total) {
+  const activePage = Number(task.activeStages?.[stageKey]?.pageNumber) || 0;
+  if (activePage > 0) return { pageNumber: activePage, percent: null, active: true };
+  if (total > 0 && done >= total) return { pageNumber: total, percent: 100, active: false };
+  const pending = (item.pages || []).find((page) => page.pageNumber > 0 && !isStagePageTerminal(page, stageKey));
+  const fallback = total > 0 ? Math.min(total, done + 1) : 0;
+  return { pageNumber: pending?.pageNumber || fallback, percent: 0, active: false };
+}
+
 function renderStreamProgress(item) {
   const task = item?.processingTask;
   if (!item || !task) {
@@ -264,12 +285,28 @@ function renderStreamProgress(item) {
     const fill = progressStageFills.get(stage.key);
     const entry = progress[stage.key] || {};
     const done = Math.min(total, Number(entry?.done) || 0);
+    // 底部合成分段条仍是整体页数进度。
     const percent = total > 0 ? done / total * 100 : 0;
-    const active = Boolean(task.activeStages?.[stage.key]);
+    const state = stagePageState(item, task, stage.key, done, total);
+    const active = state.active && !finished;
+    // 环长只表示「这一页在这个阶段的任务进度」：调度器给出实测百分比时用它，
+    // 拿不到实测值（如远端 OCR 无法报页内进度）时才转圈表示进行中。
+    const live = task.stagePages?.[stage.key];
+    const livePercent = live && Number(live.pageNumber) === state.pageNumber ? clampPercent(Number(live.percent) || 0) : null;
+    const fallbackPercent = task.currentPageStage === stage.key ? clampPercent(Number(task.currentPageProgress) || 0) : 0;
+    const measured = livePercent === null ? fallbackPercent : livePercent;
+    const useMeasured = active && measured > 0;
+    const pagePercent = active ? (useMeasured ? Math.min(99, measured) : 12) : clampPercent(state.percent);
     if (fill) fill.style.width = `${clampPercent(percent)}%`;
     if (nodes) {
-      if (nodes.pages) nodes.pages.textContent = `${done}`;
-      setRingProgress(nodes.ring, finished ? 100 : active ? 5 : percent);
+      if (nodes.pages) nodes.pages.textContent = `${state.pageNumber}`;
+      nodes.root.classList.toggle("is-active", active && !useMeasured);
+      nodes.root.title = state.pageNumber > 0
+        ? `${stage.label}：第 ${state.pageNumber} 页${active
+          ? (useMeasured ? `处理中 ${Math.round(measured)}%` : "处理中")
+          : state.percent === 100 ? "已完成" : "待处理"}`
+        : stage.label;
+      setRingProgress(nodes.ring, finished ? 100 : pagePercent);
     }
   }
   renderFailedProcessingPages(item);

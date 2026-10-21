@@ -1488,6 +1488,26 @@ body {
   stroke: var(--primary);
 }
 
+/* 正在处理该页的阶段：小圆弧转圈，表示「这一页在此阶段进行中」 */
+.progress-stage-ring-item.is-active .progress-ring svg {
+  animation: progress-ring-spin 1.4s linear infinite;
+}
+
+.progress-stage-ring-item.is-active .progress-ring-label {
+  color: var(--primary);
+}
+
+@keyframes progress-ring-spin {
+  from { transform: rotate(-90deg); }
+  to { transform: rotate(270deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-stage-ring-item.is-active .progress-ring svg {
+    animation: none;
+  }
+}
+
 .progress-ring-label {
   position: relative;
   z-index: 1;

@@ -21,6 +21,7 @@ from copy import deepcopy
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from urllib import error, request
+from urllib.parse import quote
 
 from service.variant import to_simplified
 from service import reader_index
@@ -67,6 +68,11 @@ def ensure_schema(connection):
 
 def metadata(document):
     return {key: str(document.get(key) or "") for key in ("title", "author", "year", "publisher")}
+
+
+def progress_key(document_id, operation, page_number):
+    """大模型服务与调度器共用的单页任务进度键。"""
+    return f"{document_id}:{operation}:{page_number}"
 
 
 class HttpServices:
@@ -121,14 +127,24 @@ class HttpServices:
     def _llm(self, route, payload):
         return self._request(f"{self.llm_url}/llm/{route}", json.dumps(payload).encode("utf-8"))
 
+    def llm_progress(self, key):
+        """轮询大模型服务的单页任务进度；短超时，失败由调度器忽略后重试。"""
+        return self._request(f"{self.llm_url}/llm/progress/{quote(str(key), safe='')}", timeout=3)
+
+    def ocr_progress(self, key):
+        """轮询 OCR 服务的登记候选页识别进度。"""
+        return self._request(f"{self.ocr_url}/ocr/progress/{quote(str(key), safe='')}", timeout=3)
+
     def execute(self, operation, job, document, checkpoint, page_number=0):
         source = Path(job["source_path"])
         if operation == "metadata_candidate":
-            return self._form("/ocr/metadata-candidate", "document", source)
+            return self._form("/ocr/metadata-candidate", "document", source,
+                              {"progressKey": progress_key(document["id"], operation, 0)})
         if operation == "metadata":
             text = checkpoint["metadataCandidate"].get("text") or document.get("fileName") or source.name
             result = self._llm("extract-metadata", {"documentId": document["id"], "text": text,
-                "source": "ocr", "metadata": metadata(document)})
+                "source": "ocr", "metadata": metadata(document),
+                "options": {"progressKey": progress_key(document["id"], operation, 0)}})
             if not isinstance(result.get("metadata"), dict):
                 raise ProcessingFailure("元数据结果无效")
             return result
@@ -169,7 +185,8 @@ class HttpServices:
             result = self._llm("punctuate", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
-                "sourceLayer": "normalized"})
+                "sourceLayer": "normalized",
+                "options": {"progressKey": progress_key(document["id"], "punctuation", page_number)}})
             if page.get("normalizedText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("标点服务没有返回正文")
             return result
@@ -185,6 +202,7 @@ class HttpServices:
                 "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
                 "normalizedText": page.get("normalizedText", ""),
                 "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
+                "options": {"progressKey": progress_key(document["id"], "proofreading", page_number)},
                 "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
             if page.get("ocrText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("校对服务没有返回正文")
@@ -255,6 +273,12 @@ class Scheduler:
         self.clock = clock
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="document-stage")
         self.running: dict[str, tuple[Future, str, str, int]] = {}
+        # 单页任务的实时进度（仅内存）：doc_id -> stage -> {pageNumber, percent, updatedAt}
+        self.page_progress: dict[str, dict[str, dict]] = {}
+        # 登记阶段的实时进度：doc_id -> {stage, percent, updatedAt}
+        self.registration_progress: dict[str, dict] = {}
+        self.progress_lock = threading.Lock()
+        self.progress_watchers: dict[str, threading.Event] = {}
         self.stop_event = threading.Event()
         self.thread = None
         self.lock_file = None
@@ -269,7 +293,67 @@ class Scheduler:
             self.data.rehydrate_document_assets(connection, payload)
         return dict(row), payload, json.loads(row["checkpoint"])
 
+    # —— 单页阶段任务进度（仅内存，供 /processing 读取）——
+    def _set_page_progress(self, document_id, stage, page_number, percent):
+        with self.progress_lock:
+            stages = self.page_progress.setdefault(document_id, {})
+            stages[stage] = {"pageNumber": int(page_number),
+                             "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock()}
 
+    def _clear_page_progress(self, document_id, stage):
+        with self.progress_lock:
+            stages = self.page_progress.get(document_id)
+            if not stages:
+                return
+            stages.pop(stage, None)
+            if not stages:
+                self.page_progress.pop(document_id, None)
+
+    def progress_snapshot(self, document_id):
+        with self.progress_lock:
+            return {stage: dict(entry) for stage, entry in (self.page_progress.get(document_id) or {}).items()}
+
+    def _set_registration_progress(self, document_id, stage, percent):
+        with self.progress_lock:
+            self.registration_progress[document_id] = {"stage": stage,
+                "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock()}
+
+    def _clear_registration_progress(self, document_id):
+        with self.progress_lock:
+            self.registration_progress.pop(document_id, None)
+
+    def registration_snapshot(self, document_id):
+        with self.progress_lock:
+            entry = self.registration_progress.get(document_id)
+            return dict(entry) if entry else {}
+
+    def _start_progress_watcher(self, lane, document_id, stage, page_number, registration=False, source="llm"):
+        self._stop_progress_watcher(lane)
+        stop = threading.Event()
+        self.progress_watchers[lane] = stop
+        threading.Thread(target=self._watch_progress,
+                         args=(document_id, stage, page_number, registration, source, stop),
+                         name=f"progress-{stage}-{page_number}", daemon=True).start()
+
+    def _stop_progress_watcher(self, lane):
+        stop = self.progress_watchers.pop(lane, None)
+        if stop:
+            stop.set()
+
+    def _watch_progress(self, document_id, stage, page_number, registration, source, stop):
+        key = progress_key(document_id, stage, page_number)
+        reader = self.services.ocr_progress if source == "ocr" else self.services.llm_progress
+        while not stop.wait(0.5):
+            try:
+                payload = reader(key)
+            except Exception:  # 服务暂时不可达时保持已有百分比
+                continue
+            if not payload.get("updatedAt"):
+                continue
+            if registration:
+                self._set_registration_progress(document_id, stage, payload.get("percent"))
+            else:
+                self._set_page_progress(document_id, stage, page_number, payload.get("percent"))
 
     @staticmethod
     def _page(doc, number):
@@ -501,6 +585,15 @@ class Scheduler:
             future.set_exception(ProcessingFailure("归档原件路径无效"))
         else:
             job["source_path"] = str(source_path)
+            # 标点/校对是大模型逐字生成，边生成边回报该页该阶段的百分比。
+            if operation in {"punctuation", "proofreading"}:
+                self._set_page_progress(doc["id"], operation, number, 0)
+                self._start_progress_watcher(lane, doc["id"], operation, number)
+            # 登记：候选页 OCR 逐页回报，元数据识别继续由大模型流式回报。
+            elif operation in {"metadata_candidate", "metadata"}:
+                self._set_registration_progress(doc["id"], operation, 0)
+                self._start_progress_watcher(lane, doc["id"], operation, 0, registration=True,
+                                             source="ocr" if operation == "metadata_candidate" else "llm")
             future = self.executor.submit(self.services.execute, operation, job, doc, cp, number)
         self.running[lane] = (future, doc["id"], operation, number)
 
@@ -603,8 +696,13 @@ class Scheduler:
     def tick(self):
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
             if future.done():
+                self._stop_progress_watcher(lane)
                 self._record(doc_id, operation, number, future)
                 del self.running[lane]
+                if operation in {"metadata_candidate", "metadata"}:
+                    self._clear_registration_progress(doc_id)
+                else:
+                    self._clear_page_progress(doc_id, "ocr" if operation == "render" else operation)
         with self.data.database() as connection:
             jobs = [dict(row) for row in connection.execute("""
                 SELECT j.* FROM processing_jobs j JOIN documents d ON d.id=j.document_id
@@ -786,6 +884,9 @@ class Scheduler:
             self.stop_event.wait(0.25)
         # 释放单工作器锁前先排空正在执行的调用；如果进程被终止，持久化检查点会在重启后重试。
         self.executor.shutdown(wait=True)
+        for stop in list(self.progress_watchers.values()):
+            stop.set()
+        self.progress_watchers.clear()
         for future, doc_id, operation, number in self.running.values():
             self._record(doc_id, operation, number, future)
         if self.lock_file:
