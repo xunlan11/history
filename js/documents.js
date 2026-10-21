@@ -253,7 +253,9 @@ function renderActiveConversation() {
   }
 
   if (editChatTitleButton) {
-    editChatTitleButton.classList.toggle("hidden", !conversation);
+    // 修改符号常驻占位，否则有/无对话时标题会左右跳动；没有对话时置灰不可点。
+    editChatTitleButton.disabled = !conversation;
+    editChatTitleButton.classList.remove("hidden");
   }
 
   chatHint.textContent = getConversationModeLabel(selectedSmartMode);

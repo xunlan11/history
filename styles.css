@@ -3402,6 +3402,13 @@ body {
   color: #34734a;
 }
 
+.chat-title-edit:disabled,
+.chat-title-edit:disabled:hover {
+  background: transparent;
+  color: #c6cbc6;
+  cursor: default;
+}
+
 .chat-title-edit.editing {
   background: #e3eee5;
   color: #34734a;
