@@ -204,7 +204,7 @@ form?.addEventListener("submit", async (event) => {
     if (!error.registrationPaused && !error.registrationCancelled) {
       window.alert(
         `文献登记未完成：${error && error.message ? error.message : "网络中断"}。\n` +
-          "原件和已完成阶段已保留，稍后点击这篇文献可继续登记。",
+          "请稍后点击该文献继续登记。",
       );
     }
     return;

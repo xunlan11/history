@@ -911,7 +911,7 @@ function appendDocumentAttribution(container, item) {
 const READER_DETAIL_FIELDS = [
   { key: "title", label: "文献名", placeholder: "未识别" },
   { key: "author", label: "作者", placeholder: "未录" },
-  { key: "year", label: "出版时间", placeholder: "如 1936 ／ 1936年10月" },
+  { key: "year", label: "出版时间", placeholder: "未录" },
   { key: "publisher", label: "出版社", placeholder: "未录" },
   { key: "tags", label: "标签", placeholder: "以逗号分隔" },
 ];

@@ -306,16 +306,12 @@ function markDocumentUploadFailed(documentId, error) {
   const message = error && error.message ? error.message : "文献登记未完成";
   const status = Number(error && error.status) || 0;
   const permanent = status >= 400 && status < 500 && getLiveDocument(documentId)?.registration?.stage === "archive";
+  // 失败提示只走提交方（js/main.js 的 alert）或调用方自己的提示，这里只更新卡片状态，
+  // 避免与 alert 同时弹两个框。
   updateDocumentUploadState(
     documentId,
     { active: false, percent: 0, error: message, permanent },
     { force: true },
-  );
-  showUploadToast(
-    permanent
-      ? `文献登记失败：${message}`
-      : `文献登记未完成：${message}（已保留，可点击文献继续）`,
-    6000,
   );
 }
 
