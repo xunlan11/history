@@ -134,6 +134,11 @@ def upstream_style() -> str:
     return style if style in {"auto", "paddlex", "native"} else "auto"
 
 
+def model_name() -> str:
+    """首页状态栏展示的识别模型名；部署时可用 OCR_UPSTREAM_MODEL 覆盖。"""
+    return os.getenv("OCR_UPSTREAM_MODEL", "").strip() or "PP-StructureV3"
+
+
 def upstream_token() -> str:
     return os.getenv("OCR_UPSTREAM_TOKEN", "").strip()
 
@@ -175,6 +180,7 @@ def describe() -> dict[str, Any]:
         "configured": bool(upstream_url()),
         "url": upstream_url() or None,
         "style": upstream_style(),
+        "model": model_name(),
         "geometryFix": geometry_fix_enabled(),
         "geometryFixByMode": {
             mode: geometry_fix_enabled(mode) for mode in ("formal", "quick")

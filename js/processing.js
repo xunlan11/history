@@ -308,10 +308,6 @@ function renderStreamProgress(item) {
           ? (useMeasured ? `处理中 ${Math.round(measured)}%` : "处理中")
           : state.percent === 100 ? "已完成" : "待处理"}`
         : stage.label;
-      if (stage.key === "ocr" && active && samePage && live?.detail) {
-        const detail = describeOcrProgressDetail(live.detail);
-        if (detail) nodes.root.title += ` · ${detail}（百分比按实际处理步骤计算）`;
-      }
       setRingProgress(nodes.ring, finished ? 100 : pagePercent);
     }
   }

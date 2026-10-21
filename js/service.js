@@ -54,6 +54,20 @@ function setServiceStatus(node, text, className) {
   node.className = className;
 }
 
+// 第二行只写这一项实际用的模型，不放地址和端口。
+function describeServiceTarget(result) {
+  return String(result?.model || result?.upstream?.model || "").trim();
+}
+
+function setServiceTarget(node, text) {
+  if (!node) {
+    return;
+  }
+
+  node.textContent = text;
+  node.title = text;
+}
+
 async function fetchServiceJson(url, errorMessage, options = {}) {
   const response = await fetch(url, {
     cache: "no-store",
@@ -68,7 +82,7 @@ async function fetchServiceJson(url, errorMessage, options = {}) {
 }
 
 // 状态由数据端分类；未连接仅用于浏览器无法正常取得健康检查结果。
-function renderModelServiceStatus(node, result) {
+function renderModelServiceStatus(node, result, targetNode) {
   if (!result || typeof result.ready !== "boolean") {
     throw new Error("Invalid service health response");
   }
@@ -78,15 +92,18 @@ function renderModelServiceStatus(node, result) {
     (upstream.configured && upstream.reachable === false ? "unreachable" : "not_ready"));
   const label = result.ready ? "已连接" : state === "unreachable" ? "不可达" : "未就绪";
   setServiceStatus(node, label, result.ready ? "service-ok" : "service-warn");
+  // 只有连接成功才分行补充所用模型；未连接/未就绪保持原本的单行。
+  setServiceTarget(targetNode, result.ready ? describeServiceTarget(result) : "");
 }
 
 async function refreshOcrServiceStatus() {
   if (!ocrServiceStatus) return;
   try {
     const result = await fetchServiceJson(OCR_HEALTH_URL, "OCR health check failed");
-    renderModelServiceStatus(ocrServiceStatus, result);
+    renderModelServiceStatus(ocrServiceStatus, result, ocrServiceTarget);
   } catch (error) {
     setServiceStatus(ocrServiceStatus, "未连接", "service-warn");
+    setServiceTarget(ocrServiceTarget, "");
   }
 }
 
@@ -94,9 +111,10 @@ async function refreshEmbeddingServiceStatus() {
   if (!embeddingServiceStatus) return;
   try {
     const result = await fetchServiceJson(EMBEDDING_HEALTH_URL, "Embedding health check failed");
-    renderModelServiceStatus(embeddingServiceStatus, result);
+    renderModelServiceStatus(embeddingServiceStatus, result, embeddingServiceTarget);
   } catch (error) {
     setServiceStatus(embeddingServiceStatus, "未连接", "service-warn");
+    setServiceTarget(embeddingServiceTarget, "");
   }
 }
 
@@ -104,9 +122,10 @@ async function refreshLlmServiceStatus() {
   if (!llmServiceStatus) return;
   try {
     const result = await fetchServiceJson(LLM_HEALTH_URL, "LLM health check failed");
-    renderModelServiceStatus(llmServiceStatus, result);
+    renderModelServiceStatus(llmServiceStatus, result, llmServiceTarget);
   } catch (error) {
     setServiceStatus(llmServiceStatus, "未连接", "service-warn");
+    setServiceTarget(llmServiceTarget, "");
   }
 }
 
