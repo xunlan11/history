@@ -182,7 +182,7 @@ function renderReferenceDocumentOptions() {
   if (!matchedDocuments.length) {
     const empty = document.createElement("p");
     empty.className = "reference-document-empty";
-    empty.textContent = ownDocuments.length ? "没有匹配的文献" : "个人文献库为空，请先登记文献或从公开文献库下载";
+    empty.textContent = ownDocuments.length ? "没有匹配的文献" : "个人文献库为空";
     referenceDocumentList.append(empty);
   }
 
@@ -219,7 +219,7 @@ function updateReferenceSelectionSummary() {
     return;
   }
   const count = pendingReferenceDocumentIds.size;
-  referenceSelectionSummary.textContent = count ? `已选择 ${count} 篇文献` : "未选择文献，将使用自己的文献库";
+  referenceSelectionSummary.textContent = count ? `已选择 ${count} 篇文献` : "未选择文献，将使用完整个人文献库";
 }
 
 openReferenceDocumentsButton?.addEventListener("click", openReferenceDocumentDialog);
