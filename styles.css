@@ -534,28 +534,28 @@ mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset
   gap: 8px;
 }
 
-/* 信息栏编辑态：去掉输入框自带的边框与内边距，让它的高度与只读文字行完全一致
-   （切换编辑态时行高、整个面板高度都不变）；不做底色填充，只用 hover 的中性底和
-   focus 的描边表示可编辑，hover/focus 都不影响布局。 */
+/* 信息栏编辑态：输入框完全不可见，外观与只读文字行一致（相同的字号/行高/左边缘），
+   只保留光标与文字本身。不加底色、不加边框、hover/focus 都不改变外观，
+   因此切换编辑态时行高与整个面板高度都不变。 */
 #reader-document-detail .reader-detail-input {
   width: 100%;
-  padding: 0 4px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 0;
   background: transparent;
   color: var(--text);
   font: inherit;
   line-height: normal;
+  caret-color: var(--primary);
 }
 
-#reader-document-detail .reader-detail-input:hover {
-  background: rgba(0, 0, 0, 0.035);
-}
-
-#reader-document-detail .reader-detail-input:focus {
+#reader-document-detail .reader-detail-input:hover,
+#reader-document-detail .reader-detail-input:focus,
+#reader-document-detail .reader-detail-input:focus-visible {
   outline: none;
+  border: 0;
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--primary);
+  box-shadow: none;
 }
 
 #reader-document-detail > div {
