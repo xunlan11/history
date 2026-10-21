@@ -174,7 +174,7 @@ const PROCESSING_STAGE_CONFIG = [
 ];
 let progressStageNodes = new Map();
 let progressStageFills = new Map();
-let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers;
+let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers, progressOcrDetailNode;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
@@ -187,6 +187,7 @@ function setupCombinedProgress() {
   progressStageFills = new Map([...streamProgress.querySelectorAll("[data-progress-fill]")].map((node) => [node.dataset.progressFill, node]));
   progressTotalNode = streamProgress.querySelector("[data-progress-total]");
   progressModeNode = streamProgress.querySelector("[data-progress-mode]");
+  progressOcrDetailNode = streamProgress.querySelector("[data-progress-ocr-detail]");
   progressFailedNode = streamProgress.querySelector("[data-progress-failed]");
   failedPageMarkers = streamProgress.querySelector("[data-progress-failed-pages]");
 }
@@ -256,7 +257,7 @@ function isStagePageTerminal(page, stageKey) {
 }
 
 // 环显示的是「该阶段当前处理到第几页」，环长表示这一页在该阶段的进展：
-// · 正在处理该页 → 小圆弧 + 转圈动画（后端正文阶段不报页内百分比，只有开始/完成）；
+// · 正在处理该页 → 实测页内进度；没有实测值时小圆弧 + 转圈动画；
 // · 该阶段已全部完成 → 满环，数字为总页数；
 // · 该阶段还没轮到该页 → 空环，数字为下一页（而不是已完成页数）。
 function stagePageState(item, task, stageKey, done, total) {
@@ -292,10 +293,12 @@ function renderStreamProgress(item) {
     // 环长只表示「这一页在这个阶段的任务进度」：调度器给出实测百分比时用它，
     // 拿不到实测值（如远端 OCR 无法报页内进度）时才转圈表示进行中。
     const live = task.stagePages?.[stage.key];
-    const livePercent = live && Number(live.pageNumber) === state.pageNumber ? clampPercent(Number(live.percent) || 0) : null;
+    const samePage = live && Number(live.pageNumber) === state.pageNumber;
+    const livePercent = samePage ? clampPercent(Number(live.percent) || 0) : null;
     const fallbackPercent = task.currentPageStage === stage.key ? clampPercent(Number(task.currentPageProgress) || 0) : 0;
     const measured = livePercent === null ? fallbackPercent : livePercent;
-    const useMeasured = active && measured > 0;
+    const observedOcr = stage.key === "ocr" && samePage && live?.detail?.basis === "pipeline_steps";
+    const useMeasured = active && (measured > 0 || observedOcr);
     const pagePercent = active ? (useMeasured ? Math.min(99, measured) : 12) : clampPercent(state.percent);
     if (fill) fill.style.width = `${clampPercent(percent)}%`;
     if (nodes) {
@@ -306,8 +309,26 @@ function renderStreamProgress(item) {
           ? (useMeasured ? `处理中 ${Math.round(measured)}%` : "处理中")
           : state.percent === 100 ? "已完成" : "待处理"}`
         : stage.label;
+      if (stage.key === "ocr" && active && samePage && live?.detail) {
+        const detail = describeOcrProgressDetail(live.detail);
+        if (detail) nodes.root.title += ` · ${detail}（百分比按实际处理步骤计算）`;
+      }
       setRingProgress(nodes.ring, finished ? 100 : pagePercent);
     }
+  }
+  if (progressOcrDetailNode) {
+    const live = task.stagePages?.ocr;
+    const activePage = Number(task.activeStages?.ocr?.pageNumber) || 0;
+    const active = !finished && activePage > 0 && Number(live?.pageNumber) === activePage;
+    const registration = task.registrationProgress;
+    const candidate = registration?.stage === "metadata_candidate" ? registration : null;
+    const detail = candidate ? describeOcrProgressDetail(candidate.detail, true)
+      : active ? describeOcrProgressDetail(live?.detail) : "";
+    progressOcrDetailNode.textContent = detail ? (candidate
+      ? `登记 OCR ${Math.round(Number(candidate.percent) || 0)}% · ${detail}`
+      : `第 ${activePage} 页 · ${detail}`) : "";
+    progressOcrDetailNode.classList.toggle("hidden", !detail);
+    progressOcrDetailNode.title = "百分比按实际处理步骤与文字区域完成量计算，不表示耗时比例";
   }
   renderFailedProcessingPages(item);
 }

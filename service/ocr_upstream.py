@@ -50,6 +50,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
+import uuid
 import time
 import urllib.error
 import urllib.request
@@ -227,7 +229,8 @@ def health(force: bool = False) -> dict[str, Any]:
     return result
 
 
-def recognize_page_image(path: Path, page_number: int | None = None, mode: str = "formal") -> dict[str, Any]:
+def recognize_page_image(path: Path, page_number: int | None = None, mode: str = "formal",
+                         on_progress: Any = None) -> dict[str, Any]:
     """把单页图片交给服务端识别，返回统一结构。"""
     base = upstream_url()
     if not base:
@@ -244,7 +247,7 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
     for candidate in candidates:
         try:
             if candidate == "paddlex":
-                payload = _call_paddlex(base, image_base64, path.name, page_number, mode)
+                payload = _call_paddlex(base, image_base64, path.name, page_number, mode, on_progress=on_progress)
                 normalized = _normalize_paddlex(payload)
             else:
                 payload = _call_native(base, image_base64, path.name, page_number, mode)
@@ -283,6 +286,7 @@ def _call_paddlex(
     filename: str,
     page_number: int | None,
     mode: str,
+    on_progress: Any = None,
 ) -> dict[str, Any]:
     """PaddleX / PaddleOCR 官方 serving：POST /layout-parsing。"""
     quick = mode == "quick"
@@ -305,12 +309,40 @@ def _call_paddlex(
     if page_number is not None:
         payload["pageNumber"] = page_number
     payload["filename"] = filename
-    _status, body = _request_json(
-        f"{base}/layout-parsing",
-        payload,
-        timeout=recognize_timeout(),
-    )
-    return body
+    # A random per-inference ID prevents stale progress on retries and separates
+    # two sites using the same model server. It is never a document identifier.
+    request_key = uuid.uuid4().hex if on_progress else ""
+    stop = threading.Event()
+    watcher = None
+    if on_progress:
+        watcher = threading.Thread(target=_watch_model_progress,
+                                   args=(base, request_key, on_progress, stop), daemon=True)
+        watcher.start()
+    try:
+        _status, body = _request_json(
+            f"{base}/layout-parsing", payload, timeout=recognize_timeout(),
+            headers={"X-OCR-Progress-Key": request_key} if request_key else None,
+        )
+        return body
+    finally:
+        stop.set()
+        if watcher:
+            watcher.join(timeout=3)
+
+
+def _watch_model_progress(base: str, key: str, callback: Any, stop: threading.Event) -> None:
+    while not stop.wait(0.25):
+        try:
+            _status, progress = _request_json(f"{base}/layout-parsing/progress/{key}", None, timeout=2, method="GET")
+            if stop.is_set():
+                return
+            if progress.get("updatedAt") and progress.get("status") not in {"completed", "failed"}:
+                callback(progress)
+        except OcrUpstreamHttpError as exc:
+            if exc.status in {404, 405}:
+                return  # Older PaddleX serving: keep recognition usable, no invented percent.
+        except (OcrUpstreamError, ValueError, TypeError):
+            continue  # A failed progress query never submits a second inference.
 
 
 def _call_native(
@@ -339,9 +371,12 @@ def _request_json(
     *,
     timeout: float,
     method: str = "POST",
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(url, data=data, method=method)
+    for name, value in (headers or {}).items():
+        request.add_header(name, value)
     request.add_header("Accept", "application/json")
     if data is not None:
         request.add_header("Content-Type", "application/json; charset=utf-8")

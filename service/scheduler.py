@@ -71,7 +71,7 @@ def metadata(document):
 
 
 def progress_key(document_id, operation, page_number):
-    """大模型服务与调度器共用的单页任务进度键。"""
+    """服务与调度器共用的单页任务进度键。"""
     return f"{document_id}:{operation}:{page_number}"
 
 
@@ -132,14 +132,14 @@ class HttpServices:
         return self._request(f"{self.llm_url}/llm/progress/{quote(str(key), safe='')}", timeout=3)
 
     def ocr_progress(self, key):
-        """轮询 OCR 服务的登记候选页识别进度。"""
+        """轮询 OCR 服务的正文或登记候选页实际识别进度。"""
         return self._request(f"{self.ocr_url}/ocr/progress/{quote(str(key), safe='')}", timeout=3)
 
     def execute(self, operation, job, document, checkpoint, page_number=0):
         source = Path(job["source_path"])
         if operation == "metadata_candidate":
             return self._form("/ocr/metadata-candidate", "document", source,
-                              {"progressKey": progress_key(document["id"], operation, 0)})
+                              {"progressKey": job.get("ocr_progress_key") or progress_key(document["id"], operation, 0)})
         if operation == "metadata":
             text = checkpoint["metadataCandidate"].get("text") or document.get("fileName") or source.name
             result = self._llm("extract-metadata", {"documentId": document["id"], "text": text,
@@ -174,7 +174,8 @@ class HttpServices:
             image_path = (Path(job["asset_root"]) / page["imageFile"]["path"]).resolve()
             if not image_path.is_relative_to(Path(job["asset_root"]).resolve()):
                 raise ProcessingFailure("页面图片路径无效")
-            return self._form("/ocr", "image", image_path, {"pageNumber": page_number})
+            return self._form("/ocr", "image", image_path, {"pageNumber": page_number,
+                              "progressKey": job.get("ocr_progress_key") or progress_key(document["id"], operation, page_number)})
         if operation == "variant":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             return {"normalizedText": to_simplified(str(page.get("ocrText") or ""))}
@@ -294,11 +295,14 @@ class Scheduler:
         return dict(row), payload, json.loads(row["checkpoint"])
 
     # —— 单页阶段任务进度（仅内存，供 /processing 读取）——
-    def _set_page_progress(self, document_id, stage, page_number, percent):
+    def _set_page_progress(self, document_id, stage, page_number, percent, detail=None, stop=None):
         with self.progress_lock:
+            if stop is not None and stop.is_set():
+                return
             stages = self.page_progress.setdefault(document_id, {})
             stages[stage] = {"pageNumber": int(page_number),
-                             "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock()}
+                             "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock(),
+                             **({"detail": dict(detail)} if detail else {})}
 
     def _clear_page_progress(self, document_id, stage):
         with self.progress_lock:
@@ -313,10 +317,13 @@ class Scheduler:
         with self.progress_lock:
             return {stage: dict(entry) for stage, entry in (self.page_progress.get(document_id) or {}).items()}
 
-    def _set_registration_progress(self, document_id, stage, percent):
+    def _set_registration_progress(self, document_id, stage, percent, detail=None, stop=None):
         with self.progress_lock:
+            if stop is not None and stop.is_set():
+                return
             self.registration_progress[document_id] = {"stage": stage,
-                "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock()}
+                "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock(),
+                **({"detail": dict(detail)} if detail else {})}
 
     def _clear_registration_progress(self, document_id):
         with self.progress_lock:
@@ -327,21 +334,22 @@ class Scheduler:
             entry = self.registration_progress.get(document_id)
             return dict(entry) if entry else {}
 
-    def _start_progress_watcher(self, lane, document_id, stage, page_number, registration=False, source="llm"):
+    def _start_progress_watcher(self, lane, document_id, stage, page_number, registration=False, source="llm", key=None):
         self._stop_progress_watcher(lane)
         stop = threading.Event()
         self.progress_watchers[lane] = stop
         threading.Thread(target=self._watch_progress,
-                         args=(document_id, stage, page_number, registration, source, stop),
+                         args=(document_id, stage, page_number, registration, source, stop, key),
                          name=f"progress-{stage}-{page_number}", daemon=True).start()
 
     def _stop_progress_watcher(self, lane):
         stop = self.progress_watchers.pop(lane, None)
         if stop:
-            stop.set()
+            with self.progress_lock:
+                stop.set()
 
-    def _watch_progress(self, document_id, stage, page_number, registration, source, stop):
-        key = progress_key(document_id, stage, page_number)
+    def _watch_progress(self, document_id, stage, page_number, registration, source, stop, key=None):
+        key = key or progress_key(document_id, stage, page_number)
         reader = self.services.ocr_progress if source == "ocr" else self.services.llm_progress
         while not stop.wait(0.5):
             try:
@@ -351,9 +359,11 @@ class Scheduler:
             if not payload.get("updatedAt"):
                 continue
             if registration:
-                self._set_registration_progress(document_id, stage, payload.get("percent"))
+                self._set_registration_progress(document_id, stage, payload.get("percent"),
+                                                detail=payload if source == "ocr" else None, stop=stop)
             else:
-                self._set_page_progress(document_id, stage, page_number, payload.get("percent"))
+                self._set_page_progress(document_id, stage, page_number, payload.get("percent"),
+                                        detail=payload if source == "ocr" else None, stop=stop)
 
     @staticmethod
     def _page(doc, number):
@@ -585,15 +595,24 @@ class Scheduler:
             future.set_exception(ProcessingFailure("归档原件路径无效"))
         else:
             job["source_path"] = str(source_path)
+            # OCR 每次尝试独立进度键，避免重试时读取上次已完成的条目。
+            if operation in {"ocr", "metadata_candidate"}:
+                key = f"{progress_key(doc['id'], operation, number)}:{uuid.uuid4().hex}"
+                job["ocr_progress_key"] = key
+                if operation == "ocr":
+                    self._set_page_progress(doc["id"], operation, number, 0)
+                else:
+                    self._set_registration_progress(doc["id"], operation, 0)
+                self._start_progress_watcher(lane, doc["id"], operation, number,
+                                             registration=operation == "metadata_candidate", source="ocr", key=key)
             # 标点/校对是大模型逐字生成，边生成边回报该页该阶段的百分比。
-            if operation in {"punctuation", "proofreading"}:
+            elif operation in {"punctuation", "proofreading"}:
                 self._set_page_progress(doc["id"], operation, number, 0)
                 self._start_progress_watcher(lane, doc["id"], operation, number)
-            # 登记：候选页 OCR 逐页回报，元数据识别继续由大模型流式回报。
-            elif operation in {"metadata_candidate", "metadata"}:
+            # 登记元数据识别继续由大模型流式回报。
+            elif operation == "metadata":
                 self._set_registration_progress(doc["id"], operation, 0)
-                self._start_progress_watcher(lane, doc["id"], operation, 0, registration=True,
-                                             source="ocr" if operation == "metadata_candidate" else "llm")
+                self._start_progress_watcher(lane, doc["id"], operation, 0, registration=True)
             future = self.executor.submit(self.services.execute, operation, job, doc, cp, number)
         self.running[lane] = (future, doc["id"], operation, number)
 

@@ -209,9 +209,27 @@ def health():
 
 @app.get("/ocr/progress/{key}")
 def task_progress(key: str) -> dict[str, Any]:
-    """调度器轮询用：返回登记候选页识别等任务的当前百分比。"""
+    """调度器轮询用：正文/登记 OCR 的实际阶段、区域计数和完成比例。"""
     entry = read_progress(key)
-    return {"key": key, "percent": entry["percent"], "updatedAt": entry["updatedAt"]}
+    return {"key": key, **entry}
+
+
+def progress_writer(key: str):
+    """Reset on every attempt; retain observed details along with the percentage."""
+    set_progress(key, 0, stage="等待 OCR 执行", status="queued")
+
+    def report(event):
+        details = {k: v for k, v in event.items() if k not in {"key", "percent", "updatedAt"}}
+        set_progress(key, event.get("percent", 0), **details)
+
+    return report if key else None
+
+
+def fail_progress(key: str) -> None:
+    entry = read_progress(key)
+    entry.pop("updatedAt", None)
+    percent = entry.pop("percent", 0)
+    set_progress(key, percent, **{**entry, "status": "failed"})
 
 
 @app.post("/ocr")
@@ -219,13 +237,19 @@ async def recognize_page(
     image: UploadFile = File(...),
     pageNumber: str = Form("1"),
     quick_read: str = Form("false", alias="quickRead"),
+    progressKey: str = Form(""),
 ):
     page_path = await save_upload(image)
+    key = (progressKey or "").strip()
+    report = progress_writer(key)
     try:
         result = await run_in_threadpool(call_upstream, recognize_image, page_path,
-                                        quick_read=quick_read.lower() == "true")
+                                        quick_read=quick_read.lower() == "true", on_progress=report)
         result["pageNumber"] = int(pageNumber or 1)
         return JSONResponse(result)
+    except Exception:
+        fail_progress(key)
+        raise
     finally:
         page_path.unlink(missing_ok=True)
 
@@ -236,16 +260,15 @@ async def extract_metadata_candidate(document: UploadFile = File(...), progressK
     source_path = await save_upload(document, prefix=f"metadata-{uuid.uuid4().hex[:12]}")
     key = (progressKey or "").strip()
 
-    def report(done: int, total: int) -> None:
-        if not key:
-            return
-        total = max(1, int(total or 1))
-        set_progress(key, 100 if done >= total else min(96, max(1, int(done * 96 / total))))
+    report = progress_writer(key)
 
     try:
-        candidate = await run_in_threadpool(call_upstream, build_metadata_candidate, source_path, report if key else None)
+        candidate = await run_in_threadpool(call_upstream, build_metadata_candidate, source_path, report)
         candidate["sourceFileName"] = document.filename
         return JSONResponse(candidate)
+    except Exception:
+        fail_progress(key)
+        raise
     finally:
         # 这里只清理本次请求创建的临时上传；不接触归档原件或正文任务文件。
         source_path.unlink(missing_ok=True)
@@ -447,7 +470,7 @@ def process_document(
         total_pages=1,
         current_page=1,
         stage="提交识别中",
-        progress=10,
+        progress=0,
     )
     result = recognize_image(
         page_path,
@@ -493,7 +516,7 @@ def process_pdf(
                 total_pages=total_pages,
                 current_page=index,
                 stage="拆页中",
-                progress=5,
+                progress=0,
             )
             scale = 1.5 if quick_read else 2
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
@@ -526,14 +549,20 @@ def process_pdf(
 
 def build_metadata_candidate(path: Path, on_progress: Any = None) -> dict[str, Any]:
     """最多读取前三页；有文字层时直接提取，扫描页才调用现有远端 OCR。"""
-    def report(done: int, total: int) -> None:
-        if on_progress:
-            on_progress(done, total)
+    def page_report(index: int, total_pages: int):
+        def report(event):
+            if on_progress:
+                page_percent = max(0, min(100, event.get("percent", 0)))
+                on_progress({**event, "pageNumber": index + 1, "pageTotal": total_pages,
+                             "pagesCompleted": index + int(page_percent == 100),
+                             "pagePercent": page_percent,
+                             "percent": int(100 * (index + page_percent / 100) / total_pages),
+                             "basis": "candidate_pages_and_steps",
+                             "status": "completed" if index + 1 == total_pages and page_percent == 100 else "running"})
+        return report
 
     if path.suffix.lower() != ".pdf":
-        report(0, 1)
-        result = recognize_image(path, page_number=1, quick_read=True)
-        report(1, 1)
+        result = recognize_image(path, page_number=1, quick_read=True, on_progress=page_report(0, 1))
         return {"text": str(result.get("text") or ""), "pagesRead": 1, "totalPages": 1}
 
     try:
@@ -550,17 +579,19 @@ def build_metadata_candidate(path: Path, on_progress: Any = None) -> dict[str, A
         page_limit = min(REGISTRATION_METADATA_PAGE_LIMIT, doc.page_count)
         with TemporaryDirectory(prefix="metadata-pages-", dir=temp_dir) as output_dir:
             for index in range(page_limit):
+                report = page_report(index, page_limit)
+                report({"stage": "读取候选页", "percent": 0, "status": "running"})
                 page = doc.load_page(index)
                 text = page.get_text().strip()
                 if not text:
                     image_path = Path(output_dir) / f"page-{index + 1}.png"
                     pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                     pix.save(image_path)
-                    result = recognize_image(image_path, page_number=index + 1, quick_read=True)
+                    result = recognize_image(image_path, page_number=index + 1, quick_read=True, on_progress=report)
                     text = str(result.get("text") or "").strip()
                 if text:
                     texts.append(f"[第 {index + 1} 页]\n{text}")
-                report(index + 1, page_limit)
+                report({"stage": "候选页读取完成", "percent": 100, "status": "completed"})
         return {"text": "\n\n".join(texts), "pagesRead": page_limit, "totalPages": doc.page_count}
 
 
@@ -587,8 +618,9 @@ def recognize_image(
     """
     ensure_image_readable(path)
     mode = "quick" if quick_read else "formal"
-    report_progress(on_progress, "快速识别" if quick_read else "提交服务端识别", 50)
-    result = ocr_upstream.recognize_page_image(path, page_number=page_number, mode="quick" if quick_read else "reader")
+    report_progress(on_progress, "提交服务端识别", 0, status="running")
+    result = ocr_upstream.recognize_page_image(
+        path, page_number=page_number, mode="quick" if quick_read else "reader", on_progress=on_progress)
 
     blocks = result.get("blocks") or []
     lines = result.get("lines") or []
@@ -624,7 +656,7 @@ def recognize_image(
     if page_number is not None:
         payload["pageNumber"] = page_number
 
-    report_progress(on_progress, "已完成", 100)
+    report_progress(on_progress, "已完成", 100, status="completed")
     return payload
 
 
@@ -719,20 +751,20 @@ def public_task(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def report_progress(callback: Any, stage: str, progress: int) -> None:
+def report_progress(callback: Any, stage: str, progress: int, **details: Any) -> None:
     if callback:
-        callback(stage, progress)
+        callback({"stage": stage, "percent": progress, **details})
 
 
 def make_page_progress_callback(task_id: str, page_number: int, total_pages: int):
-    def on_progress(stage: str, progress: int) -> None:
+    def on_progress(event: dict[str, Any]) -> None:
         set_stream_progress(
             task_id,
             completed_pages=page_number - 1,
             total_pages=total_pages,
             current_page=page_number,
-            stage=stage,
-            progress=progress,
+            stage=event["stage"],
+            progress=event["percent"],
         )
 
     return on_progress

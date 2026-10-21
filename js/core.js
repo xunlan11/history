@@ -1277,6 +1277,32 @@ function normalizeStageProgress(value, total = 0) {
     }];
   }));
 }
+// OCR 进度的百分比表示实际步骤完成比例；区域数是模型实际识别完成量。
+function normalizeOcrProgressDetail(value) {
+  if (!value || typeof value !== "object") return null;
+  const count = (key) => Math.max(0, Math.floor(Number(value[key]) || 0));
+  return {
+    stage: String(value.stage || ""), status: String(value.status || ""),
+    basis: String(value.basis || ""), unit: String(value.unit || ""),
+    completed: count("completed"), total: count("total"),
+    completedSteps: count("completedSteps"), totalSteps: count("totalSteps"),
+    pageNumber: count("pageNumber"), pageTotal: count("pageTotal"),
+  };
+}
+
+function describeOcrProgressDetail(detail, includePage = false) {
+  if (!detail) return "";
+  const parts = [];
+  if (includePage && detail.pageNumber > 0 && detail.pageTotal > 0) {
+    parts.push(`候选页 ${detail.pageNumber}/${detail.pageTotal}`);
+  }
+  if (detail.stage) parts.push(detail.stage);
+  if (detail.unit === "文字区域" && detail.total > 0) {
+    parts.push(`${Math.min(detail.completed, detail.total)}/${detail.total} 个文字区域`);
+  }
+  return parts.join(" · ");
+}
+
 // 单页阶段任务的实时进度（调度器内存快照，只在 /processing 轮询里出现）。
 function normalizeStagePages(value) {
   const stages = ["ocr", "variant", "punctuation", "proofreading"];
@@ -1287,15 +1313,17 @@ function normalizeStagePages(value) {
     return [stage, {
       pageNumber: Number(entry.pageNumber) || 0,
       percent: Math.min(100, Math.max(0, Number(entry.percent) || 0)),
+      detail: normalizeOcrProgressDetail(entry.detail),
     }];
   }));
 }
-// 登记阶段的实时进度（候选页 OCR 逐页、元数据识别流式），同样只在 /processing 里出现。
+// 登记阶段的实时进度（候选页 OCR 含页内计数、元数据识别流式），同样只在 /processing 里出现。
 function normalizeRegistrationProgress(value) {
   if (!value || typeof value !== "object") return null;
   return {
     stage: String(value.stage || ""),
     percent: Math.min(100, Math.max(0, Number(value.percent) || 0)),
+    detail: normalizeOcrProgressDetail(value.detail),
   };
 }
 function normalizeProcessingTask(task) {

@@ -15,4 +15,7 @@ __pycache__/
 !/tests/reader-visual-catalog.test.cjs
 !/tests/reader-search.test.cjs
 !/tests/retrieval.test.cjs
+!/tests/test_ocr_model_progress.py
+!/tests/test_ocr_progress.py
+!/tests/ocr-progress.test.cjs
 测试文件

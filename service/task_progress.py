@@ -14,21 +14,27 @@ from typing import Any, Callable
 PROGRESS_TTL_SECONDS = 300
 
 _LOCK = threading.Lock()
-_ENTRIES: dict[str, dict[str, float]] = {}
+_ENTRIES: dict[str, dict[str, Any]] = {}
 
 
-def set_progress(key: str, percent: int) -> None:
+def set_progress(key: str, percent: int, **details: Any) -> None:
     if not key:
         return
     with _LOCK:
-        _ENTRIES[key] = {"percent": max(0, min(100, int(percent))), "updatedAt": time.time()}
+        now = time.time()
+        for stale in [name for name, entry in _ENTRIES.items()
+                      if entry.get("status") not in {"running", "queued"}
+                      and now - entry["updatedAt"] > PROGRESS_TTL_SECONDS]:
+            _ENTRIES.pop(stale, None)
+        _ENTRIES[key] = {**details, "percent": max(0, min(100, int(percent))), "updatedAt": now}
 
 
-def read_progress(key: str) -> dict[str, float]:
+def read_progress(key: str) -> dict[str, Any]:
     """读取进度；过期的条目在这里顺带清掉。没有记录时 percent=0、updatedAt=0。"""
     now = time.time()
     with _LOCK:
-        for stale in [name for name, entry in _ENTRIES.items() if now - entry["updatedAt"] > PROGRESS_TTL_SECONDS]:
+        for stale in [name for name, entry in _ENTRIES.items() if entry.get("status") not in {"running", "queued"}
+                      and now - entry["updatedAt"] > PROGRESS_TTL_SECONDS]:
             _ENTRIES.pop(stale, None)
         entry = _ENTRIES.get(key)
         return dict(entry) if entry else {"percent": 0, "updatedAt": 0}

@@ -259,6 +259,7 @@ tar --zstd -xf /tmp/history-ollama.tar.zst -C "$HOME/history-service/ollama"
 | --- | --- |
 | `deploy/service/PP-StructureV3-cpu.yaml` | `~/history-service/PP-StructureV3-cpu.yaml`（直接放根目录，unit 运行时读取） |
 | `deploy/service/*.service` | 暂存到 `~/history-service/deploy/service/`，共五个 unit |
+| `service/ocr_model.py`、`service/ocr_model_progress.py` | `~/history-service/service/`（两个文件均需同步） |
 
 在模型端安装三个模型 unit，隧道稍后配置：
 
@@ -327,6 +328,37 @@ PY
 ```
 
 检查嵌入 `/api/ps` 的 `size_vram=0`，生成实例仍有 `qwen3:8b`。记录冷/热耗时和 RAM/VRAM 峰值；GPU 存在时确认生成能利用 GPU，不能为节省排错时间把所有模型改为 CPU。
+
+### OCR 实时进度更新
+
+模型 unit 使用 `venv-ocr/bin/python -m service.ocr_model` 启动，固定 CPU 推理，保留 PaddleX 官方 `/layout-parsing` 请求/响应格式和串行推理线程。启动器只观察实际推理阶段与文字区域产出，不修改 PaddleX 安装包。当前已用 PaddleX **3.7.2** 验证；升级 PaddleX 前需检查内部管线接口并重新执行识别与进度验证，缺少必要采集点时启动器会明确报错。
+
+模型端从已确认的新代码目录同步以下文件，然后更新本用户的 OCR unit（工作目录仍为 `~/history-service`）：
+
+```bash
+# MODEL_REPO 是包含本次改动的仓库副本；跨机器时先传送相同文件。
+export MODEL_REPO="$HOME/history"
+mkdir -p "$HOME/history-service/service"
+install -m 0644 "$MODEL_REPO/service/ocr_model.py" "$MODEL_REPO/service/ocr_model_progress.py" "$HOME/history-service/service/"
+install -m 0644 "$MODEL_REPO/deploy/service/history-ocr.service" "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user restart history-ocr.service
+curl --fail http://127.0.0.1:8080/health
+```
+
+模型仍在加载时等待就绪再检查。不要只更新 unit 而遗漏两个 Python 文件。原有反向隧道继续转发同一个端口，无需增加端口或重启 LLM。
+
+数据端同步本次代码与前端后，重启实际部署的 Data/OCR API（历史站与文学站都需要）：
+
+```bash
+sudo systemctl restart history-data.service history-ocr.service literature.service literature-ocr.service
+```
+
+真实进度链路是：模型端 `X-OCR-Progress-Key` 请求头 + `GET /layout-parsing/progress/{key}` → OCR API `/ocr/progress/{progressKey}` → 调度器 `/api/documents/{id}/processing` → 正文 `stagePages.ocr` / 登记 `registrationProgress`。`POST /ocr` 与 `/ocr/metadata-candidate` 均接受表单 `progressKey`。每次调度尝试和每次模型调用使用独立键，失败或取消后的旧查询不能覆盖新任务。
+
+模型进度返回 `percent`、`stage`、`completed`、`total`、`unit`、`status`、`completedSteps`、`totalSteps`、`basis`、`updatedAt`。`basis=pipeline_steps` 表示配置步骤的完成比例，文字识别步骤按实际产出的文字区域数细分，其他步骤只在实际完成后推进；不预测耗时。100% 在成功响应后才产生。候选文字识别再按“已完成候选页 + 当前页完成比例”汇总；文字层提取直接计入已完成页。上传/候选 OCR/元数据识别仍沿用 0–20 / 20–50 / 50–100 的登记阶段显示区间，这个总比例是工作流比例，悬停可查看候选 OCR 本身的进度与计数。
+
+旧模型端返回进度接口 404/405 时，仅停用该次调用的模型进度轮询，识别请求照常执行，界面不会生成虚假的页内百分比。真实进度也只保留在当前服务进程内存中；重启后新调度尝试重新采集。OCR API 和模型启动器均使用单工作进程，不能用多个 Uvicorn worker 分割进度表。
 
 ## 6. 连通模型端与数据端
 

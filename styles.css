@@ -4685,3 +4685,11 @@ body {
 .reader-visual-backfill > button:disabled { opacity: .6; cursor: progress; }
 .reader-visual-catalog-toggle.is-reader-rail-button { padding: .6rem .4rem; }
 .reader-visual-placement-status { margin: .5rem 0 0; color: #786f60; font-size: .85rem; }
+
+/* 当前 OCR 的实际模型阶段和文字区域计数。 */
+.progress-ocr-detail {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

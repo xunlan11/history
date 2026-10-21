@@ -10,10 +10,8 @@ WorkingDirectory=%h/history-service
 Environment=PYTHONUNBUFFERED=1
 Environment=PADDLE_PDX_MODEL_SOURCE=bos
 Environment=OMP_NUM_THREADS=8
-ExecStart=%h/history-service/venv-ocr/bin/paddlex \
-    --serve \
+ExecStart=%h/history-service/venv-ocr/bin/python -m service.ocr_model \
     --pipeline %h/history-service/PP-StructureV3-cpu.yaml \
-    --device cpu \
     --host 127.0.0.1 \
     --port 8080
 Restart=always

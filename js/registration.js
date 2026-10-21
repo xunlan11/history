@@ -195,8 +195,8 @@ function shortenDocumentCardStatus(text) {
 // 保存记录、落库排队都很短，不再单独占用百分比；没有实测值时退回各阶段起点值。
 const BACKEND_REGISTRATION_STAGES = {
   "": { percent: 20 },
-  metadata_candidate: { percent: 35 },
-  metadata: { percent: 75 },
+  metadata_candidate: { percent: 20 },
+  metadata: { percent: 50 },
 };
 const REGISTRATION_STAGE_RANGES = {
   metadata_candidate: { from: 20, to: 50 },
@@ -213,7 +213,9 @@ function describeBackendRegistration(item) {
   const range = live ? REGISTRATION_STAGE_RANGES[live.stage] : null;
   if (range) {
     const percent = range.from + (range.to - range.from) * (Number(live.percent) || 0) / 100;
-    return `登记中 ${Math.round(percent)}%`;
+    const detail = live.stage === "metadata_candidate" ? describeOcrProgressDetail(live.detail, true) : "";
+    const ocr = live.stage === "metadata_candidate" ? `候选 OCR ${Math.round(Number(live.percent) || 0)}%` : "";
+    return [`登记中 ${Math.round(percent)}%`, ocr, detail].filter(Boolean).join(" · ");
   }
   const stage = BACKEND_REGISTRATION_STAGES[task.currentPageStage || ""] || BACKEND_REGISTRATION_STAGES[""];
   return `登记中 ${stage.percent}%`;
