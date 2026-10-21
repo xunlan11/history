@@ -898,6 +898,12 @@ const READER_DETAIL_FIELDS = [
 
 let readerDetailEditing = false;
 let readerDetailEditingDocumentId = "";
+// 编辑态下已经输入、还没保存的内容。侧栏每次重绘（后台同步 / renderAll）都会重建输入框，
+// 若直接读文献对象的旧值，用户正在输入的内容会被冲掉，所以用草稿回填。
+let readerDetailDraft = null; // { documentId, values }
+// 重绘前记住焦点所在的输入框与光标位置，回填后恢复，避免同步一来光标就丢。
+let readerDetailFocus = null; // { documentId, key, start, end }
+let readerDetailSaving = false;
 
 // 编辑按钮只对文献所有者显示（canEditDocument 已按 ownerId 判定）。
 function renderReaderDetailActions(item, canEdit, editing) {
@@ -927,14 +933,19 @@ function renderReaderDetailActions(item, canEdit, editing) {
     cancelButton.className = "ghost-link";
     cancelButton.id = "reader-detail-cancel";
     cancelButton.textContent = "取消";
+    cancelButton.disabled = readerDetailSaving;
     cancelButton.addEventListener("click", () => setReaderDetailEditing(false));
 
     const saveButton = document.createElement("button");
     saveButton.type = "button";
     saveButton.className = "ghost-link icon-text-button";
     saveButton.id = "reader-detail-save";
-    saveButton.innerHTML =
-      '<span>保存</span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg>';
+    saveButton.disabled = readerDetailSaving;
+    if (readerDetailSaving) {
+      saveButton.setAttribute("aria-busy", "true");
+    }
+    saveButton.innerHTML = `<span>${readerDetailSaving ? "保存中" : "保存"}</span>` +
+      '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg>';
     saveButton.addEventListener("click", () => saveReaderDetailEdits(item.id));
 
     readerDetailActions.append(cancelButton, saveButton);
@@ -956,7 +967,45 @@ function renderReaderDetailActions(item, canEdit, editing) {
 // 编辑态按与只读态完全相同的顺序与行数渲染，避免切换编辑时行位置/高度跳动。
 const READER_DETAIL_EDIT_ORDER = ["title", "author", "year", "publisher", "creator", "tags"];
 
+// 重绘前把「已输入但未保存」的内容和光标位置从 DOM 里抓出来。
+function captureReaderDetailDraft() {
+  readerDetailFocus = null;
+  if (!readerDetailEditing || !readerDetailNode || !readerDetailEditingDocumentId) {
+    return;
+  }
+
+  const inputs = readerDetailNode.querySelectorAll("input[data-detail-field]");
+  if (!inputs.length) {
+    return;
+  }
+
+  const values =
+    readerDetailDraft && readerDetailDraft.documentId === readerDetailEditingDocumentId
+      ? readerDetailDraft.values
+      : {};
+  // 只回填用户真正改过的字段；没动过的字段继续跟随文献对象（服务端更新能正常显示）。
+  inputs.forEach((input) => {
+    const key = input.dataset.detailField;
+    if (key && Object.hasOwn(values, key)) values[key] = input.value;
+  });
+  readerDetailDraft = { documentId: readerDetailEditingDocumentId, values };
+
+  const active = document.activeElement;
+  if (active && active.dataset && active.dataset.detailField) {
+    readerDetailFocus = {
+      documentId: readerDetailEditingDocumentId,
+      key: active.dataset.detailField,
+      start: active.selectionStart,
+      end: active.selectionEnd,
+    };
+  }
+}
+
 function appendReaderDetailEditor(item) {
+  const draft = readerDetailDraft && readerDetailDraft.documentId === item.id
+    ? readerDetailDraft.values
+    : null;
+
   READER_DETAIL_EDIT_ORDER.forEach((key) => {
     if (key === "creator") {
       appendDocumentAttribution(readerDetailNode, item);
@@ -977,9 +1026,15 @@ function appendReaderDetailEditor(item) {
     input.type = "text";
     input.className = "reader-detail-input";
     input.dataset.detailField = field.key;
-    input.value = item[field.key] || "";
+    input.value = draft && Object.hasOwn(draft, field.key) ? draft[field.key] : item[field.key] || "";
     input.placeholder = field.placeholder;
     input.setAttribute("aria-label", field.label);
+    input.addEventListener("input", () => {
+      if (!readerDetailDraft || readerDetailDraft.documentId !== item.id) {
+        readerDetailDraft = { documentId: item.id, values: {} };
+      }
+      readerDetailDraft.values[field.key] = input.value;
+    });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -998,6 +1053,11 @@ function appendReaderDetailEditor(item) {
 
 function setReaderDetailEditing(editing) {
   readerDetailEditing = Boolean(editing);
+  if (!readerDetailEditing) {
+    // 取消 / 退出编辑态即丢弃未保存的输入。
+    readerDetailDraft = null;
+    readerDetailFocus = null;
+  }
   renderAll();
 
   if (readerDetailEditing) {
@@ -1007,7 +1067,11 @@ function setReaderDetailEditing(editing) {
   }
 }
 
-function saveReaderDetailEdits(documentId) {
+async function saveReaderDetailEdits(documentId) {
+  if (readerDetailSaving) {
+    return;
+  }
+
   const item = getLiveDocument(documentId);
   if (!item || !canEditDocument(item)) {
     setReaderDetailEditing(false);
@@ -1023,9 +1087,38 @@ function saveReaderDetailEdits(documentId) {
 
   item.updatedAt = new Date().toISOString();
   persist();
-  setReaderDetailEditing(false);
+  // 输入已经写进文献对象，草稿使命结束（推送失败时重绘也会从对象里回填同样的值）。
+  readerDetailDraft = null;
+
+  // persist() 只是写本地缓存 + 600ms 后推送服务端，这里必须等推送结果再提示，
+  // 否则推送失败时用户看到「已保存」，服务端却还是旧内容。
+  readerDetailSaving = true;
+  if (selectedDocumentId === documentId && readerDetailEditing) {
+    renderReaderDetailActions(item, true, true);
+  }
+  let synced = false;
+  try {
+    synced = await flushPendingSync();
+  } catch {
+    synced = false;
+  } finally {
+    readerDetailSaving = false;
+  }
+
+  if (synced) {
+    setReaderDetailEditing(false);
+    if (typeof showUploadToast === "function") {
+      showUploadToast("文献信息已保存");
+    }
+    return;
+  }
+
+  // 失败：留在编辑态并明确报错；改动已在本地缓存里，会在之后的同步中重试推送。
+  if (selectedDocumentId === documentId && readerDetailEditing) {
+    renderReaderDetailActions(item, true, true);
+  }
   if (typeof showUploadToast === "function") {
-    showUploadToast("文献信息已保存");
+    showUploadToast("文献信息保存失败：尚未同步到服务器，请稍后重试", 4200);
   }
 }
 
@@ -1035,11 +1128,15 @@ function renderReaderSidebar() {
   }
 
   const item = getSelectedDocument();
+  // 先把当前输入抓成草稿，再重建 DOM（否则后台同步触发的重绘会把用户输入复原成旧值）。
+  captureReaderDetailDraft();
   readerDetailNode.innerHTML = "";
 
   if (!item) {
     readerDetailEditing = false;
     readerDetailEditingDocumentId = "";
+    readerDetailDraft = null;
+    readerDetailFocus = null;
     renderReaderDetailActions(null, false, false);
     readerDetailNode.append(emptyState("请先在文献库打开一本文献"));
     renderStreamProgress(null);
@@ -1051,13 +1148,28 @@ function renderReaderSidebar() {
   if (readerDetailEditingDocumentId !== item.id || isDocumentRegistrationPending(item)) {
     readerDetailEditing = false;
     readerDetailEditingDocumentId = item.id;
+    readerDetailDraft = null;
+    readerDetailFocus = null;
   }
   const editing = readerDetailEditing && canEdit;
   renderReaderDetailActions(item, canEdit, editing);
 
   if (editing) {
     appendReaderDetailEditor(item);
+    // 恢复重绘前的焦点与光标位置（只在重绘前确实停在某个输入框里时做）。
+    if (readerDetailFocus && readerDetailFocus.documentId === item.id) {
+      const target = readerDetailNode.querySelector(
+        `input[data-detail-field="${readerDetailFocus.key}"]`
+      );
+      if (target) {
+        target.focus();
+        if (Number.isInteger(readerDetailFocus.start)) {
+          target.setSelectionRange(readerDetailFocus.start, readerDetailFocus.end ?? readerDetailFocus.start);
+        }
+      }
+    }
   } else {
+    readerDetailFocus = null;
     const rows = [
       ["文献名", item.title || "未识别"],
       ["作者", item.author || "未录"],

@@ -35,5 +35,4 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 1. 编年。
 2. 水印。
 3. 星火spark x2.5。
-4. 文献信息修改可用时间？
-5. 速度优化。
+4. 速度优化。
