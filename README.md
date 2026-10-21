@@ -8,7 +8,7 @@ winget install astral-sh.uv # Windows 系统
 curl -LsSf https://astral.sh/uv/install.sh | sh # Linux / macOS 系统
 cd history
 uv sync
-uv lock --upgrade
+uv sync --upgrade
 ```
 
 ### 数据库维护
