@@ -131,6 +131,19 @@ document.querySelector("#jump-documents")?.addEventListener("click", () => {
   setView("documents");
 });
 
+// 文件选择框自绘：只在选了文件时显示文件名（原生「未选择任何文件」提示已隐藏）。
+const documentFileInput = document.querySelector("#file-input");
+const documentFileName = document.querySelector("#file-input-name");
+
+function syncDocumentFileName() {
+  if (!documentFileInput || !documentFileName) return;
+  const file = documentFileInput.files?.[0];
+  documentFileName.textContent = file?.name || "";
+}
+
+documentFileInput?.addEventListener("change", syncDocumentFileName);
+form?.addEventListener("reset", syncDocumentFileName);
+
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!currentUser?.id) {

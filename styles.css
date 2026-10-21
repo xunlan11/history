@@ -169,13 +169,93 @@ button {
   margin-bottom: 0;
 }
 
-.file-picker-row {
-  justify-items: stretch;
+/* 文件选择：原生控件只保留功能（不显示「未选择任何文件」原生提示），外观全部自绘。 */
+.file-picker {
+  position: relative;
+  display: block;
+  cursor: pointer;
 }
 
-.file-picker-row input {
-  width: 100%;
-  text-align: center;
+.file-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.file-picker input:focus,
+.file-picker input:focus-visible {
+  outline: none;
+}
+
+.file-picker-face {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px dashed #cdd8d2;
+  border-radius: 8px;
+  background: #f8fbf9;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.file-picker:hover .file-picker-face {
+  border-color: #a9bdb4;
+  background: #fff;
+}
+
+.file-picker:focus-within .file-picker-face {
+  border-color: var(--focus);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(209, 154, 56, 0.18);
+}
+
+.file-picker-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  transition: background 0.15s ease;
+}
+
+.file-picker:hover .file-picker-button {
+  background: var(--primary-dark);
+}
+
+.file-picker-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未选择文件时不显示任何提示文本。 */
+.file-picker-name:empty {
+  display: none;
 }
 
 .info-field {
@@ -3313,7 +3393,8 @@ body {
   line-height: 1.35;
 }
 
-.message-head span {
+/* 只作用于标题行右侧的「对话类型」提示，别把按钮里的图标 span 也画成胶囊。 */
+.message-head > span {
   flex: 0 0 auto;
   padding: 7px 14px;
   border-radius: 999px;
@@ -3389,26 +3470,17 @@ body {
   min-width: 0;
 }
 
+/* 与书架标题行的「重命名当前文件夹」按钮（.ghost-link.shelf-rename-current）保持一致。 */
 .chat-title-edit {
-  width: 30px;
-  height: 30px;
   flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #7b817b;
-  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 15px;
+  line-height: 1;
 }
 
 .chat-title-edit.hidden,
 .chat-title-input.hidden {
   display: none;
-}
-
-.chat-title-edit:hover {
-  background: rgba(32, 36, 31, 0.06);
-  color: #34734a;
 }
 
 .chat-title-edit:disabled,
@@ -3419,18 +3491,8 @@ body {
 }
 
 .chat-title-edit.editing {
-  background: #e3eee5;
-  color: #34734a;
-}
-
-.chat-title-edit svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  background: rgba(32, 36, 31, 0.09);
+  color: #3f4a41;
 }
 
 .chat-title-edit .icon-check {

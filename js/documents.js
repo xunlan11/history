@@ -274,7 +274,6 @@ function setChatTitleEditMode(conversationId) {
   chatTitle.classList.toggle("hidden", active);
   chatTitleInput.classList.toggle("hidden", !active);
   editChatTitleButton.classList.toggle("editing", active);
-  editChatTitleButton.title = active ? "保存标题" : "修改标题";
   editChatTitleButton.setAttribute("aria-label", active ? "保存对话标题" : "修改对话标题");
 }
 
@@ -732,8 +731,6 @@ function setDocumentTrashMode(listNode, isActive, kind = "document") {
       hint.textContent = isActive ? (kind === "folder" ? "递归删除" : "删除") : "";
       hint.hidden = !isActive;
     }
-    const button = card.querySelector("button");
-    if (button) button.title = isActive ? "拖到此处删除文献，或连同内容递归删除文件夹" : "点击登记新文献";
   }
   setShelfDissolveMode(listNode, isActive && kind === "folder");
 }

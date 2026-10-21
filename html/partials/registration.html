@@ -4,9 +4,20 @@
       <h3 id="add-document-title">新增文献</h3>
       <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
     </div>
-    <label class="file-picker-row">
+    <label class="file-picker">
       <span class="sr-only">选择 PDF 或图片</span>
       <input id="file-input" name="file" type="file" accept=".pdf,image/*" required />
+      <span class="file-picker-face" aria-hidden="true">
+        <span class="file-picker-button">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 16V4"></path>
+            <path d="m6 10 6-6 6 6"></path>
+            <path d="M4 20h16"></path>
+          </svg>
+          选择文件
+        </span>
+        <span class="file-picker-name" id="file-input-name"></span>
+      </span>
     </label>
     <section class="info-field" aria-labelledby="document-info-title">
       <div class="info-field-heading">

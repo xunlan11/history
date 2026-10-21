@@ -324,7 +324,6 @@ function createShelfUtilityCard(className, symbol, name, description) {
   const label = document.createElement("strong");
   label.className = "folder-name";
   label.textContent = name;
-  label.title = name;
   const hint = document.createElement("small");
   hint.textContent = description;
   // 缺省状态的小字提示一律不显示，只有拖拽变形成故纸堆/解散时才由 setDocumentTrashMode 打开。
@@ -339,7 +338,6 @@ function createShelfUtilityCard(className, symbol, name, description) {
 function createShelfAddCard() {
   const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献", "");
   const button = card.querySelector("button");
-  button.title = "点击登记新文献";
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
     openDocumentForm();
@@ -367,7 +365,6 @@ function createShelfCreateCard(folderId = "") {
   const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹", "");
   card.querySelector(".shelf-utility-icon").innerHTML = SHELF_CREATE_ICON;
   const button = card.querySelector("button");
-  button.title = "点击即新建子文件夹";
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
     createShelfFolder(folderId);
@@ -379,7 +376,6 @@ function createShelfCreateCard(folderId = "") {
 function createPublicLibraryCard(listNode) {
   const card = createShelfUtilityCard("shelf-public-card", "◎", "公开文献库", "");
   const button = card.querySelector("button");
-  button.title = `浏览其他用户的公开文献（${getPublicLibraryDocuments().length} 项）`;
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
     listNode.dataset.publicLibrary = "true";
@@ -393,7 +389,6 @@ function createPublicLibraryReturnCard(listNode, folder, state) {
   const name = folder?.name || getShelfRootName(state);
   const card = createShelfUtilityCard("shelf-parent-card", "↰", name, "");
   const button = card.querySelector("button");
-  button.title = `返回：${name}`;
   button.onclick = () => setShelfFolder(listNode, folder?.id || "");
   return card;
 }
@@ -413,8 +408,6 @@ function setShelfDissolveMode(listNode, isActive) {
     hint.textContent = isActive ? "内容移到上层" : "";
     hint.hidden = !isActive;
   }
-  const button = card.querySelector("button");
-  if (button) button.title = isActive ? "拖到此处解散文件夹，内容移到上一层" : "点击即新建子文件夹";
 }
 
 // 递归取得某个文件夹下的全部文件夹与文献（不含自身以外的前置节点）。
@@ -485,7 +478,6 @@ function createShelfParentCard(listNode, folder, state) {
   card.dataset.shelfParent = "";
   card.dataset.folderId = parent?.id || "";
   const button = card.querySelector("button");
-  button.title = `返回上一级文件夹：${parentName}`;
   button.setAttribute("aria-label", `返回上一级文件夹：${parentName}`);
   button.onclick = () => {
     if (Date.now() >= suppressDocumentClickUntil) setShelfFolder(listNode, parent?.id || "");
