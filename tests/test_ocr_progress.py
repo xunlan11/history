@@ -199,3 +199,11 @@ def test_http_adapter_submits_progress_keys_for_both_ocr_operations(tmp_path):
     services.execute("metadata_candidate", job, doc, {})
     assert calls == [("/ocr", {"pageNumber": 2, "progressKey": "attempt-id"}),
                      ("/ocr/metadata-candidate", {"progressKey": "attempt-id"})]
+
+
+def test_abandoned_unfinished_progress_expires_by_absolute_age():
+    task_progress.set_progress("stuck", 30, status="running")
+    task_progress._ENTRIES["stuck"]["updatedAt"] -= task_progress.PROGRESS_MAX_AGE_SECONDS + 1
+    assert task_progress.read_progress("stuck")["updatedAt"] == 0
+    task_progress.set_progress("live", 30, status="running")
+    assert task_progress.read_progress("live")["percent"] == 30

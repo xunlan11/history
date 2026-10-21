@@ -24,16 +24,24 @@ LABELS = {
 
 
 class ProgressStore:
-    def __init__(self, ttl=300, limit=1024):
-        self.ttl, self.limit = ttl, limit
+    def __init__(self, ttl=300, limit=1024, max_age=1800):
+        self.ttl, self.limit, self.max_age = ttl, limit, max_age
         self.lock = threading.Lock()
         self.entries: dict[str, dict[str, Any]] = {}
+
+    def _expired(self, entry, now):
+        age = now - entry.get("updatedAt", 0)
+        if age > self.max_age:
+            # A request that died before its final response would otherwise stay
+            # "running" forever; keys are per-inference, so nobody reads it again.
+            return True
+        return entry.get("status") in {"completed", "failed"} and age > self.ttl
 
     def write(self, key, **entry):
         now = time.time()
         with self.lock:
             for name, old in list(self.entries.items()):
-                if old.get("status") in {"completed", "failed"} and now - old["updatedAt"] > self.ttl:
+                if self._expired(old, now):
                     self.entries.pop(name, None)
             if key not in self.entries and len(self.entries) >= self.limit:
                 # Refuse tracking capacity; never evict an active inference.
@@ -47,7 +55,7 @@ class ProgressStore:
     def read(self, key):
         with self.lock:
             entry = self.entries.get(key)
-            if entry and entry.get("status") in {"completed", "failed"} and time.time() - entry["updatedAt"] > self.ttl:
+            if entry and self._expired(entry, time.time()):
                 self.entries.pop(key, None)
                 entry = None
             return dict(entry) if entry else {"percent": 0, "updatedAt": 0}

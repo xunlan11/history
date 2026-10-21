@@ -7,17 +7,20 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import logging
 from contextlib import asynccontextmanager
 
 from service.ocr_model_progress import CURRENT, InferenceProgress, ProgressStore, instrument_pipeline
 
+log = logging.getLogger(__name__)
+
 
 class ProgressMiddleware:
-    def __init__(self, app, store, config):
-        self.app, self.store, self.config = app, store, config
+    def __init__(self, app, store, config, enabled=True):
+        self.app, self.store, self.config, self.enabled = app, store, config, enabled
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/layout-parsing":
+        if not self.enabled or scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/layout-parsing":
             return await self.app(scope, receive, send)
         key = dict(scope["headers"]).get(b"x-ocr-progress-key", b"").decode("ascii", "ignore")
         if not key or len(key) > 128:
@@ -49,28 +52,34 @@ class ProgressMiddleware:
 def create_app(pipeline, config):
     from paddlex.inference.serving.basic_serving import create_pipeline_app
 
-    pipeline = instrument_pipeline(pipeline)
-    app = create_pipeline_app(pipeline, config)
+    try:
+        observed = instrument_pipeline(pipeline)
+        tracking = True
+    except Exception:  # noqa: BLE001 - 进度只是观测层，不能连带打挂识别服务
+        log.exception("OCR 进度观测不可用：PaddleX 管线结构与预期不符，改为只提供识别")
+        observed, tracking = pipeline, False
+    app = create_pipeline_app(observed, config)
     store = ProgressStore()
     original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(app):
         async with original_lifespan(app):
-            wrapper = app.state.context.pipeline
-            original_call = wrapper.call
+            if tracking:
+                wrapper = app.state.context.pipeline
+                original_call = wrapper.call
 
-            async def tracked_call(func, *args, **kwargs):
-                # PaddleX uses a dedicated serial worker thread. ContextVars do not
-                # cross its queue unless explicitly copied at submission time.
-                context = contextvars.copy_context()
-                return await original_call(lambda: context.run(func, *args, **kwargs))
+                async def tracked_call(func, *args, **kwargs):
+                    # PaddleX uses a dedicated serial worker thread. ContextVars do not
+                    # cross its queue unless explicitly copied at submission time.
+                    context = contextvars.copy_context()
+                    return await original_call(lambda: context.run(func, *args, **kwargs))
 
-            wrapper.call = tracked_call
+                wrapper.call = tracked_call
             yield
 
     app.router.lifespan_context = lifespan
-    app.add_middleware(ProgressMiddleware, store=store, config=config)
+    app.add_middleware(ProgressMiddleware, store=store, config=config, enabled=tracking)
 
     @app.get("/layout-parsing/progress/{key}")
     async def progress(key: str):

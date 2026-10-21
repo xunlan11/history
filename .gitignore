@@ -7,15 +7,5 @@ __pycache__/
 .agents
 /.codegraph/
 /docs
-/tests/*
-!/tests/test_table_content.py
-!/tests/test_reader_content.py
-!/tests/test_visual_retrieval.py
-!/tests/reader-content.test.cjs
-!/tests/reader-visual-catalog.test.cjs
-!/tests/reader-search.test.cjs
-!/tests/retrieval.test.cjs
-!/tests/test_ocr_model_progress.py
-!/tests/test_ocr_progress.py
-!/tests/ocr-progress.test.cjs
+/tests
 测试文件

@@ -12,9 +12,24 @@ import time
 from typing import Any, Callable
 
 PROGRESS_TTL_SECONDS = 300
+# 客户端中断等异常路径不会写终态；每次尝试的 key 都带随机后缀，这些 running/queued
+# 条目无人认领也永远读不到，所以再给一个与状态无关的绝对年龄上限。
+PROGRESS_MAX_AGE_SECONDS = 1800
 
 _LOCK = threading.Lock()
 _ENTRIES: dict[str, dict[str, Any]] = {}
+
+
+def _stale(entry: dict[str, Any], now: float) -> bool:
+    age = now - float(entry.get("updatedAt") or 0)
+    if age > PROGRESS_MAX_AGE_SECONDS:
+        return True
+    return entry.get("status") not in {"running", "queued"} and age > PROGRESS_TTL_SECONDS
+
+
+def _purge(now: float) -> None:
+    for stale in [name for name, entry in _ENTRIES.items() if _stale(entry, now)]:
+        _ENTRIES.pop(stale, None)
 
 
 def set_progress(key: str, percent: int, **details: Any) -> None:
@@ -22,10 +37,7 @@ def set_progress(key: str, percent: int, **details: Any) -> None:
         return
     with _LOCK:
         now = time.time()
-        for stale in [name for name, entry in _ENTRIES.items()
-                      if entry.get("status") not in {"running", "queued"}
-                      and now - entry["updatedAt"] > PROGRESS_TTL_SECONDS]:
-            _ENTRIES.pop(stale, None)
+        _purge(now)
         _ENTRIES[key] = {**details, "percent": max(0, min(100, int(percent))), "updatedAt": now}
 
 
@@ -33,9 +45,7 @@ def read_progress(key: str) -> dict[str, Any]:
     """读取进度；过期的条目在这里顺带清掉。没有记录时 percent=0、updatedAt=0。"""
     now = time.time()
     with _LOCK:
-        for stale in [name for name, entry in _ENTRIES.items() if entry.get("status") not in {"running", "queued"}
-                      and now - entry["updatedAt"] > PROGRESS_TTL_SECONDS]:
-            _ENTRIES.pop(stale, None)
+        _purge(now)
         entry = _ENTRIES.get(key)
         return dict(entry) if entry else {"percent": 0, "updatedAt": 0}
 

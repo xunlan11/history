@@ -116,6 +116,27 @@ def test_store_expires_terminal_entries_but_keeps_active_work():
     assert store.read("completed")["updatedAt"] == 0
 
 
+def test_store_expires_abandoned_running_entries_by_absolute_age():
+    # 请求在写终态之前断掉时，条目不能永久占位。
+    store = ProgressStore(max_age=-1)
+    store.write("abandoned", status="running", percent=40)
+    assert store.read("abandoned")["updatedAt"] == 0
+
+
+def test_disabled_middleware_leaves_requests_untracked():
+    import asyncio
+    from service.ocr_model import ProgressMiddleware
+    store = ProgressStore()
+    async def app(scope, receive, send):
+        assert CURRENT.get() is None
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b"{}"})
+    async def send(message): pass
+    asyncio.run(ProgressMiddleware(app, store, {}, enabled=False)(dict(type="http", method="POST",
+        path="/layout-parsing", headers=[(b"x-ocr-progress-key", b"off")]), None, send))
+    assert store.read("off")["updatedAt"] == 0
+
+
 def test_failed_queued_request_cannot_become_running_again():
     progress, store = tracker()
     progress.fail()
