@@ -169,11 +169,18 @@ button {
   margin-bottom: 0;
 }
 
-/* 文件选择：原生控件只保留功能（不显示「未选择任何文件」原生提示），外观全部自绘。 */
+/* 文件选择：原生控件只保留功能（不显示「未选择任何文件」原生提示），外观全部自绘。
+   只有绿色按钮是可点的 label，虚线外框不响应点击/悬停。 */
 .file-picker {
   position: relative;
-  display: block;
-  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px dashed #cdd8d2;
+  border-radius: 8px;
+  background: #f8fbf9;
 }
 
 .file-picker input {
@@ -192,29 +199,6 @@ button {
   outline: none;
 }
 
-.file-picker-face {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 6px 8px;
-  border: 1px dashed #cdd8d2;
-  border-radius: 8px;
-  background: #f8fbf9;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.file-picker:hover .file-picker-face {
-  border-color: #a9bdb4;
-  background: #fff;
-}
-
-.file-picker:focus-within .file-picker-face {
-  border-color: var(--focus);
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(209, 154, 56, 0.18);
-}
-
 .file-picker-button {
   display: inline-flex;
   flex: 0 0 auto;
@@ -227,11 +211,17 @@ button {
   color: #fff;
   font-size: 14px;
   font-weight: 700;
+  cursor: pointer;
   transition: background 0.15s ease;
 }
 
-.file-picker:hover .file-picker-button {
+.file-picker-button:hover {
   background: var(--primary-dark);
+}
+
+/* 键盘聚焦到隐藏的原生控件时才给按钮画焦点环（鼠标点开不画），外框始终原样。 */
+.file-picker:has(input:focus-visible) .file-picker-button {
+  box-shadow: 0 0 0 3px rgba(209, 154, 56, 0.28);
 }
 
 .file-picker-button svg {
@@ -1568,9 +1558,13 @@ body {
   stroke: var(--primary);
 }
 
-/* 正在处理该页的阶段：小圆弧转圈，表示「这一页在此阶段进行中」 */
+/* 正在处理该页、但还没有实测进度：环保持空环，轨道呼吸表示「进行中」（不画假进度弧） */
 .progress-stage-ring-item.is-active .progress-ring svg {
   animation: progress-ring-spin 1.4s linear infinite;
+}
+
+.progress-stage-ring-item.is-active .progress-ring-track {
+  animation: progress-ring-pulse 1.2s ease-in-out infinite;
 }
 
 .progress-stage-ring-item.is-active .progress-ring-label {
@@ -1582,8 +1576,18 @@ body {
   to { transform: rotate(270deg); }
 }
 
+@keyframes progress-ring-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .progress-stage-ring-item.is-active .progress-ring svg {
+    animation: none;
+  }
+
+  .progress-stage-ring-item.is-active .progress-ring-track {
+    opacity: 0.55;
     animation: none;
   }
 }

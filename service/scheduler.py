@@ -144,7 +144,7 @@ class HttpServices:
             text = checkpoint["metadataCandidate"].get("text") or document.get("fileName") or source.name
             result = self._llm("extract-metadata", {"documentId": document["id"], "text": text,
                 "source": "ocr", "metadata": metadata(document),
-                "options": {"progressKey": progress_key(document["id"], operation, 0)}})
+                "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], operation, 0)}})
             if not isinstance(result.get("metadata"), dict):
                 raise ProcessingFailure("元数据结果无效")
             return result
@@ -187,7 +187,7 @@ class HttpServices:
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
                 "sourceLayer": "normalized",
-                "options": {"progressKey": progress_key(document["id"], "punctuation", page_number)}})
+                "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "punctuation", page_number)}})
             if page.get("normalizedText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("标点服务没有返回正文")
             return result
@@ -203,7 +203,7 @@ class HttpServices:
                 "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
                 "normalizedText": page.get("normalizedText", ""),
                 "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
-                "options": {"progressKey": progress_key(document["id"], "proofreading", page_number)},
+                "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "proofreading", page_number)},
                 "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
             if page.get("ocrText", "").strip() and not result.get("punctuatedText"):
                 raise ProcessingFailure("校对服务没有返回正文")
@@ -606,13 +606,18 @@ class Scheduler:
                 self._start_progress_watcher(lane, doc["id"], operation, number,
                                              registration=operation == "metadata_candidate", source="ocr", key=key)
             # 标点/校对是大模型逐字生成，边生成边回报该页该阶段的百分比。
+            # 每次尝试都用独立进度键：同一页重试时不会先读到上一次留下的百分比。
             elif operation in {"punctuation", "proofreading"}:
+                key = f"{progress_key(doc['id'], operation, number)}:{uuid.uuid4().hex}"
+                job["llm_progress_key"] = key
                 self._set_page_progress(doc["id"], operation, number, 0)
-                self._start_progress_watcher(lane, doc["id"], operation, number)
-            # 登记元数据识别继续由大模型流式回报。
+                self._start_progress_watcher(lane, doc["id"], operation, number, key=key)
+            # 登记元数据识别继续由大模型流式回报（同样每次尝试独立键）。
             elif operation == "metadata":
+                key = f"{progress_key(doc['id'], operation, 0)}:{uuid.uuid4().hex}"
+                job["llm_progress_key"] = key
                 self._set_registration_progress(doc["id"], operation, 0)
-                self._start_progress_watcher(lane, doc["id"], operation, 0, registration=True)
+                self._start_progress_watcher(lane, doc["id"], operation, 0, registration=True, key=key)
             future = self.executor.submit(self.services.execute, operation, job, doc, cp, number)
         self.running[lane] = (future, doc["id"], operation, number)
 

@@ -198,9 +198,12 @@ function clampPercent(value) {
 }
 function setRingProgress(node, percent) {
   if (!node) return;
+  const value = clampPercent(percent);
   const length = typeof node.getTotalLength === "function" ? node.getTotalLength() : 97.39;
   node.style.strokeDasharray = `${length}`;
-  node.style.strokeDashoffset = `${length * (1 - clampPercent(percent) / 100)}`;
+  node.style.strokeDashoffset = `${length * (1 - value / 100)}`;
+  // 0% 时整条弧都藏起来：只写 offset 会因 stroke-linecap: round 在起点留下一个小圆点。
+  node.style.visibility = value > 0 ? "" : "hidden";
 }
 
 // 失败页统一用一个标题，条目只写两字阶段名 + 页码；完整报错在 title 提示里。
@@ -256,7 +259,8 @@ function isStagePageTerminal(page, stageKey) {
 }
 
 // 环显示的是「该阶段当前处理到第几页」，环长表示这一页在该阶段的进展：
-// · 正在处理该页 → 实测页内进度；没有实测值时小圆弧 + 转圈动画；
+// · 正在处理该页 → 实测页内进度；还没有实测值时保持空环（靠 .is-active 呼吸提示进行中），
+//   不画任何假进度，否则第一笔实测值（往往只有 1%~2%）会让环看起来「先涨后缩」；
 // · 该阶段已全部完成 → 满环，数字为总页数；
 // · 该阶段还没轮到该页 → 空环，数字为下一页（而不是已完成页数）。
 function stagePageState(item, task, stageKey, done, total) {
@@ -290,7 +294,7 @@ function renderStreamProgress(item) {
     const state = stagePageState(item, task, stage.key, done, total);
     const active = state.active && !finished;
     // 环长只表示「这一页在这个阶段的任务进度」：调度器给出实测百分比时用它，
-    // 拿不到实测值（如远端 OCR 无法报页内进度）时才转圈表示进行中。
+    // 拿不到实测值（如远端 OCR 无法报页内进度）就留空环 + .is-active 呼吸，不画假进度。
     const live = task.stagePages?.[stage.key];
     const samePage = live && Number(live.pageNumber) === state.pageNumber;
     const livePercent = samePage ? clampPercent(Number(live.percent) || 0) : null;
@@ -298,7 +302,7 @@ function renderStreamProgress(item) {
     const measured = livePercent === null ? fallbackPercent : livePercent;
     const observedOcr = stage.key === "ocr" && samePage && live?.detail?.basis === "pipeline_steps";
     const useMeasured = active && (measured > 0 || observedOcr);
-    const pagePercent = active ? (useMeasured ? Math.min(99, measured) : 12) : clampPercent(state.percent);
+    const pagePercent = active ? (useMeasured ? Math.min(99, measured) : 0) : clampPercent(state.percent);
     if (fill) fill.style.width = `${clampPercent(percent)}%`;
     if (nodes) {
       if (nodes.pages) nodes.pages.textContent = `${state.pageNumber}`;
