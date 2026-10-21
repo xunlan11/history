@@ -3142,6 +3142,15 @@ body {
   opacity: 0.72;
 }
 
+/* 版本项：状态文字与「更新」按钮等宽，两种状态切换时后面的项不会左右跳动。 */
+.service-item-version > b,
+.service-item-version > .status-action {
+  box-sizing: border-box;
+  width: 60px;
+  min-width: 60px;
+  text-align: center;
+}
+
 .home-board {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 330px;
