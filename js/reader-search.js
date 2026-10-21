@@ -29,12 +29,13 @@ function getReaderSearchText(page) {
 
 function readerSearchSnapshot(item) {
   return JSON.stringify([currentUser?.id, item?.id, (item?.pages || []).map((page) =>
-    [page.id, page.pageNumber, getReaderSearchText(page)])]);
+    [page.id, page.pageNumber, getReaderSearchText(page), page.processingRevision, page.visuals])]);
 }
 
 function createReaderSearchMatch(page, pageIndex, level, range) {
   return { ...range, pageId: page.id, pageIndex, pageNumber: page.pageNumber, level,
-    id: JSON.stringify([page.id, level, range.start, range.end]), text: getReaderSearchText(page) };
+    id: JSON.stringify([page.id, range.sourceLayer || "punctuatedText", level, range.start, range.end]),
+    text: range.text ?? getReaderSearchText(page) };
 }
 
 function sortReaderSearchMatches(matches) {
@@ -42,21 +43,30 @@ function sortReaderSearchMatches(matches) {
 }
 
 async function resolveReaderMatches(item, hits) {
-  const matches = [], pagesById = new Map(), seen = new Set();
+  const matches = [], sources = new Map(), seen = new Set(), loadedPages = new Set();
   const pages = item.pages.slice().sort((a, b) => a.pageNumber - b.pageNumber);
+  const pagesById = new Map(pages.map((page, pageIndex) => [page.id, { page, pageIndex }]));
   for (const hit of hits || []) {
     if (hit.documentId !== item.id || !Object.hasOwn(READER_SEARCH_LABELS, hit.level)) continue;
-    if (!pagesById.has(hit.pageId)) {
-      const pageIndex = pages.findIndex((page) => page.id === hit.pageId);
-      const page = pages[pageIndex], text = getReaderSearchText(page);
-      if (!page || !text) continue;
-      const points = Array.from(text), offsets = [0];
+    const entry = pagesById.get(hit.pageId);
+    if (!entry) continue;
+    const key = JSON.stringify([hit.pageId, hit.sourceLayer]);
+    if (!sources.has(key)) {
+      let source = hit.sourceLayer === "punctuatedText" ? { text: getReaderSearchText(entry.page) }
+        : getReaderVisualSource(entry.page, hit.sourceLayer);
+      if (!source && /^(visual_caption|table_cell):/.test(hit.sourceLayer) &&
+          !loadedPages.has(hit.pageId) && typeof loadReaderContent === "function") {
+        loadedPages.add(hit.pageId);
+        await loadReaderContent(item, entry.page);
+        source = getReaderVisualSource(entry.page, hit.sourceLayer);
+      }
+      if (!source?.text) { sources.set(key, null); continue; }
+      const points = Array.from(source.text), offsets = [0];
       for (const point of points) offsets.push(offsets.at(-1) + point.length);
-      pagesById.set(page.id, { page, pageIndex, text, points, offsets, hash: await hashEvidenceText(text),
-        layer: "punctuatedText" });
+      sources.set(key, { ...entry, ...source, points, offsets, hash: await hashEvidenceText(source.text) });
     }
-    const cached = pagesById.get(hit.pageId);
-    if (!cached || hit.sourceLayer !== cached.layer || hit.sourceHash !== cached.hash) continue;
+    const cached = sources.get(key);
+    if (!cached || hit.sourceHash !== cached.hash) continue;
     if (!Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 ||
         hit.end <= hit.start || hit.end > cached.points.length ||
         cached.points.slice(hit.start, hit.end).join("") !== hit.text) continue;
@@ -64,7 +74,9 @@ async function resolveReaderMatches(item, hits) {
     const last = hit.level === "semantic" ? hit.end : hit.matchEnd;
     if (!Number.isInteger(first) || !Number.isInteger(last) || first < hit.start || last > hit.end || last <= first) continue;
     const match = createReaderSearchMatch(cached.page, cached.pageIndex, hit.level,
-      { start: cached.offsets[first], end: cached.offsets[last] });
+      { start: cached.offsets[first], end: cached.offsets[last], text: cached.text,
+        sourceLayer: hit.sourceLayer, sourceHash: cached.hash,
+        ...(cached.visualId ? { visualId: cached.visualId, ...(cached.captionId ? { captionId: cached.captionId } : { cellId: cached.cellId }) } : {}) });
     if (!seen.has(match.id)) { matches.push(match); seen.add(match.id); }
   }
   return sortReaderSearchMatches(matches);
@@ -99,7 +111,7 @@ async function runReaderSearch(query) {
   const snapshot = readerSearchSnapshot(item);
   Object.assign(readerSearchState, { documentId: item.id, snapshot, query,
     matches: [], activeId: "", scrollPending: false,
-    loading: Boolean(query && item.pages.some((page) => getReaderSearchText(page).trim())),
+    loading: Boolean(query && item.pages.length),
     warnings: [], semanticError: "" });
   renderReaderSearchPanel();
   refreshReaderSearchText();
@@ -169,7 +181,7 @@ function renderReaderSearchPanel() {
   }
   // 只在「已检索且确实一条都没匹配上」时提示；未检索、无整理文本、层级未选、编辑态等一律不提示
   const searched = !readerEditing && Boolean(readerSearchState.query) &&
-    Boolean(item && item.pages.some((page) => getReaderSearchText(page).trim()));
+    Boolean(item?.pages.length);
   if (readerSearchStatus) {
     readerSearchStatus.textContent =
       readerSearchState.searchError ||
@@ -230,19 +242,43 @@ function jumpReaderSearchMatch(kind) {
   openReaderSearchMatch(matches[target].id);
 }
 
-function openReaderSearchMatch(id) {
+async function openReaderSearchMatch(id) {
   if (readerEditing) return;
+  const item = getSelectedDocument();
   const match = getFilteredReaderSearchMatches().find((entry) => entry.id === id);
-  const page = getSelectedDocument()?.pages.find((entry) => entry.id === match?.pageId);
-  if (!match || !page || getReaderSearchText(page) !== match.text) { syncReaderSearch(getSelectedDocument()); return; }
+  const page = item?.pages.find((entry) => entry.id === match?.pageId);
+  const source = match?.visualId ? getReaderVisualSource(page, match.sourceLayer) : { text: getReaderSearchText(page) };
+  if (!match || !page || source?.text !== match.text) { syncReaderSearch(item); return; }
+  const revision = readerSearchState.revision;
   readerSearchState.activeId = id;
-  readerSearchState.scrollPending = true;
-  // Clear external citation anchors so search navigation only marks reading text.
+  readerSearchState.scrollPending = !match.visualId;
+  // Clear external citation anchors so search navigation owns the active source.
   const url = new URL(window.location.href);
   for (const key of ["sourceLayer", "sourceHash", "start", "end"]) url.searchParams.delete(key);
   window.history.replaceState(null, "", url.href);
   selectedPageId = page.id;
   renderAll();
+  if (!match.visualId) return;
+  const current = () => !readerEditing && revision === readerSearchState.revision &&
+    readerSearchState.activeId === id && getSelectedDocument()?.id === item.id && selectedPageId === page.id;
+  try {
+    if (typeof loadReaderContent === "function" && !await loadReaderContent(item, page)) {
+      throw new Error("图表内容暂不可用，请重试。");
+    }
+    if (!current()) return;
+    const currentPage = getSelectedDocument()?.pages.find((entry) => entry.id === page.id);
+    const visual = getReaderVisualSource(currentPage, match.sourceLayer);
+    if (!visual || visual.text !== match.text || await hashEvidenceText(visual.text) !== match.sourceHash) {
+      if (current()) syncReaderSearch(getSelectedDocument());
+      return;
+    }
+    if (!current()) return;
+    renderReader();
+    if (current() && typeof setReaderVisualActive === "function") setReaderVisualActive(visual.visualId,
+      { captionId: visual.captionId, cellId: visual.cellId, scrollText: true, scrollImage: true });
+  } catch (error) {
+    if (current()) { readerSearchState.searchError = error.message; renderReaderSearchPanel(); }
+  }
 }
 
 function refreshReaderSearchText() {
@@ -255,6 +291,7 @@ function refreshReaderSearchText() {
 function applyReaderSearchHighlights(page) {
   if (!readerSearchForm || readerEditing || !page || getSelectedDocument()?.id !== readerSearchState.documentId) return;
   const ranges = getFilteredReaderSearchMatches().filter((match) => match.pageId === page.id &&
+    !match.visualId && (!match.sourceLayer || match.sourceLayer === "punctuatedText") &&
     match.text === getReaderSearchText(page) && (readerSearchState.markAll || match.id === readerSearchState.activeId));
   if (!ranges.length) return;
   const events = new Map();
@@ -272,13 +309,15 @@ function applyReaderSearchHighlights(page) {
     if (count > 0 && offset > previous) intervals.push({ start: previous, end: offset, active: active > 0 });
     count += value.count; active += value.active; previous = offset;
   }
-  const walker = document.createTreeWalker(readerText, NodeFilter.SHOW_TEXT);
-  const nodes = [];
-  let position = 0;
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    nodes.push({ node, start: position, end: position + node.textContent.length });
-    position += node.textContent.length;
+  const nodes = typeof getReaderTextNodes === "function" ? getReaderTextNodes(readerText) : [];
+  if (typeof getReaderTextNodes !== "function") {
+    const walker = document.createTreeWalker(readerText, NodeFilter.SHOW_TEXT);
+    let position = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      nodes.push({ node, start: position, end: position + node.textContent.length });
+      position += node.textContent.length;
+    }
   }
   let firstActive = null, intervalIndex = 0;
   for (const entry of nodes) {

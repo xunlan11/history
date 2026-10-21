@@ -17,7 +17,10 @@ from collections import Counter
 
 from service.embedding import EmbeddingError, semantic_enabled
 from service.evidence import NO_RELEVANT_MATERIAL
-from service.retrieval_types import CHUNKER_VERSION, Chunk, RetrievalRequest, SourceText, TextPolicy
+from service.retrieval_types import (
+    CHUNKER_VERSION, Chunk, RetrievalRequest, SourceText, TextPolicy,
+    parse_visual_source_layer, visual_source_layer,
+)
 from service.variant import to_simplified
 from service.match import match_text, sentence_boundaries, sentence_excerpt
 
@@ -59,9 +62,25 @@ def select_page_source(page: dict, policy: TextPolicy, document_id: str = "") ->
 
 
 def page_sources(document_id: str, page: dict) -> dict[str, SourceText]:
-    return {layer: make_source(document_id, str(page["id"]), layer, text)
-            for layer in ("ocrText", "punctuatedText", "notes")
-            if isinstance(text := page.get(layer), str) and text.strip()}
+    sources = {layer: make_source(document_id, str(page["id"]), layer, text)
+               for layer in ("ocrText", "punctuatedText", "notes")
+               if isinstance(text := page.get(layer), str) and text.strip()}
+    visuals = page.get("visuals")
+    for visual in visuals if isinstance(visuals, list) else []:
+        if not isinstance(visual, dict) or not isinstance(visual.get("id"), str) or not visual["id"]:
+            continue
+        table = visual.get("tableModel")
+        groups = (("visual_caption", visual.get("captions")),
+                  ("table_cell", table.get("cells") if isinstance(table, dict) else None))
+        for kind, items in groups:
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    layer = visual_source_layer(kind, visual["id"], item["id"])
+                    sources[layer] = make_source(document_id, str(page["id"]), layer, text)
+    return sources
 
 
 def chunk_source(source: SourceText) -> list[Chunk]:
@@ -136,6 +155,9 @@ def reconcile_page(connection: sqlite3.Connection, document_id: str, page: dict,
             connection.executemany("INSERT OR IGNORE INTO semantic_chunks VALUES(?,?,?,?,?,?,?,?,?,?)", [
                 (c.chunkId, c.documentId, c.pageId, c.sourceLayer, c.sourceHash,
                  c.ordinal, c.start, c.end, c.text, CHUNKER_VERSION) for c in chunk_source(source)])
+    # Auxiliary visual chunks are retained above for literal retrieval. The
+    # scheduler uses semantic_sources as the selected body source per policy;
+    # visual embedding jobs require a separate auxiliary-source contract.
     for policy in ("primary", "processed"):
         source = select_page_source(page, policy, document_id)
         if source:
@@ -219,6 +241,7 @@ def _evidence(chunk, row, metadata):
         "chunkId": chunk["chunk_id"], "documentId": chunk["document_id"], "pageId": chunk["page_id"],
         "sourceLayer": chunk["source_layer"], "sourceHash": chunk["source_hash"], "start": chunk["start"],
         "end": chunk["end"], "text": chunk["text"], "ordinal": chunk["ordinal"]}
+    item.update(parse_visual_source_layer(item["sourceLayer"]) or {})
     return item | {"sourceType": "document-page", "pageNumber": row["page_number"],
                    "title": metadata.get("title") or metadata.get("fileName") or "未命名文献",
                    "author": metadata.get("author", ""), "year": metadata.get("year", ""),
@@ -248,11 +271,15 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         page, metadata = json.loads(row["payload"]), metadata_by_document[row["document_id"]]
         page["id"] = row["id"]
         primary = select_page_source(page, request.textPolicy, row["document_id"])
-        if primary is None:
-            continue
-        page_sources_expected[row["id"]] = (primary.sourceLayer, primary.sourceHash)
-        vector_sources.add((row["id"], primary.sourceLayer, primary.sourceHash))
-        sources = {primary.sourceLayer: primary} if reader_mode else page_sources(row["document_id"], page)
+        if primary is not None:
+            page_sources_expected[row["id"]] = (primary.sourceLayer, primary.sourceHash)
+            vector_sources.add((row["id"], primary.sourceLayer, primary.sourceHash))
+        sources = page_sources(row["document_id"], page)
+        if reader_mode or primary is None:
+            sources = {layer: source for layer, source in sources.items()
+                       if parse_visual_source_layer(layer) is not None}
+            if primary is not None:
+                sources[primary.sourceLayer] = primary
         if request.textPolicy == "processed":
             sources.pop("ocrText", None)
         if full_mode:
@@ -262,7 +289,8 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             # 按层顺序回退；笔记层内容独立，始终额外参与。同一层内重合到同一句的多段
             # 命中只保留一条。literal_ranges 仍登记所有层，供下面剔除与字面命中重叠的
             # 语义切片。
-            sources = {primary.sourceLayer: primary, **sources}
+            if primary is not None:
+                sources = {primary.sourceLayer: primary, **sources}
             layer_matches = {source.sourceLayer: match_text(source.text, request.query)
                              for source in sources.values()}
             for source in sources.values():
@@ -274,7 +302,10 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
                 emit_sources.insert(0, chosen)
             for source in emit_sources:
                 seen_sentences = set()
-                for ordinal, match in enumerate(layer_matches[source.sourceLayer]):
+                # Prefer exact matches before sentence deduplication; retain
+                # original ordinals and the first occurrence within each level.
+                for ordinal, match in sorted(enumerate(layer_matches[source.sourceLayer]),
+                                             key=lambda entry: entry[1]["level"] != "exact"):
                     sentence_span = (match["sentenceStart"], match["sentenceEnd"])
                     if sentence_span in seen_sentences:
                         continue
@@ -297,7 +328,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
                     hit.update(sentence_excerpt(source.text, hit["start"], hit["end"], boundaries))
                 hit["literalScore"] = 0.0 if reader_mode or full_mode else literal_score(hit["text"], request.query) + metadata_score
                 candidates[hit["chunkId"]] = hit
-                if hit["sourceLayer"] == primary.sourceLayer and hit["sourceHash"] == primary.sourceHash:
+                if primary is not None and hit["sourceLayer"] == primary.sourceLayer and hit["sourceHash"] == primary.sourceHash:
                     expected_counts[row["id"]] += 1
     warnings = []
     semantic_error = ""
@@ -368,6 +399,8 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             continue
         # Repeated passages must not take every result slot.
         key = (hit["pageId"], hit["start"], hit["end"]) if reader_mode or full_mode else (hit["pageId"], normalized(hit["text"]))
+        if parse_visual_source_layer(hit["sourceLayer"]) is not None:
+            key = (*key, hit["sourceLayer"])
         if key in seen_ranges or (not reader_mode and not full_mode and per_page[hit["pageId"]] >= 3):
             continue
         seen_ranges.add(key)
@@ -428,13 +461,9 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
     # awaiting the model cannot turn fresh retrieval into stale evidence.
     current_hits = []
     for hit in hits:
-        row = connection.execute("""SELECT p.payload FROM document_pages p JOIN documents d ON d.id=p.document_id
-          WHERE p.id=? AND d.id=? AND p.deleted_at IS NULL AND d.deleted_at IS NULL
-          AND (d.visibility='public' OR d.owner_id=?)""", (hit["pageId"], hit["documentId"], user["id"])).fetchone()
-        if row:
-            current_text = json.loads(row["payload"]).get(hit["sourceLayer"], "")
-            if isinstance(current_text, str) and text_hash(current_text) == hit["sourceHash"]:
-                current_hits.append(hit)
+        source = get_evidence(connection, user, hit)
+        if source is not None and source.sourceHash == hit["sourceHash"]:
+            current_hits.append(hit)
     if len(current_hits) != len(hits):
         warnings.append("部分材料在检索时发生变更，已排除，请重新检索获取最新材料")
     hits = current_hits
@@ -453,16 +482,38 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             "coverage": {"totalPages": total, "indexedPages": indexed, "pendingPages": max(0, total - indexed - len(failed_pages)), "failedPages": len(failed_pages)}}
 
 
+def get_evidence(connection, user: dict, locator: dict) -> SourceText | None:
+    """Resolve an anchor from the current, visible page using source-local text.
+
+    A removed source on a visible page resolves to empty text, preserving the
+    historical-snapshot behavior of evidence validation. Inaccessible pages
+    resolve to None and cannot supply either current or historical evidence.
+    """
+    layer = locator["sourceLayer"]
+    if layer not in {*CONTENT_LAYERS, "notes"} and parse_visual_source_layer(layer) is None:
+        return None
+    scope, params = _scope(user, [locator["documentId"]])
+    row = connection.execute(f"""SELECT p.id,p.payload FROM document_pages p
+      JOIN documents d ON d.id=p.document_id WHERE p.id=? AND {scope}""",
+      [locator["pageId"], *params]).fetchone()
+    if row is None:
+        return None
+    page = json.loads(row["payload"])
+    page["id"] = row["id"]
+    if layer in {*CONTENT_LAYERS, "notes"}:
+        text = page.get(layer)
+        return make_source(locator["documentId"], row["id"], layer, text if isinstance(text, str) else "")
+    source = page_sources(locator["documentId"], page).get(layer)
+    return source if source is not None else make_source(locator["documentId"], row["id"], layer, "")
+
+
 def validate_evidence(connection, user: dict, evidence: list) -> dict:
     allowed, states = [], []
     for locator in evidence:
         item = locator.model_dump() if hasattr(locator, "model_dump") else locator
-        row = connection.execute("""SELECT p.payload FROM document_pages p JOIN documents d ON d.id=p.document_id
-          WHERE p.id=? AND d.id=? AND p.deleted_at IS NULL AND d.deleted_at IS NULL
-          AND (d.visibility='public' OR d.owner_id=?)""", (item["pageId"], item["documentId"], user["id"])).fetchone()
-        if row:
-            text = json.loads(row["payload"]).get(item["sourceLayer"], "")
-            current_hash = text_hash(text if isinstance(text, str) else "")
+        source = get_evidence(connection, user, item)
+        if source is not None:
+            current_hash = source.sourceHash
             allowed.append(item["chunkId"])
             states.append({"chunkId": item["chunkId"], "sourceHash": current_hash, "historical": current_hash != item["sourceHash"]})
     warnings = ["部分来源已删除或不可见，已从本次材料中移除"] if len(allowed) < len(evidence) else []

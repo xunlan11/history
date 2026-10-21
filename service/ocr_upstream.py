@@ -232,7 +232,7 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
     base = upstream_url()
     if not base:
         raise not_configured_error()
-    if mode not in {"formal", "quick"}:
+    if mode not in {"formal", "quick", "reader"}:
         mode = "formal"
 
     image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
@@ -249,6 +249,8 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
             else:
                 payload = _call_native(base, image_base64, path.name, page_number, mode)
                 normalized = _normalize_native(payload)
+            if candidate == "paddlex":
+                normalized["coordinateSpace"] = "input" if mode in {"quick", "reader"} else "processed"
         except OcrUpstreamHttpError as exc:
             if style == "auto" and exc.status in {404, 405}:
                 last_error = exc
@@ -322,7 +324,8 @@ def _call_native(
     payload: dict[str, Any] = {
         "image": image_base64,
         "filename": filename,
-        "mode": mode,
+        "mode": "formal" if mode == "reader" else mode,
+        "preserveInputCoordinates": mode == "reader",
     }
     if page_number is not None:
         payload["pageNumber"] = page_number
@@ -398,6 +401,7 @@ def _normalize_paddlex(payload: dict[str, Any]) -> dict[str, Any]:
         "blocks": blocks,
         "lines": lines,
         "markdown": _paddlex_markdown(first),
+        "markdownImages": (first.get("markdown") or {}).get("images", {}) if isinstance(first.get("markdown"), dict) else first.get("markdownImages", {}),
         "warnings": [],
     }
 
@@ -485,6 +489,13 @@ def _paddlex_blocks(pruned: dict[str, Any], lines: list[dict[str, Any]]) -> list
                     )
                 )
 
+    if isinstance(parsing, list):
+        for block, raw in zip(blocks, (item for item in parsing if isinstance(item, dict))):
+            for key in ("id", "visualId", "parentId", "imageUrl", "resourceRef", "tableModel", "html", "captionCoverage"):
+                if key in raw:
+                    block[key] = raw[key]
+            if "block_id" in raw:
+                block["id"] = raw["block_id"]
     if not blocks:
         return []
 
@@ -551,16 +562,22 @@ def _normalize_native(payload: dict[str, Any]) -> dict[str, Any]:
                 )
             )
 
+    for block, raw in zip(blocks, (item for item in (raw_blocks if isinstance(raw_blocks, list) else []) if isinstance(item, dict))):
+        for key in ("id", "visualId", "parentId", "imageUrl", "resourceRef", "tableModel", "html", "captionCoverage"):
+            if key in raw:
+                block[key] = raw[key]
     if not blocks:
         blocks = _block_from_lines(lines) or _block_from_text(str(payload.get("text") or ""))
 
     return {
         "engine": str(payload.get("engine") or "remote:native"),
+        "coordinateSpace": payload.get("coordinateSpace", "unknown"),
         "width": _int_or_none(payload.get("width")),
         "height": _int_or_none(payload.get("height")),
         "blocks": blocks,
         "lines": lines or [line for block in blocks for line in block["lines"]],
         "markdown": payload.get("markdown") if isinstance(payload.get("markdown"), str) else None,
+        "markdownImages": payload.get("markdownImages") or {},
         "warnings": [str(item) for item in payload.get("warnings") or [] if str(item).strip()],
     }
 

@@ -11,9 +11,9 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from service.variant import to_simplified
+from service.reader_content import NON_BODY_TYPES
 
 logger = logging.getLogger(__name__)
-NON_BODY_TYPES = {"header", "footer", "page_number", "figure", "chart", "seal", "image"}
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
 # 索引载荷版本：算法变化时递增，旧索引会被重建（reconcile 落库 / load 即时重建）。
 INDEX_VERSION = 3
@@ -295,6 +295,10 @@ def _set_metadata(page, status, revision, digest, stamp):
 def save_ocr_layout(connection, document_id, page, result, timestamp):
     try:
         layout = normalize_ocr_layout(result)
+        layout["contentVersion"] = 1
+        layout["contentBlocks"] = result.get("contentBlocks") or []
+        layout["contentSourceText"] = result.get("contentSourceText", result.get("text", ""))
+        layout["contentImageHash"] = (page.get("imageFile") or {}).get("sha256") or page.get("imageHash", "")
         layout["sourceTextHash"] = text_hash(page.get("ocrText") or "")
         layout["imageIdentity"] = _image_identity(page)
         status, error = "waiting_text", ""

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import re
 import logging
 import mimetypes
 import os
@@ -16,6 +17,7 @@ import socket
 import threading
 import time
 import uuid
+from copy import deepcopy
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from urllib import error, request
@@ -151,7 +153,7 @@ class HttpServices:
                     content = pdf.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).tobytes("png")
                 mime = "image/png"
             return {"imageDataUrl": f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"}
-        if operation == "ocr":
+        if operation in {"ocr", "visual_backfill"}:
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             image_path = (Path(job["asset_root"]) / page["imageFile"]["path"]).resolve()
             if not image_path.is_relative_to(Path(job["asset_root"]).resolve()):
@@ -162,6 +164,8 @@ class HttpServices:
             return {"normalizedText": to_simplified(str(page.get("ocrText") or ""))}
         if operation == "punctuation":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
+            if not page.get("normalizedText", "").strip():
+                return {"punctuatedText": "", "warnings": []}
             result = self._llm("punctuate", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
@@ -171,6 +175,8 @@ class HttpServices:
             return result
         if operation == "proofreading":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
+            if not page.get("ocrText", "").strip():
+                return {"punctuatedText": "", "warnings": []}
             previous = sorted((p for p in document["pages"] if p["pageNumber"] < page_number and (
                 p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText"))),
                 key=lambda p: p["pageNumber"])[-2:]
@@ -189,8 +195,8 @@ class HttpServices:
 def preserve_server_fields(connection, document):
     """过期的浏览器同步绝不能覆盖调度器检查点。"""
     row = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
-    job = connection.execute("SELECT mode FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
-    if not row or not job:
+    job = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
+    if not row or not job or ("checkpoint" in job.keys() and json.loads(job["checkpoint"]).get("visualOnly")):
         return document
     stored = json.loads(row["payload"])
     current_revision = (stored.get("processingTask") or {}).get("revision", 0)
@@ -253,12 +259,15 @@ class Scheduler:
         self.thread = None
         self.lock_file = None
 
-    def _load(self, connection, document_id):
+    def _load(self, connection, document_id, allow_terminal=False):
         row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
         document = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
-        if not row or not document or row["status"] in TERMINAL:
+        if not row or not document or (row["status"] in TERMINAL and not allow_terminal):
             return None
-        return dict(row), json.loads(document["payload"]), json.loads(row["checkpoint"])
+        payload = json.loads(document["payload"])
+        if allow_terminal:
+            self.data.rehydrate_document_assets(connection, payload)
+        return dict(row), payload, json.loads(row["checkpoint"])
 
 
 
@@ -335,6 +344,8 @@ class Scheduler:
         return progress
 
     def _record(self, document_id, operation, number, future):
+        if operation == "visual_backfill":
+            return self._record_visual_backfill(document_id, number, future)
         with self.data.database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             loaded = self._load(connection, document_id)
@@ -409,6 +420,7 @@ class Scheduler:
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page.update(ocrText=str(result.get("text") or ""), ocr={k: result.get(k) for k in ("confidence", "engine", "warnings", "width", "height")}, status="已识别",
                                 imageName=page.get("imageName") or f"page-{number}.png")
+                    page.update(visuals=result.get("visuals") or [], visualsExtracted=True)
                     self._set_stage(page, "ocr", "done")
                     reader_index.save_ocr_layout(connection, doc["id"], page, result, self.data.now_iso())
                 elif operation == "variant":
@@ -504,6 +516,90 @@ class Scheduler:
                     doc["processingTask"]["pausedForRegistration"] = True
                     save_job_state(self.data, connection, job, doc, cp)
 
+    def _launch_visual_backfill(self):
+        if self.running:
+            return
+        with self.data.database() as connection, connection:
+            rows = connection.execute("SELECT j.* FROM processing_jobs j JOIN documents d ON d.id=j.document_id WHERE d.deleted_at IS NULL ORDER BY j.sequence").fetchall()
+            for row in rows:
+                cp = json.loads(row["checkpoint"])
+                pending = next((q for q in cp.get("visualQueue", []) if q.get("status") in {"queued", "running"} and q.get("retryAt", 0) <= self.clock()), None)
+                if not pending:
+                    continue
+                loaded = self._load(connection, row["document_id"], allow_terminal=True)
+                if not loaded:
+                    continue
+                job, doc, _ = loaded
+                page = next((p for p in doc.get("pages", []) if p["id"] == pending["pageId"]), None)
+                if not page or not (page.get("imageFile") or {}).get("path"):
+                    pending.update(status="failed", error="原页图不存在")
+                    connection.execute("UPDATE processing_jobs SET checkpoint=? WHERE document_id=?", (json.dumps(cp), doc["id"]))
+                    continue
+                pending["status"] = "running"
+                connection.execute("UPDATE processing_jobs SET checkpoint=? WHERE document_id=?", (json.dumps(cp), doc["id"]))
+                job.update(asset_root=str(self.data.FILE_STORAGE_DIR), source_path="")
+                future = self.executor.submit(self.services.execute, "visual_backfill", job, doc, cp, pending["pageNumber"])
+                self.running["visual_backfill"] = (future, doc["id"], "visual_backfill", pending["pageNumber"])
+                return
+
+    def _record_visual_backfill(self, document_id, number, future):
+        from service.reader_content import CAPTION_TYPES, digest
+        with self.data.database() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            loaded = self._load(connection, document_id, allow_terminal=True)
+            if not loaded:
+                return
+            job, doc, cp = loaded
+            request = next((q for q in cp.get("visualQueue", []) if q.get("pageNumber") == number and q.get("status") == "running"), None)
+            if not request:
+                return
+            page = next((p for p in doc.get("pages", []) if p["id"] == request["pageId"]), None)
+            original_doc = deepcopy(doc)
+            connection.execute("SAVEPOINT visual_backfill_write")
+            try:
+                result = future.result()
+                if not page or request["imageHash"] != page.get("imageHash", "") or request["sourceRevision"] != page.get("processingRevision", 0):
+                    raise ProcessingFailure("页面已更新，请重新补提取图表")
+                original = {key: page.get(key, "") for key in ("ocrText", "normalizedText", "punctuationDraftText", "punctuatedText")}
+                # A matching authored sentence is not proof that it was an OCR caption.
+                # Require the historical source block and never edit a changed final rendition.
+                pending_separation = False
+                unedited_final = original["punctuatedText"] in {original["ocrText"], original["normalizedText"], to_simplified(original["ocrText"])}
+                for block in result.get("contentBlocks") or []:
+                    if block.get("kind") not in CAPTION_TYPES | {"table"} or not block.get("text"):
+                        continue
+                    source_pattern = re.compile(r"(?m)^" + re.escape(block["text"]) + r"(?:\n|$)")
+                    if len(list(source_pattern.finditer(original["ocrText"]))) != 1:
+                        continue
+                    for key in original:
+                        token = to_simplified(block["text"]) if key == "normalizedText" else block["text"]
+                        text = page.get(key) or ""
+                        pattern = re.compile(r"(?m)^" + re.escape(token) + r"(?:\n|$)")
+                        matches = len(list(pattern.finditer(text)))
+                        if key == "punctuatedText" and text and not unedited_final:
+                            pending_separation = True
+                            continue
+                        if matches == 1:
+                            page[key] = pattern.sub("", text).strip()
+                        elif matches > 1:
+                            pending_separation = True
+                page["visualSeparationStatus"] = "needs_review" if pending_separation else "separated"
+                if any(page.get(key, "") != value for key, value in original.items()):
+                    page.setdefault("visualMigrationOriginal", original)
+                page.update(visuals=result.get("visuals") or [], visualsExtracted=True,
+                            processingRevision=int(page.get("processingRevision") or 0) + 1)
+                self.data.materialize_document_assets(connection, doc["id"], doc, self.data.now_iso())
+                reader_index.save_ocr_layout(connection, doc["id"], page, result, self.data.now_iso())
+                request.update(status="completed", error="")
+                connection.execute("RELEASE SAVEPOINT visual_backfill_write")
+            except Exception as exc:
+                connection.execute("ROLLBACK TO SAVEPOINT visual_backfill_write")
+                connection.execute("RELEASE SAVEPOINT visual_backfill_write")
+                doc = original_doc
+                request["attempts"] = request.get("attempts", 0) + 1
+                request.update(status="queued" if isinstance(exc, ServiceUnavailable) and request["attempts"] < MAX_ATTEMPTS else "failed", error=str(exc), retryAt=self.clock() + RETRY_SECONDS)
+            save_job_state(self.data, connection, job, doc, cp)
+
     def tick(self):
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
             if future.done():
@@ -531,6 +627,7 @@ class Scheduler:
             return
         bodies = [job for job in jobs if job["phase"] == "body"]
         if not bodies:
+            self._launch_visual_backfill()
             return
         job = bodies[0]  # 不能跳过正在等待的队首文献去处理另一份文献。
         # 原件归档保留先进先出顺序，即使登记仍在等待服务。后续登记可以准备，

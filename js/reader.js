@@ -508,6 +508,8 @@ function scrollReaderRegionIntoView(element, container) {
 }
 
 function setReaderLinkActive(sentenceId, options = {}) {
+  if (sentenceId && options.selected && typeof clearReaderVisualActive === "function") clearReaderVisualActive();
+  if (typeof setReaderVisualSentenceActive === "function") setReaderVisualSentenceActive(Boolean(sentenceId));
   const textNodes = readerText?.querySelectorAll("[data-sentence-id]") || [];
   const imageNodes = readerOriginalPreview?.querySelectorAll("[data-sentence-id]") || [];
   let activeText = null;

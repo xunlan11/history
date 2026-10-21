@@ -3,11 +3,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from typing import Literal
+from urllib.parse import quote, unquote
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 CHUNKER_VERSION = "paragraph-v1"
 TextPolicy = Literal["primary", "processed", "reader"]
+
+
+VISUAL_SOURCE_KINDS = ("visual_caption", "table_cell")
+
+
+def visual_source_layer(kind: str, visual_id: str, item_id: str) -> str:
+    """Encode both IDs independently so punctuation cannot alias another source."""
+    if kind not in VISUAL_SOURCE_KINDS or not visual_id or not item_id:
+        raise ValueError("Invalid visual source identity")
+    return f"{kind}:{quote(visual_id, safe='')}:{quote(item_id, safe='')}"
+
+
+def parse_visual_source_layer(layer: str) -> dict[str, str] | None:
+    parts = layer.split(":")
+    if len(parts) != 3 or parts[0] not in VISUAL_SOURCE_KINDS:
+        return None
+    try:
+        visual_id, item_id = (unquote(part, errors="strict") for part in parts[1:])
+        if visual_source_layer(parts[0], visual_id, item_id) != layer:
+            return None
+    except (ValueError, UnicodeError):
+        return None
+    key = "captionId" if parts[0] == "visual_caption" else "cellId"
+    return {"visualId": visual_id, key: item_id}
 
 
 @dataclass(frozen=True)
@@ -69,8 +94,15 @@ class EvidenceLocator(BaseModel):
     chunkId: str
     documentId: str
     pageId: str
-    sourceLayer: Literal["ocrText", "punctuatedText", "notes"]
+    sourceLayer: str
     sourceHash: str
+
+    @field_validator("sourceLayer")
+    @classmethod
+    def known_source_layer(cls, value: str) -> str:
+        if value not in {"ocrText", "punctuatedText", "notes"} and parse_visual_source_layer(value) is None:
+            raise ValueError("Unknown or malformed source layer")
+        return value
 
 
 class EvidenceValidationRequest(BaseModel):

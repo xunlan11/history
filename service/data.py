@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
-from service import reader_index
+from service import reader_index, reader_content
 from service import retrieval
 from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
 from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
@@ -828,6 +828,16 @@ def apply_asset_to_document(document: dict[str, Any], asset: dict[str, Any]) -> 
             document["coverImageDataUrl"] = ""
         return
 
+    if role.startswith("page-visual:"):
+        visual_id = role.removeprefix("page-visual:")
+        for page in document.get("pages") or []:
+            if page.get("id") == asset["pageId"]:
+                for visual in page.get("visuals") or []:
+                    if visual.get("id") == visual_id:
+                        visual.update(asset=asset, url=asset["url"])
+                        visual.pop("imageDataUrl", None)
+        return
+
     if role == "page-image":
         pages = document.get("pages") if isinstance(document.get("pages"), list) else []
         for page in pages:
@@ -861,24 +871,34 @@ def materialize_document_assets(
         if asset:
             apply_asset_to_document(document, asset)
 
-    pages = document.get("pages") if isinstance(document.get("pages"), list) else []
-    for page in pages:
+    for page in document.get("pages") or []:
         page_id = str(page.get("id") or "").strip()
-        image_data_url = str(page.get("imageDataUrl") or "")
-        if not page_id or not image_data_url.startswith("data:"):
+        if not page_id:
             continue
-
-        asset = store_data_url_asset(
-            connection,
-            document_id=document_id,
-            page_id=page_id,
-            role="page-image",
-            data_url=image_data_url,
-            original_name=page.get("imageName") or f"page-{page.get('pageNumber') or ''}.png",
-            timestamp=timestamp,
-        )
-        if asset:
-            apply_asset_to_document(document, asset)
+        image_data_url = str(page.get("imageDataUrl") or "")
+        if image_data_url.startswith("data:"):
+            asset = store_data_url_asset(connection, document_id=document_id, page_id=page_id,
+                role="page-image", data_url=image_data_url,
+                original_name=page.get("imageName") or f"page-{page.get('pageNumber') or ''}.png", timestamp=timestamp)
+            if asset:
+                apply_asset_to_document(document, asset)
+        active_roles = set()
+        for visual in page.get("visuals") or []:
+            role = "page-visual:" + str(visual["id"])
+            if visual.get("renderMode") != "structured" and visual.get("status") == "ready":
+                active_roles.add(role)
+            image_data = visual.get("imageDataUrl", "")
+            visual.pop("resourceRef", None)
+            if image_data:
+                asset = store_data_url_asset(connection, document_id=document_id, page_id=page_id,
+                    role=role, data_url=image_data, original_name=f"{visual['id']}.png", timestamp=timestamp)
+                if not asset:
+                    raise ValueError("图表图像无法保存")
+                apply_asset_to_document(document, asset)
+        if page.get("visualsExtracted"):
+            for row in connection.execute("SELECT id,role FROM document_files WHERE document_id=? AND page_id=? AND role LIKE 'page-visual:%' AND deleted_at IS NULL", (document_id, page_id)):
+                if row["role"] not in active_roles:
+                    connection.execute("UPDATE document_files SET deleted_at=? WHERE id=?", (timestamp, row["id"]))
 
 
 def rehydrate_document_assets(connection: sqlite3.Connection, document: dict[str, Any]) -> dict[str, Any]:
@@ -988,6 +1008,13 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             provenance = json_load(existing["payload"]).get("provenance")
             if provenance:
                 stored_document["provenance"] = provenance
+        if existing:
+            server_pages = {p["id"]: p for p in json_load(existing["payload"]).get("pages", [])}
+            for page in stored_document.get("pages") or []:
+                old_page = server_pages.get(page.get("id"), {})
+                for key in ("visuals", "visualsExtracted", "visualMigrationOriginal", "visualSeparationStatus"):
+                    if key in old_page:
+                        page[key] = old_page[key]
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
         materialize_document_assets(connection, document_id, stored_document, timestamp)
@@ -1512,7 +1539,7 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
     if not row:
         raise HTTPException(status_code=404, detail="文献不存在")
     document = json_load(row["payload"])
-    if existing:
+    if existing and not json_load(existing["checkpoint"]).get("visualOnly"):
         return document
     source = connection.execute("SELECT * FROM document_files WHERE document_id=? AND role='source' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", (document_id,)).fetchone()
     if not source:
@@ -1524,6 +1551,8 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
     if not source_path.is_relative_to(FILE_STORAGE_DIR) or not source_path.is_file():
         raise HTTPException(status_code=409, detail="归档原件不存在或路径无效")
     stamp = now_iso()
+    if existing:
+        connection.execute("DELETE FROM processing_jobs WHERE document_id=?", (document_id,))
     result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,source_path,checkpoint,created_at,updated_at)
         VALUES(?,?,?,?,?,?)""", (document_id, selected, source["storage_path"], json_dump({"registrationStep": "metadata_candidate"}), stamp, stamp))
     document["processingMode"] = selected
@@ -1870,8 +1899,8 @@ async def upload_file(
     timestamp = now_iso()
     # 在写入新的孤立资产前拒绝替换。重新上传相同内容是幂等的，但不允许修改已提交原件。
     with database() as connection:
-        submitted = connection.execute("SELECT source_path FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
-    if submitted:
+        submitted = connection.execute("SELECT source_path,checkpoint FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
+    if submitted and not json_load(submitted["checkpoint"]).get("visualOnly"):
         existing_path = Path(submitted["source_path"]).as_posix()
         expected_digest = hashlib.sha256(content).hexdigest()
         expected_path = relative_storage_path(document_id, normalized_role, expected_digest, mime_type, document.filename or "").as_posix()
@@ -2324,6 +2353,67 @@ def require_visible_document_page(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="文献页不存在或不可见")
+
+
+@app.get("/api/documents/{document_id}/pages/{page_id}/reader-content")
+def get_page_reader_content(document_id: str, page_id: str):
+    user = current_user()
+    with database() as connection:
+        require_visible_document_page(connection, user, document_id, page_id)
+        row = connection.execute("SELECT payload FROM document_pages WHERE id=? AND document_id=?", (page_id, document_id)).fetchone()
+        page = json_load(row["payload"])
+        rehydrate_document_assets(connection, {"id": document_id, "pages": [page]})
+        layout = connection.execute("SELECT layout FROM page_reader_indexes WHERE page_id=? AND document_id=?", (page_id, document_id)).fetchone()
+        return reader_content.build_reader_content(json_load(layout["layout"]) if layout else {}, page)
+
+
+@app.get("/api/documents/{document_id}/visual-catalog")
+def get_document_visual_catalog(document_id: str):
+    user = current_user()
+    with database() as connection:
+        row = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL AND (visibility='public' OR owner_id=?)", (document_id, user["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="文献不存在或不可见")
+        document = json_load(row["payload"])
+        document["pages"] = [json_load(p["payload"]) for p in connection.execute("SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number", (document_id,))]
+        return reader_content.build_visual_catalog(document)
+
+
+@app.post("/api/documents/{document_id}/pages/{page_id}/extract-visuals")
+def extract_page_visuals(document_id: str, page_id: str):
+    user = current_user()
+    with database() as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_owned_document(connection, document_id, user)
+        require_visible_document_page(connection, user, document_id, page_id)
+        doc = json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"])
+        rehydrate_document_assets(connection, doc)
+        page = next((p for p in doc.get("pages", []) if p["id"] == page_id), None)
+        if not page or not (page.get("imageFile") or {}).get("path"):
+            raise HTTPException(status_code=409, detail="本页没有可用原图，无法补提取")
+        row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+        cp = json_load(row["checkpoint"]) if row else {"visualOnly": True}
+        queue = cp.setdefault("visualQueue", [])
+        if not any(q["pageId"] == page_id and q["status"] in {"queued", "running"} for q in queue):
+            queue[:] = [q for q in queue if q["pageId"] != page_id]
+            queue.append({"pageId": page_id, "pageNumber": page["pageNumber"], "imageHash": page.get("imageHash", ""),
+                          "sourceRevision": page.get("processingRevision", 0), "status": "queued", "attempts": 0})
+        stamp = now_iso()
+        if row:
+            connection.execute("UPDATE processing_jobs SET checkpoint=?,updated_at=? WHERE document_id=?", (json_dump(cp), stamp, document_id))
+        else:
+            connection.execute("INSERT INTO processing_jobs(document_id,mode,phase,status,source_path,checkpoint,created_at,updated_at) VALUES(?, 'serial','body','completed',?,?,?,?)",
+                (document_id, (doc.get("sourceFile") or {}).get("path", ""), json_dump(cp), stamp, stamp))
+        return {"status": "queued", "pageId": page_id}
+
+
+@app.get("/api/documents/{document_id}/pages/{page_id}/extract-visuals")
+def get_visual_extraction_status(document_id: str, page_id: str):
+    user = current_user()
+    with database() as connection:
+        require_visible_document_page(connection, user, document_id, page_id)
+        row = connection.execute("SELECT checkpoint FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+        return next((q for q in json_load(row["checkpoint"]).get("visualQueue", []) if q["pageId"] == page_id), {"status": "idle"}) if row else {"status": "idle"}
 
 
 @app.get("/api/documents/{document_id}/pages/{page_id}/reader-index")

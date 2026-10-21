@@ -766,6 +766,7 @@ function renderReader() {
 
   if (!item) {
     if (typeof syncReaderSearch === "function") syncReaderSearch(null);
+    if (typeof syncReaderVisualCatalog === "function") syncReaderVisualCatalog(null);
     setReaderEditing(false);
     readerTitle.textContent = "未选择文献";
     readerPageInput.value = "";
@@ -789,6 +790,7 @@ function renderReader() {
 
   ensureSelectedPage(item);
   const page = getSelectedPage();
+  if (typeof syncReaderVisualCatalog === "function") syncReaderVisualCatalog(item);
   const canEdit = canEditDocument(item);
   const editingPageKey = JSON.stringify([currentUser?.id, item.id, page?.id]);
   if (!canEdit || readerEditingPageKey !== editingPageKey) readerEditing = false;
@@ -814,6 +816,19 @@ function renderReader() {
   const index = readerEditing ? null : getCachedReaderIndex(item, page);
   renderReaderOriginal(page, index);
   renderReaderText(page, index);
+  if (!readerEditing && page && typeof loadReaderContent === "function") {
+    const content = getCachedReaderContent(item, page);
+    if (content) renderReaderVisualOverlay(page, content);
+    else {
+      const contentKey = getReaderContentKey(item, page);
+      loadReaderContent(item, page).then((loaded) => {
+        const selected = getSelectedDocument(), selectedPage = getSelectedPage();
+        if (!loaded || readerEditing || selected?.id !== item.id || selectedPage?.id !== page.id ||
+            getReaderContentKey(selected, selectedPage) !== contentKey) return;
+        renderReader();
+      });
+    }
+  }
   if (!readerEditing && !index && page) {
     const requestKey = getReaderIndexKey(item, page);
     loadReaderIndex(item.id, page.id).then((loaded) => {
@@ -826,6 +841,10 @@ function renderReader() {
       readerText.replaceChildren();
       renderReaderOriginal(selectedPage, loaded);
       renderReaderText(selectedPage, loaded);
+      if (typeof getCachedReaderContent === "function") {
+        const content = getCachedReaderContent(selected, selectedPage);
+        if (content) renderReaderVisualOverlay(selectedPage, content);
+      }
     });
   }
   if (typeof renderReaderAnnotation === "function") {
@@ -840,7 +859,9 @@ function setReaderEditing(editing) {
   if (readerEditing) {
     resetReaderLink();
     // 清除句子节点再编辑，保存时始终读取普通正文。
-    readerText.textContent = readerText.classList.contains("is-empty") ? "" : readerText.textContent;
+    readerText.textContent = getPagePrimaryText(getSelectedPage());
+    if (typeof clearReaderVisualActive === "function") clearReaderVisualActive();
+    readerOriginalPreview?.querySelectorAll(".reader-visual-overlay").forEach((overlay) => overlay.remove());
     readerOriginalPreview?.querySelector(".reader-image-overlay")?.remove();
   }
   if (readerEditing && readerText?.classList.contains("is-empty")) {
@@ -1250,13 +1271,18 @@ function renderReaderText(page, readerIndex = null, options = {}) {
   const text = getPagePrimaryText(page);
   if (options.evidence !== false && typeof showReaderEvidence === "function") showReaderEvidence(page, readerIndex);
 
-  if (!text) {
+  const content = !readerEditing && typeof getCachedReaderContent === "function"
+    ? getCachedReaderContent(getSelectedDocument(), page) : null;
+  const renderedContent = content && renderReaderContent(page, content, readerIndex);
+  if (!text && !renderedContent) {
     readerText.classList.add("is-empty");
     readerText.append(readerEmptyState("本页尚无整理文本"));
     return;
   }
 
-  if (readerIndex && !readerEditing && isReaderIndexValid(readerIndex, page)) {
+  if (renderedContent) {
+    readerText.classList.remove("is-empty");
+  } else if (readerIndex && !readerEditing && isReaderIndexValid(readerIndex, page)) {
     for (const sentence of readerIndex.sentences) {
       const node = document.createElement("span");
       node.className = "reader-sentence";
@@ -1269,7 +1295,7 @@ function renderReaderText(page, readerIndex = null, options = {}) {
     readerText.textContent = text;
   }
 
-  if (typeof applyReaderSearchHighlights === "function") applyReaderSearchHighlights(page);
+  if (!renderedContent && typeof applyReaderSearchHighlights === "function") applyReaderSearchHighlights(page);
 
   if (page?.notes) {
     readerNotes.textContent = page.notes;

@@ -35,6 +35,7 @@ from starlette.concurrency import run_in_threadpool
 from PIL import Image
 
 from service import ocr_upstream
+from service import reader_content
 
 APP_DIR = Path(__file__).resolve().parent.parent
 # OCR 存储目录可用 OCR_STORAGE_DIR 环境变量覆盖（/literature 实例指向独立目录）
@@ -169,7 +170,7 @@ def cleanup_orphan_task_dirs(max_age_seconds: int = ORPHAN_TASK_MAX_AGE_SECONDS)
 
 # 不进入正文的版面角色（按服务端标签判定，不含任何本地版面推断）：
 # 页眉、页脚、页码，以及不含文字内容的图片 / 图表 / 印章区域。
-NON_BODY_BLOCK_TYPES = {"header", "footer", "page_number", "figure", "chart", "seal", "image"}
+NON_BODY_BLOCK_TYPES = reader_content.NON_BODY_TYPES
 
 
 def upstream_unavailable(exc: ocr_upstream.OcrUpstreamError) -> HTTPException:
@@ -564,19 +565,19 @@ def recognize_image(
     ensure_image_readable(path)
     mode = "quick" if quick_read else "formal"
     report_progress(on_progress, "快速识别" if quick_read else "提交服务端识别", 50)
-    result = ocr_upstream.recognize_page_image(path, page_number=page_number, mode=mode)
+    result = ocr_upstream.recognize_page_image(path, page_number=page_number, mode="quick" if quick_read else "reader")
 
     blocks = result.get("blocks") or []
     lines = result.get("lines") or []
-    text = "\n".join(
-        block["text"]
-        for block in blocks
-        if block.get("text") and block.get("type") not in NON_BODY_BLOCK_TYPES
-    ).strip()
+    text = reader_content.body_text(result)
+    visuals, content_blocks = reader_content.extract_visuals(result)
     scores = confidences(lines)
 
     payload: dict[str, Any] = {
         "text": text,
+        "visuals": visuals, "contentBlocks": content_blocks,
+        "contentSourceText": text, "coordinateSpace": result.get("coordinateSpace"),
+        "markdownImages": result.get("markdownImages") or {},
         "confidence": sum(scores) / len(scores) if scores else None,
         "engine": result.get("engine") or "remote",
         "readMode": mode,
@@ -590,6 +591,8 @@ def recognize_image(
         "upstream": result.get("upstream"),
     }
 
+    reader_content.materialize_visual_images(payload, path)
+    payload.pop("markdownImages", None)
     if task_id:
         payload["imageUrl"] = build_file_url(path)
     else:
@@ -626,9 +629,9 @@ def build_warnings(result: dict[str, Any]) -> list[str]:
 
     types = {block.get("type") for block in blocks}
     if {"table", "table_title"} & types:
-        warnings.append("服务端标出了表格区域，表格内容以结构化文本保留，建议对照原图核对。")
+        warnings.append("表格区域已单独保留，请对照原图核对单元格内容。")
     if {"figure", "figure_title", "chart", "seal"} & types:
-        warnings.append("服务端标出了图片、图表或印章区域，这些区域不进入正文。")
+        warnings.append("图表及其标题已单独保留，不进入正文；印章区域不进入正文。")
     if {"header", "footer", "page_number"} & types:
         warnings.append("服务端把页眉、页脚或页码标为独立区域，已保留在版面结构中但不进入正文。")
     if "footnote" in types:

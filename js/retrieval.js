@@ -108,37 +108,66 @@ async function hashEvidenceText(text) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function getReaderVisualSource(page, layer) {
+  if (!page || typeof layer !== "string") return null;
+  const parts = layer.split(":");
+  if (parts.length !== 3 || !["visual_caption", "table_cell"].includes(parts[0])) return null;
+  let visualId, itemId;
+  try {
+    [visualId, itemId] = parts.slice(1).map(decodeURIComponent);
+    // Python quote(..., safe="") also escapes characters left by encodeURIComponent.
+    const encode = (id) => encodeURIComponent(id).replace(/[!'()*]/g,
+      (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase());
+    if (!visualId || !itemId || encode(visualId) !== parts[1] || encode(itemId) !== parts[2]) return null;
+  } catch { return null; }
+  const cached = page?.visuals == null && typeof getCachedReaderContent === "function" &&
+    typeof getSelectedDocument === "function" ? getCachedReaderContent(getSelectedDocument(), page) : null;
+  const catalog = page?.visuals ?? cached?.visuals;
+  const visuals = Array.isArray(catalog) ? catalog : catalog && typeof catalog === "object" ? Object.values(catalog) : [];
+  const visual = visuals.find((entry) => entry?.id === visualId);
+  const entries = parts[0] === "visual_caption" ? visual?.captions : visual?.tableModel?.cells;
+  const item = Array.isArray(entries) ? entries.find((entry) => entry?.id === itemId) : null;
+  if (typeof item?.text !== "string" || !item.text.trim()) return null;
+  return { text: item.text, visualId, [parts[0] === "visual_caption" ? "captionId" : "cellId"]: itemId };
+}
+
 async function resolveEvidenceAnchor(page, locator) {
   const layer = locator.sourceLayer;
-  if (!["ocrText", "punctuatedText", "notes"].includes(layer)) return { status: "missing" };
-  const text = page[layer] || "";
+  const visual = getReaderVisualSource(page, layer);
+  if (!visual && !["ocrText", "punctuatedText", "notes"].includes(layer)) return { status: "missing" };
+  const text = visual ? visual.text : typeof page?.[layer] === "string" ? page[layer] : "";
   if (await hashEvidenceText(text) !== locator.sourceHash) return { status: "stale", sourceLayer: layer };
   const start = Number(locator.start), end = Number(locator.end);
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > Array.from(text).length) return { status: "missing" };
-  return { status: "ready", start, end, sourceLayer: layer };
+  return { status: "ready", start, end, sourceLayer: layer, ...(visual || {}) };
 }
 
 let evidenceRenderRevision = 0;
 
+function getReaderEvidenceBodyText() {
+  return typeof getReaderTextNodes === "function"
+    ? getReaderTextNodes(readerText).map(({ node }) => node.textContent).join("") : readerText.textContent;
+}
+
 function markEvidenceRange(container, start, end) {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  const nodes = [];
-  let position = 0;
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    const length = Array.from(node.textContent).length;
-    if (position < end && position + length > start) {
-      nodes.push({ node, start: Math.max(0, start - position), end: Math.min(length, end - position) });
+  const body = typeof readerText !== "undefined" && container === readerText && typeof getReaderTextNodes === "function";
+  const nodes = body ? getReaderTextNodes(container) : [];
+  if (!body) {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let position = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      nodes.push({ node, start: position, end: position + node.textContent.length });
+      position += node.textContent.length;
     }
-    position += length;
   }
+  const points = Array.from(nodes.map(({ node }) => node.textContent).join(""));
+  const from = points.slice(0, start).join("").length, to = points.slice(0, end).join("").length;
   let first = null;
   for (const item of nodes) {
-    const points = Array.from(item.node.textContent);
-    const from = points.slice(0, item.start).join("").length;
-    const to = points.slice(0, item.end).join("").length;
-    item.node.splitText(to);
-    const selected = item.node.splitText(from);
+    if (item.start >= to || item.end <= from) continue;
+    item.node.splitText(Math.min(item.end, to) - item.start);
+    const selected = item.node.splitText(Math.max(item.start, from) - item.start);
     const mark = document.createElement("mark");
     mark.className = "retrieval-highlight";
     selected.replaceWith(mark);
@@ -166,13 +195,23 @@ function evidenceSentence(displayed, source, start, end, sentences) {
 async function showReaderEvidence(page, readerIndex = null) {
   const revision = ++evidenceRenderRevision;
   document.querySelector(".reader-evidence-status")?.remove();
-  const params = new URL(window.location.href).searchParams;
-  if (!params.has("sourceHash") || params.get("page") !== page?.id || params.get("document") !== getSelectedDocument()?.id || readerEditing) return;
+  const href = window.location.href, params = new URL(href).searchParams;
+  const item = getSelectedDocument();
+  if (!params.has("sourceHash") || params.get("page") !== page?.id || params.get("document") !== item?.id || readerEditing) return;
+  const current = () => revision === evidenceRenderRevision && !readerEditing && window.location.href === href &&
+    getSelectedDocument()?.id === item.id && (typeof getSelectedPage !== "function" || getSelectedPage()?.id === page.id);
   const locator = Object.fromEntries(["sourceLayer", "sourceHash", "start", "end"].map((key) => [key, params.get(key)]));
   let anchor;
-  try { anchor = await resolveEvidenceAnchor(page, locator); }
-  catch { anchor = { status: "missing" }; }
-  if (revision !== evidenceRenderRevision || readerEditing) return;
+  try {
+    let loaded = true;
+    if (/^(visual_caption|table_cell):/.test(locator.sourceLayer) && typeof loadReaderContent === "function") {
+      loaded = await loadReaderContent(item, page);
+      if (!current()) return;
+    }
+    const currentPage = typeof getSelectedPage === "function" ? getSelectedPage() : page;
+    anchor = loaded ? await resolveEvidenceAnchor(currentPage, locator) : { status: "missing" };
+  } catch { anchor = { status: "missing" }; }
+  if (!current()) return;
   const panel = document.createElement("section");
   panel.className = "reader-evidence-status";
   panel.setAttribute("aria-label", "引用定位");
@@ -183,10 +222,17 @@ async function showReaderEvidence(page, readerIndex = null) {
     return;
   }
   const labels = { ocrText: "OCR 原文", punctuatedText: "整理正文", notes: "笔记" };
+  const visualLabel = anchor.captionId ? "图注" : anchor.cellId ? "表格单元格" : "";
   const label = document.createElement("p");
   label.className = "meta-line";
-  label.textContent = "引用来自：" + (labels[anchor.sourceLayer] || anchor.sourceLayer);
+  label.textContent = "引用来自：" + (visualLabel || labels[anchor.sourceLayer] || anchor.sourceLayer);
   panel.append(label);
+  if (anchor.visualId) {
+    setReaderCitationSentence("");
+    if (typeof setReaderVisualActive === "function") setReaderVisualActive(anchor.visualId,
+      { captionId: anchor.captionId, cellId: anchor.cellId, scrollText: true, scrollImage: true });
+    return;
+  }
   // 高亮与「选中句子」一致：正文句子与原文区域一起高亮；悬停其它句子会临时改变高亮。
   const sentences = readerIndex?.sentences?.length ? readerIndex.sentences : null;
   const sentence = sentences
@@ -201,7 +247,7 @@ async function showReaderEvidence(page, readerIndex = null) {
   // 没有句子索引（未校对/索引未就绪）时，退回按字符高亮。
   const source = page[anchor.sourceLayer];
   let mark;
-  if (source === getPagePrimaryText(page) && readerText.textContent === source) {
+  if (source === getPagePrimaryText(page) && getReaderEvidenceBodyText() === source) {
     mark = markEvidenceRange(readerText, anchor.start, anchor.end);
     mark?.setAttribute("data-variant-skip", "");
   } else {
