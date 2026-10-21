@@ -61,11 +61,10 @@ test('active ring uses current page rather than completed-page count', () => {
 
 function renderContext() {
   const ctx = context();
-  const detail = {textContent:'',classList:{toggle(){}},title:''};
   const root = {title:'',classList:{toggle(name, value){this[name]=value;}}};
   const ring = {};
   Object.assign(ctx, {streamProgress:{classList:{add(){},remove(){}}},
-    progressTotalNode:null,progressModeNode:null,progressOcrDetailNode:detail,
+    progressTotalNode:null,progressModeNode:null,
     progressStageNodes:new Map([['ocr',{root,ring,pages:{}}]]),
     progressStageFills:new Map(),
     PROCESSING_STAGE_CONFIG:[{key:'ocr',label:'文字识别'}],
@@ -73,30 +72,22 @@ function renderContext() {
     renderFailedProcessingPages(){},setRingProgress(node,percent){node.percent=percent;}});
   vm.runInContext(fs.readFileSync('js/processing.js','utf8').slice(
     fs.readFileSync('js/processing.js','utf8').indexOf('function renderStreamProgress')),ctx);
-  return {ctx,detail,root,ring};
+  return {ctx,root,ring};
 }
 
 test('observed zero progress renders zero instead of fabricated rotating arc', () => {
-  const {ctx,detail,root,ring} = renderContext();
+  const {ctx,root,ring} = renderContext();
   ctx.renderStreamProgress({pages:[],processingTask:{totalPages:5,status:'处理中',
     activeStages:{ocr:{pageNumber:2}}, stagePages:{ocr:{pageNumber:2,percent:0,detail:observed}}}});
   assert.equal(ring.percent,0);
   assert.equal(root.classList['is-active'],false);
-  assert.match(detail.textContent,/第 2 页 · 文字识别 · 8\/32/);
-});
-
-test('selected registration document displays live candidate OCR details', () => {
-  const {ctx,detail} = renderContext();
-  ctx.renderStreamProgress({pages:[],processingTask:{totalPages:0,status:'登记中',
-    registrationProgress:{stage:'metadata_candidate',percent:50,detail:observed}}});
-  assert.equal(detail.textContent,'登记 OCR 50% · 候选页 2/3 · 文字识别 · 8/32 个文字区域');
+  assert.match(root.title,/第 2 页处理中 0%/);
 });
 
 test('old-page details cannot label a newly active page', () => {
-  const {ctx,detail,root} = renderContext();
+  const {ctx,root} = renderContext();
   ctx.renderStreamProgress({pages:[],processingTask:{totalPages:5,status:'处理中',
     activeStages:{ocr:{pageNumber:3}}, stagePages:{ocr:{pageNumber:2,percent:65,detail:observed}}}});
-  assert.equal(detail.textContent,'');
   assert.doesNotMatch(root.title,/8\/32/);
   assert.equal(root.classList['is-active'],true);
 });

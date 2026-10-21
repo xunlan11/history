@@ -4665,10 +4665,8 @@ body {
 .reader-visual :focus-visible, .reader-visual-catalog :focus-visible, .reader-visual-catalog-toggle:focus-visible { outline: 2px solid #a57525; outline-offset: 2px; }
 @media (max-width: 600px) { .reader-visual-catalog { top: 4rem; max-height: calc(100dvh - 5rem); } }
 .reader-visual-table[data-border-style="borderless"] th, .reader-visual-table[data-border-style="borderless"] td { border: 0; }
-.reader-visual-backfill { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: .8rem 0; white-space: normal; }
-.reader-visual-extraction-status { color: #675f53; font-size: .875rem; }
 .reader-visual-enlarge, .reader-visual-dialog-close, .reader-visual-catalog-heading > button,
-.reader-visual-backfill > button, .reader-visual-catalog-toggle {
+.reader-visual-catalog-toggle {
   border: 1px solid #d2c8b6;
   border-radius: .4rem;
   background: #f8f6ef;
@@ -4680,16 +4678,7 @@ body {
   cursor: pointer;
 }
 .reader-visual-enlarge:hover, .reader-visual-dialog-close:hover,
-.reader-visual-catalog-heading > button:hover, .reader-visual-backfill > button:hover,
+.reader-visual-catalog-heading > button:hover,
 .reader-visual-catalog-toggle:hover { background: #eee5d3; color: #302b23; }
-.reader-visual-backfill > button:disabled { opacity: .6; cursor: progress; }
 .reader-visual-catalog-toggle.is-reader-rail-button { padding: .6rem .4rem; }
 .reader-visual-placement-status { margin: .5rem 0 0; color: #786f60; font-size: .85rem; }
-
-/* 当前 OCR 的实际模型阶段和文字区域计数。 */
-.progress-ocr-detail {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}

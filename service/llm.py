@@ -300,7 +300,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 - 不要用“不加标点”来回避判断：字词或句界不确定时，仍按最合理的读法断句并加标点，再把疑点写进 uncertainItems。
 - 不确定的专名、句界或引文范围保留原样，不替原文作历史判断，也不把推测写进正文。
 
-返回格式：
+返回格式（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段）：
 {{
   "punctuatedText": "已完成断句和标点的文本",
   "uncertainItems": ["不确定处"],
@@ -313,7 +313,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
     report = progress_reporter(payload.options, len(content_characters(source_text)))
     try:
-        result = call_json_task(prompt, on_progress=report)
+        result = call_text_task(prompt, "punctuatedText", "标点", report, extra_keys=("uncertainItems",))
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         validate_punctuation_result(source_text, punctuated_text)
         uncertain_items = list_value(result.get("uncertainItems"))
@@ -370,7 +370,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 9. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段；输出里不要残留逐行换行。
 10. 输出必须是 JSON，不要输出解释文字。
 
-返回格式：
+返回格式（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段）：
 {{
   "punctuatedText": "简体标点文本",
   "warnings": ["处理提示"]
@@ -395,7 +395,7 @@ OpenCC 简体文本：
 
     report = progress_reporter(payload.options, len(content_characters(source_text)))
     try:
-        result = call_json_task(prompt, on_progress=report)
+        result = call_text_task(prompt, "punctuatedText", "校对", report)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         validate_finalize_result(source_text, punctuated_text)
         warnings = list_value(result.get("warnings"))
@@ -589,6 +589,32 @@ def call_json_task(prompt: str, on_progress: Any = None) -> dict[str, Any]:
         on_progress=on_progress,
     )
     return parse_json_object(content)
+
+
+def call_text_task(prompt: str, key: str, task: str, on_progress: Any = None,
+                   extra_keys: tuple[str, ...] = ()) -> dict[str, Any]:
+    """生成类任务要求返回正文键（punctuatedText）。
+
+    模型偶尔会忽略返回格式，例如把论文首页当成文献信息页，返回 title/authors/abstract
+    等字段而没有正文。同一个提示词重发往往仍然失败（调度器重试时实测两次都是空正文），
+    所以这里用一次带纠正说明的重试代替。
+    """
+    result = call_json_task(prompt, on_progress=on_progress)
+    if isinstance(result.get(key), str) and result[key].strip():
+        return result
+    allowed = [key, *extra_keys, "warnings"]
+    result = call_json_task(f"""{prompt}
+
+上一次输出不符合要求：返回的字段是 {'、'.join(sorted(result)) or '空'}，缺少 "{key}"。
+只允许返回一个 JSON 对象，且只能包含 {'、'.join(f'"{name}"' for name in allowed)} 这些键；
+不要输出 title、authors、abstract、keywords、references、journal 之类的字段。
+"{key}" 必须是上面输入文本的完整整理结果，不能摘要、不能省略、不能只写文献信息。
+""", on_progress=on_progress)
+    if isinstance(result.get(key), str) and result[key].strip():
+        return result
+    raise LlmServiceError(
+        f"{task}服务返回的 JSON 缺少 {key}（返回字段：{'、'.join(sorted(result)) or '空'}）。"
+    )
 
 
 def call_chat_completion(

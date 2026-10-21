@@ -275,56 +275,6 @@ if (require.main === module) {
     assert.equal(env.readerText.querySelector('.reader-visual-unavailable'), null);
     assert.equal(env.readerText.querySelector('button'), null);
   });
-  test('backfill polls queued/running to completed then refreshes normalized server state and evicts cached content', async () => {
-    const env = setup({ canEditDocument: () => true, setTimeout: (callback) => setImmediate(callback) });
-    env.content.layoutStatus = 'layout_unavailable';
-    env.page.visualsExtracted = false;
-    await env.c.loadReaderContent(env.item, env.page);
-    env.c.renderReaderContent(env.page, env.content);
-    assert.ok(env.readerText.querySelector('.reader-visual-backfill'));
-    assert.equal(env.c.getReaderTextNodes(env.readerText).map(({ node }) => node.nodeValue).join(''), env.page.text);
-    const statuses = ['queued', 'running', 'completed'], requests = [], order = [];
-    env.c.fetch = async (url, options) => { requests.push([url, options]); return { ok: true, json: async () => ({ status: statuses.shift() }) }; };
-    env.c.flushPendingSync = async () => { order.push('flush'); return true; };
-    env.c.syncFromServer = async () => { order.push('sync'); };
-    env.c.renderReader = () => order.push('render');
-    assert.equal(await env.c.requestReaderVisualExtraction(env.item, env.page), true);
-    assert.equal(requests.length, 3);
-    assert.equal(requests[0][1].method, 'POST');
-    assert.equal(requests[0][0], '/api/documents/doc%2F1/pages/p%2F1/extract-visuals');
-    assert.deepEqual(order, ['flush', 'flush', 'sync', 'render']);
-    assert.equal(env.c.getCachedReaderContent(env.item, env.page), null);
-    assert.match(env.readerText.querySelector('.reader-visual-extraction-status').textContent, /完成/);
-  });
-  test('backfill respects permissions and editing, exposes server failure, and can retry', async () => {
-    const env = setup({ canEditDocument: () => false, setTimeout: (callback) => setImmediate(callback) });
-    env.content.layoutStatus = 'layout_unavailable';
-    assert.equal(env.c.createReaderVisualBackfill(env.item, env.page, env.content), null);
-    assert.equal(await env.c.requestReaderVisualExtraction(env.item, env.page), false);
-    env.c.canEditDocument = () => true; env.c.readerEditing = true;
-    assert.equal(await env.c.requestReaderVisualExtraction(env.item, env.page), false);
-    env.c.readerEditing = false;
-    env.c.renderReaderContent(env.page, env.content);
-    let call = 0;
-    env.c.fetch = async () => ({ ok: true, json: async () => ++call === 1 ? { status: 'queued' } : { status: 'failed', error: 'OCR unavailable' } });
-    assert.equal(await env.c.requestReaderVisualExtraction(env.item, env.page), false);
-    assert.match(env.readerText.querySelector('.reader-visual-extraction-status').textContent, /OCR unavailable/);
-    assert.equal(env.readerText.querySelector('.reader-visual-backfill').querySelector('button').disabled, false);
-    env.c.fetch = async () => ({ ok: true, json: async () => ({ status: 'completed' }) });
-    assert.equal(await env.c.requestReaderVisualExtraction(env.item, env.page), true);
-  });
-  test('backfill stops polling after the selected document or source revision changes', async () => {
-    const timers = [], env = setup({ canEditDocument: () => true, setTimeout: (callback) => timers.push(callback) });
-    let calls = 0, syncs = 0;
-    env.c.fetch = async () => { calls++; return { ok: true, json: async () => ({ status: 'queued' }) }; };
-    env.c.syncFromServer = async () => syncs++;
-    const extraction = env.c.requestReaderVisualExtraction(env.item, env.page);
-    await new Promise((resolve) => setImmediate(resolve));
-    env.page.processingRevision++;
-    timers.shift()();
-    assert.equal(await extraction, false);
-    assert.equal(calls, 1); assert.equal(syncs, 0);
-  });
   test('clearing temporary hover preserves selection and full sentence clear removes visual state', () => {
     const env = setup(); env.c.renderReaderContent(env.page, env.content);
     // Parent is free to clear visual state while clearing sentence state.

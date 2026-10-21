@@ -167,10 +167,10 @@ test('stale catalogue revisions and missing visuals fail without selecting a dif
   assert.equal(selected.length, 0);
 });
 
-test('catalogue exposes optional old-page backfill and selection notification updates the current row', async () => {
+test('catalogue selection notification updates the current row', async () => {
   const env = setup(); env.c.canEditDocument = () => true;
   await open(env);
-  assert.ok(env.state.panel.querySelector('.reader-visual-backfill'));
+  assert.equal(env.state.panel.querySelector('.reader-visual-backfill'), null);
   env.c.setReaderVisualActive('v1');
   assert.equal(env.state.panel.querySelector('[aria-current="true"]').dataset.catalogPageId, env.page.id);
   const row = env.state.panel.querySelector('[aria-current="true"]'); row.focus();

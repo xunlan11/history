@@ -117,12 +117,6 @@ function renderReaderVisualCatalog() {
     panel.append(retry);
     return;
   }
-  const selectedItem = typeof getSelectedDocument === "function" ? getSelectedDocument() : null;
-  const selectedPage = typeof getSelectedPage === "function" ? getSelectedPage() : null;
-  if (typeof createReaderVisualBackfill === "function") {
-    const backfill = createReaderVisualBackfill(selectedItem, selectedPage);
-    if (backfill) panel.append(backfill);
-  }
   const catalog = state.catalog;
   if (!catalog) return;
   const entries = catalog.items.slice().sort((a, b) => a.pageNumber - b.pageNumber || a.blockOrder - b.blockOrder);

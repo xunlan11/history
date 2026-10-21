@@ -174,7 +174,7 @@ const PROCESSING_STAGE_CONFIG = [
 ];
 let progressStageNodes = new Map();
 let progressStageFills = new Map();
-let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers, progressOcrDetailNode;
+let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
@@ -187,7 +187,6 @@ function setupCombinedProgress() {
   progressStageFills = new Map([...streamProgress.querySelectorAll("[data-progress-fill]")].map((node) => [node.dataset.progressFill, node]));
   progressTotalNode = streamProgress.querySelector("[data-progress-total]");
   progressModeNode = streamProgress.querySelector("[data-progress-mode]");
-  progressOcrDetailNode = streamProgress.querySelector("[data-progress-ocr-detail]");
   progressFailedNode = streamProgress.querySelector("[data-progress-failed]");
   failedPageMarkers = streamProgress.querySelector("[data-progress-failed-pages]");
 }
@@ -315,20 +314,6 @@ function renderStreamProgress(item) {
       }
       setRingProgress(nodes.ring, finished ? 100 : pagePercent);
     }
-  }
-  if (progressOcrDetailNode) {
-    const live = task.stagePages?.ocr;
-    const activePage = Number(task.activeStages?.ocr?.pageNumber) || 0;
-    const active = !finished && activePage > 0 && Number(live?.pageNumber) === activePage;
-    const registration = task.registrationProgress;
-    const candidate = registration?.stage === "metadata_candidate" ? registration : null;
-    const detail = candidate ? describeOcrProgressDetail(candidate.detail, true)
-      : active ? describeOcrProgressDetail(live?.detail) : "";
-    progressOcrDetailNode.textContent = detail ? (candidate
-      ? `登记 OCR ${Math.round(Number(candidate.percent) || 0)}% · ${detail}`
-      : `第 ${activePage} 页 · ${detail}`) : "";
-    progressOcrDetailNode.classList.toggle("hidden", !detail);
-    progressOcrDetailNode.title = "百分比按实际处理步骤与文字区域完成量计算，不表示耗时比例";
   }
   renderFailedProcessingPages(item);
 }
