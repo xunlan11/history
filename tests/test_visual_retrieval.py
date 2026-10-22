@@ -182,7 +182,7 @@ def test_visual_chunks_are_retained_but_do_not_schedule_body_jobs(db):
     retrieval.enqueue_model(db, identity)
     assert {row[0] for row in db.execute("SELECT source_layer FROM semantic_jobs")} == {"punctuatedText"}
     assert {row[0] for row in db.execute("SELECT source_layer FROM semantic_sources")} == {"punctuatedText"}
-    # Even preexisting auxiliary vectors cannot change the selected-body contract.
+    # 即使已有辅助向量，也不能改变选定正文的契约。
     vector = np.asarray([0.8, 0.6], dtype="<f4").tobytes()
     for row in db.execute("SELECT chunk_id FROM semantic_chunks").fetchall():
         db.execute("INSERT INTO semantic_vectors VALUES(?,?,?,?)", (row[0], "test-model", 2, vector))
@@ -201,7 +201,7 @@ def test_changed_and_removed_visual_sources_are_historical_and_never_fresh_hits(
         assert source.sourceHash == hit["sourceHash"]
     page["visuals"][0]["captions"][0]["text"] = "海防图注。"
     page["visuals"][0]["tableModel"]["cells"] = []
-    replace_page(db, page)  # A stale semantic projection must not supply old evidence.
+    replace_page(db, page)  # 过期的语义投影不得提供旧证据。
     assert query(db)["hits"] == []
     validated = retrieval.validate_evidence(db, {"id": "u"}, old_hits)
     assert set(validated["allowedChunkIds"]) == {hit["chunkId"] for hit in old_hits}
@@ -251,7 +251,7 @@ def test_copied_pages_use_new_document_and_page_identity(db):
     page = add_page(db, visual_page())
     original = query(db)["hits"]
     copied_page = add_page(db, page, page_id="copied-page", document_id="copied-document")
-    copied_page["id"] = "p"  # The database identity overrides a stale copied payload ID.
+    copied_page["id"] = "p"  # 数据库标识会覆盖过期的副本 payload ID。
     db.execute("UPDATE document_pages SET payload=? WHERE id='copied-page'", (json.dumps(copied_page),))
     copied = query(db, document_ids=["copied-document"])["hits"]
     assert len(copied) == len(original) == 2

@@ -109,9 +109,7 @@ function renderAll() {
   renderReader();
   renderReaderSidebar();
   renderSmartEmpty();
-  if (typeof renderSmartModeButtons === "function") {
-    renderSmartModeButtons();
-  }
+  renderSmartModeButtons();
   syncSelectionToUrl();
 }
 
@@ -328,7 +326,7 @@ function getConversationModeLabel(mode) {
 }
 
 function renderDocumentList() {
-  // Background registration/sync updates must not detach a card during dragging.
+  // 后台登记/同步更新不能在拖拽过程中把卡片摘除。
   if (documentDragState?.phase === "dragging") return;
   renderBookShelf(documentList, documentCount);
   renderBookShelf(allDocumentList, allDocumentCount);
@@ -401,8 +399,8 @@ function createBookCard(item, index) {
   card.dataset.shelfKey = `document:${item.id}`;
   card.dataset.documentIndex = String(index);
   card.setAttribute("aria-grabbed", "false");
-  const uploadState = typeof getDocumentUploadState === "function" ? getDocumentUploadState(item.id) : null;
-  const uploadText = typeof describeDocumentUploadState === "function" ? describeDocumentUploadState(item.id) : "";
+  const uploadState = getDocumentUploadState(item.id);
+  const uploadText = describeDocumentUploadState(item.id);
   const preparationText = typeof describeDocumentPreparation === "function" ? describeDocumentPreparation(item.id) : "";
   const backendStatusPending = item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item));
   const statusText = uploadText || preparationText || (backendStatusPending ? item.status : "");
@@ -442,10 +440,8 @@ function createBookCard(item, index) {
     }
 
     // 本地还在归档/上传时不许进入阅览器，整页跳转会中断上传。
-    if (typeof isDocumentUploadActive === "function" && isDocumentUploadActive(item.id)) {
-      if (typeof showUploadToast === "function") {
-        showUploadToast("文献正在归档原件，上传结束后才能进入阅览器，请稍候。");
-      }
+    if (isDocumentUploadActive(item.id)) {
+      showUploadToast("文献正在归档原件，上传结束后才能进入阅览器，请稍候。");
       return;
     }
 
@@ -453,7 +449,7 @@ function createBookCard(item, index) {
     if (canEditDocument(current) && isDocumentRegistrationPending(current)) {
       if (current.processingTask?.backendManaged) {
         // 原件归档后，登记（元数据识别）在后台继续，阅览器可以直接打开。
-        if (typeof startProcessingPolling === "function") startProcessingPolling(current);
+        startProcessingPolling(current);
       } else {
         const completed = await resumeMissingProcessingTask(current, { interactive: true });
         if (!completed) return;
@@ -564,7 +560,7 @@ function handleDocumentDragMove(event) {
     }
   };
   if (target.classList.contains("folder-card")) {
-    // Passing through a folder edge should still reach its drop zone.
+    // 划过文件夹边缘时仍应落到其投放区。
     state.reorderTimer = window.setTimeout(reorder, 240);
   } else {
     reorder();
@@ -620,7 +616,7 @@ function finishDocumentDrag(event) {
       const trash = getDocumentTrashTarget(event, state.listNode);
       const dissolve = state.kind === "folder" ? getDocumentDissolveTarget(event, state.listNode) : null;
       if (trash) {
-        // 故纸堆：文献按原有确认流程删除；文件夹连内容一起递归删除。
+        // 故纸堆：文献按确认流程删除；文件夹连内容一起递归删除。
         if (state.kind === "folder") deletedFolderId = state.folderId;
         else {
           const item = documents.find((entry) => entry.id === state.documentId);
@@ -639,7 +635,7 @@ function finishDocumentDrag(event) {
   }
   clearDocumentDragState();
   if (wasDragging) renderDocumentList();
-  if (deletedItem && typeof openDeleteDocumentDialog === "function") openDeleteDocumentDialog(deletedItem);
+  if (deletedItem) openDeleteDocumentDialog(deletedItem);
   if (deletedFolderId && requestDeleteShelfFolder(deletedFolderId)) renderDocumentList();
   if (dissolvedFolderId && requestDissolveShelfFolder(dissolvedFolderId)) renderDocumentList();
 }
@@ -658,7 +654,7 @@ function clearDocumentDragState() {
   try {
     documentDragState.card.releasePointerCapture?.(documentDragState.pointerId);
   } catch {
-    // The browser may have released capture when the pointer was cancelled.
+    // 指针被取消时浏览器可能已经释放了捕获。
   }
   documentDragState.card.classList.remove("dragging");
   documentDragState.card.setAttribute("aria-grabbed", "false");
@@ -920,9 +916,9 @@ let readerDetailEditing = false;
 let readerDetailEditingDocumentId = "";
 // 编辑态下已经输入、还没保存的内容。侧栏每次重绘（后台同步 / renderAll）都会重建输入框，
 // 若直接读文献对象的旧值，用户正在输入的内容会被冲掉，所以用草稿回填。
-let readerDetailDraft = null; // { documentId, values }
+let readerDetailDraft = null; // 参数结构：{ documentId, values }
 // 重绘前记住焦点所在的输入框与光标位置，回填后恢复，避免同步一来光标就丢。
-let readerDetailFocus = null; // { documentId, key, start, end }
+let readerDetailFocus = null; // 参数结构：{ documentId, key, start, end }
 let readerDetailSaving = false;
 
 // 编辑按钮只对文献所有者显示（canEditDocument 已按 ownerId 判定）。
@@ -1127,9 +1123,7 @@ async function saveReaderDetailEdits(documentId) {
 
   if (synced) {
     setReaderDetailEditing(false);
-    if (typeof showUploadToast === "function") {
-      showUploadToast("文献信息已保存");
-    }
+    showUploadToast("文献信息已保存");
     return;
   }
 
@@ -1137,9 +1131,7 @@ async function saveReaderDetailEdits(documentId) {
   if (selectedDocumentId === documentId && readerDetailEditing) {
     renderReaderDetailActions(item, true, true);
   }
-  if (typeof showUploadToast === "function") {
-    showUploadToast("文献信息保存失败：尚未同步到服务器，请稍后重试", 4200);
-  }
+  showUploadToast("文献信息保存失败：尚未同步到服务器，请稍后重试", 4200);
 }
 
 function renderReaderSidebar() {
@@ -1268,7 +1260,7 @@ function renderReaderOriginal(page, readerIndex = null) {
 
 function renderReaderText(page, readerIndex = null, options = {}) {
   const text = getPagePrimaryText(page);
-  if (options.evidence !== false && typeof showReaderEvidence === "function") showReaderEvidence(page, readerIndex);
+  if (options.evidence !== false) showReaderEvidence(page, readerIndex);
 
   const content = !readerEditing && typeof getCachedReaderContent === "function"
     ? getCachedReaderContent(getSelectedDocument(), page) : null;

@@ -61,9 +61,7 @@ function applyDocumentPreparationItems(items) {
   documentPreparationStates.clear();
   next.forEach((state, documentId) => documentPreparationStates.set(documentId, state));
   touched.forEach((documentId) => {
-    if (typeof refreshDocumentCardStatusIndicators === "function") {
-      refreshDocumentCardStatusIndicators(documentId);
-    }
+    refreshDocumentCardStatusIndicators(documentId);
   });
   if (next.size) {
     startDocumentPreparationPolling();
@@ -116,9 +114,7 @@ function markDocumentPreparationPending(documentId) {
       message: "",
     });
   }
-  if (typeof refreshDocumentCardStatusIndicators === "function") {
-    refreshDocumentCardStatusIndicators(documentId);
-  }
+  refreshDocumentCardStatusIndicators(documentId);
   startDocumentPreparationPolling();
   refreshDocumentPreparation();
 }

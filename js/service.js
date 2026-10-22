@@ -6,18 +6,14 @@ let versionRefreshPending = false;
 // 有未保存的整理文本编辑 / 进行中的上传时不能强刷，否则会丢内容。
 // （上传还有 registration.js 的 beforeunload 兜底，但这里直接跳过更干净。）
 function versionRefreshBlocked() {
-  if (typeof readerEditing !== "undefined" && readerEditing) {
+  if (readerEditing) {
     return true;
   }
-  return typeof hasActiveDocumentUpload === "function" && hasActiveDocumentUpload();
+  return hasActiveDocumentUpload();
 }
 
 function refreshPageWithFreshAssets() {
-  if (typeof reloadWithFreshAssets === "function") {
-    reloadWithFreshAssets();
-    return;
-  }
-  window.location.reload();
+  reloadWithFreshAssets();
 }
 
 // 发布版本变了：先广播给同一浏览器的其它页面，再刷新本页。
@@ -36,9 +32,7 @@ function applyVersionRefresh() {
 function requestVersionRefresh() {
   if (!versionRefreshPending) {
     versionRefreshPending = true;
-    if (typeof broadcastPlatformReload === "function") {
-      broadcastPlatformReload();
-    }
+    broadcastPlatformReload();
   }
   applyVersionRefresh();
 }
@@ -186,9 +180,7 @@ async function refreshVersionStatus() {
         return;
       }
       // 先通知其它已打开的页面刷新，再刷新本页
-      if (typeof broadcastPlatformReload === "function") {
-        broadcastPlatformReload();
-      }
+      broadcastPlatformReload();
       refreshPageWithFreshAssets();
       return;
     }

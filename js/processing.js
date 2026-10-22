@@ -91,11 +91,11 @@ async function refreshProcessingDocument(item, options = {}) {
     const current = applyBackendProcessingDocument(item.id, result);
     if (!current) return;
     if (!isProcessingTaskPending(current)) stopProcessingPolling(current.id);
-    if (typeof renderAll === "function") renderAll();
+    renderAll();
   } catch (error) {
     // 浏览器或网络错误不能修改服务端负责的任务状态。
     if ([401, 403, 404].includes(error.status)) stopProcessingPolling(item.id);
-    if (!options.silent && typeof showUploadToast === "function") showUploadToast(error.message);
+    if (!options.silent) showUploadToast(error.message);
   } finally {
     processingPollInFlight.delete(item.id);
   }
@@ -113,7 +113,7 @@ async function resumeMissingProcessingTask(item, options = {}) {
     const current = getLiveDocument(item.id);
     if (current && isProcessingTaskPending(current)) startProcessingPolling(current);
     if (isDocumentRegistrationPending(current)) {
-      if (options.interactive && typeof showUploadToast === "function") {
+      if (options.interactive) {
         showUploadToast(current?.status === "等候中" ? "原件已归档，当前等候中；无需保持浏览器打开。" : "后端正在准备登记，完成后正文按队列处理。");
       }
       return false;
@@ -139,7 +139,7 @@ async function resumeMissingProcessingTask(item, options = {}) {
     await runDocumentUploadPipeline(item, file);
     return !isDocumentRegistrationPending(getLiveDocument(item.id));
   } catch (error) {
-    if (options.interactive && !error.registrationCancelled && typeof showUploadToast === "function") showUploadToast(error.message);
+    if (options.interactive && !error.registrationCancelled) showUploadToast(error.message);
     return false;
   } finally {
     processingRecoveryInFlight.delete(item.id);
@@ -149,7 +149,7 @@ async function resumeMissingProcessingTask(item, options = {}) {
 // 非正文的对话/检索仍使用原 LLM API，不参与文献正文调度。
 async function requestLlmTask(path, payload, options = {}) {
   const timeoutMs = Number(options.timeoutMs) || 0;
-  const controller = timeoutMs > 0 && typeof AbortController === "function" ? new AbortController() : null;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
   const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
   try {
     const response = await fetch(`${LLM_SERVICE_URL}${path}`, {
@@ -199,7 +199,7 @@ function clampPercent(value) {
 function setRingProgress(node, percent) {
   if (!node) return;
   const value = clampPercent(percent);
-  const length = typeof node.getTotalLength === "function" ? node.getTotalLength() : 97.39;
+  const length = node.getTotalLength();
   node.style.strokeDasharray = `${length}`;
   node.style.strokeDashoffset = `${length * (1 - value / 100)}`;
   // 0% 时整条弧都藏起来：只写 offset 会因 stroke-linecap: round 在起点留下一个小圆点。

@@ -26,7 +26,7 @@ def test_structured_cells_are_sorted_and_ids_are_generated():
                             cell(1, 0), cell(1, 1, "001")], "ruled")
     assert parse_table_model(value) == expected
     assert parse_table_model(json.dumps(value)) == expected
-    assert value["cells"][0]["row"] == 1  # Input is not mutated.
+    assert value["cells"][0]["row"] == 1  # 不修改输入。
 
 
 @pytest.mark.parametrize("counts", [

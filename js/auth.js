@@ -39,7 +39,7 @@ function authUi() {
       loginRedirect();
     });
   } else {
-    // 本地登录站点：渲染账号/密码弹窗（history 原有交互）。
+    // 本地登录站点：渲染账号/密码弹窗。
     const modal = document.createElement("div");
     modal.className = "auth-modal hidden";
     modal.innerHTML = '<form class="auth-card" id="auth-form" method="post" autocomplete="on" novalidate><h2 id="auth-title">登录</h2><input id="auth-username" name="username" type="text" autocomplete="username" placeholder="账号"><input id="auth-password" name="password" type="password" autocomplete="off" placeholder="密码"><p id="auth-error"></p><button id="auth-submit" class="primary-button" type="submit">登录</button><button id="auth-switch" class="ghost-link" type="button">注册账户</button></form>';

@@ -17,7 +17,7 @@ async function downloadPublicDocument(documentId, { folderId = "" } = {}) {
     if (!response.ok) throw new Error(payload.detail || "下载失败，请稍后重试。");
     const item = normalizeDocuments([payload.document])[0];
     if (!item || !canEditDocument(item)) throw new Error("下载结果无效，请刷新文献库后重试。");
-    // Merge only the new document, so pending edits in this page remain intact.
+    // 只合并新文献，保持本页尚未保存的编辑。
     if (!documents.some((entry) => entry.id === item.id)) documents.push(item);
     persist();
     if (folderId && getShelfState().folders.some((folder) => folder.id === folderId)) {
@@ -92,7 +92,6 @@ async function openPrintWindow(item, printWindow, options = {}) {
 
 // 首页信息（标题 / 品牌名 / 信息表）随「设置」里选择的简繁体显示；转换失败时保留原文
 async function convertExportInfo(texts) {
-  if (typeof window.convertVariantTexts !== "function") return texts;
   try {
     return await window.convertVariantTexts(texts);
   } catch (error) {

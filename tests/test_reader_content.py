@@ -122,7 +122,7 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
     raw = result(); raw["visuals"] = page["visuals"]
     content.materialize_visual_images(raw,path)
     page["imageDataUrl"] = "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
-    # Two distinct image assets on one page; table remains structural.
+    # 同一页两个不同图片资源；表格仍按结构化方式处理。
     page["visuals"].append(dict(page["visuals"][0], id="another"))
     doc = {"id":"d", "visibility":"private", "pages":[page]}
     data.upsert_documents(connection,[doc],"now",user)
@@ -142,7 +142,7 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
     assert len(json.loads(connection.execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()["payload"])["visuals"]) == 3
     other = {"id":2,"username":"other"}
     data.app.dependency_overrides[data.current_user] = lambda: other
-    # current_user is explicitly called by routes; override that too.
+    # 路由会显式调用 current_user，这里一并替换。
     from unittest.mock import patch
     with patch.object(data,"current_user",lambda: other):
         assert client.get("/api/documents/d/visual-catalog").status_code == 404
@@ -152,33 +152,12 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
 def test_reader_upstream_requests_input_coordinates(monkeypatch, tmp_path):
     path=tmp_path/'p.png'; Image.new('RGB',(10,10)).save(path)
     monkeypatch.setenv('OCR_UPSTREAM_URL','http://ocr.example')
-    monkeypatch.setenv('OCR_UPSTREAM_STYLE','paddlex')
     calls=[]
     monkeypatch.setattr(ocr_upstream,'_request_json',lambda url,payload,**kw: (calls.append(payload) or (200, {'result':{'layoutParsingResults':[{'prunedResult':{}}]}})))
     parsed=ocr_upstream.recognize_page_image(path,mode='reader')
     assert parsed['coordinateSpace']=='input'
     assert calls[0]['useDocUnwarping'] is False
     assert calls[0]['useTableRecognition'] is True
-
-def test_native_coordinates_are_never_relabelled(monkeypatch, tmp_path):
-    path=tmp_path/'page.png'; Image.new('RGB',(100,100)).save(path)
-    monkeypatch.setenv('OCR_UPSTREAM_URL','http://ocr.example')
-    monkeypatch.setenv('OCR_UPSTREAM_STYLE','native')
-    monkeypatch.setattr(ocr_upstream, '_call_native', lambda *args: {'coordinateSpace':'processed', **result() , 'blocks':result()['blocks']})
-    # Explicit processed value must survive the native adapter and reader request.
-    monkeypatch.setattr(ocr_upstream, '_call_native', lambda *args: {**result(), 'coordinateSpace':'processed'})
-    parsed=ocr_upstream.recognize_page_image(path,mode='reader')
-    assert parsed['coordinateSpace']=='processed'
-    visuals,_=content.extract_visuals(parsed)
-    assert visuals[0]['geometryStatus']=='unavailable'
-
-
-def test_native_null_blocks_and_html_are_preserved():
-    assert ocr_upstream._normalize_native({'blocks':None,'text':'body'})['blocks'][0]['text']=='body'
-    parsed=ocr_upstream._normalize_native({'blocks':[{'type':'table','html':'<table><tr><td>001</td></tr></table>'}]})
-    visuals,_=content.extract_visuals(parsed)
-    assert visuals[0]['tableModel']['cells'][0]['text']=='001'
-
 
 def test_corrupt_resource_still_uses_verified_original_crop(tmp_path):
     path=tmp_path/'page.png'; Image.new('RGB',(100,100)).save(path)
@@ -371,8 +350,6 @@ def test_zero_valued_explicit_caption_identity_does_not_fall_back_to_neighbor():
     assert not visuals[1]['captions']
 
 def test_backfill_queue_worker_executes_ocr_and_records_completion(library, monkeypatch):
-    import time
-    from service import scheduler
     worker=_prepare_backfill(library,{'ocrText':'body','punctuatedText':'manual'})
     connection=library[1]
     cp=json.loads(connection.execute("SELECT checkpoint FROM processing_jobs WHERE document_id='d'").fetchone()['checkpoint'])

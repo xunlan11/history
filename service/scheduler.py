@@ -188,7 +188,7 @@ class HttpServices:
                 "metadata": metadata(document), "sourceText": page.get("normalizedText", ""),
                 "sourceLayer": "normalized",
                 "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "punctuation", page_number)}})
-            if page.get("normalizedText", "").strip() and not result.get("punctuatedText"):
+            if not result.get("punctuatedText"):
                 raise ProcessingFailure("标点服务没有返回正文")
             return result
         if operation == "proofreading":
@@ -205,7 +205,7 @@ class HttpServices:
                 "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
                 "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "proofreading", page_number)},
                 "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
-            if page.get("ocrText", "").strip() and not result.get("punctuatedText"):
+            if not result.get("punctuatedText"):
                 raise ProcessingFailure("校对服务没有返回正文")
             return result
         raise ProcessingFailure(f"未知阶段：{operation}")
@@ -215,7 +215,7 @@ def preserve_server_fields(connection, document):
     """过期的浏览器同步绝不能覆盖调度器检查点。"""
     row = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
     job = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
-    if not row or not job or ("checkpoint" in job.keys() and json.loads(job["checkpoint"]).get("visualOnly")):
+    if not row or not job or ("checkpoint" in job and json.loads(job["checkpoint"]).get("visualOnly")):
         return document
     stored = json.loads(row["payload"])
     current_revision = (stored.get("processingTask") or {}).get("revision", 0)
@@ -660,7 +660,7 @@ class Scheduler:
                 return
 
     def _record_visual_backfill(self, document_id, number, future):
-        from service.reader_content import CAPTION_TYPES, digest
+        from service.reader_content import CAPTION_TYPES
         with self.data.database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             loaded = self._load(connection, document_id, allow_terminal=True)
@@ -678,8 +678,8 @@ class Scheduler:
                 if not page or request["imageHash"] != page.get("imageHash", "") or request["sourceRevision"] != page.get("processingRevision", 0):
                     raise ProcessingFailure("页面已更新，请重新补提取图表")
                 original = {key: page.get(key, "") for key in ("ocrText", "normalizedText", "punctuationDraftText", "punctuatedText")}
-                # A matching authored sentence is not proof that it was an OCR caption.
-                # Require the historical source block and never edit a changed final rendition.
+                # 人工写的句子恰好匹配也不能证明它是 OCR 图注；
+                # 必须以历史源区块为准，且不改动已变更的最终稿。
                 pending_separation = False
                 unedited_final = original["punctuatedText"] in {original["ocrText"], original["normalizedText"], to_simplified(original["ocrText"])}
                 for block in result.get("contentBlocks") or []:

@@ -1,4 +1,4 @@
-/* Current-document search. All local offsets are UTF-16, like reader sentences. */
+/* 当前文献内检索。本地偏移均为 UTF-16，与阅览器句子一致。 */
 const readerSearchForm = document.querySelector("#reader-search-form");
 const readerSearchInput = document.querySelector("#reader-search-input");
 const readerSearchResults = document.querySelector("#reader-search-results");
@@ -55,7 +55,7 @@ async function resolveReaderMatches(item, hits) {
       let source = hit.sourceLayer === "punctuatedText" ? { text: getReaderSearchText(entry.page) }
         : getReaderVisualSource(entry.page, hit.sourceLayer);
       if (!source && /^(visual_caption|table_cell):/.test(hit.sourceLayer) &&
-          !loadedPages.has(hit.pageId) && typeof loadReaderContent === "function") {
+          !loadedPages.has(hit.pageId)) {
         loadedPages.add(hit.pageId);
         await loadReaderContent(item, entry.page);
         source = getReaderVisualSource(entry.page, hit.sourceLayer);
@@ -252,7 +252,7 @@ async function openReaderSearchMatch(id) {
   const revision = readerSearchState.revision;
   readerSearchState.activeId = id;
   readerSearchState.scrollPending = !match.visualId;
-  // Clear external citation anchors so search navigation owns the active source.
+  // 清除外部引用锚点，让检索导航接管当前定位。
   const url = new URL(window.location.href);
   for (const key of ["sourceLayer", "sourceHash", "start", "end"]) url.searchParams.delete(key);
   window.history.replaceState(null, "", url.href);
@@ -262,7 +262,7 @@ async function openReaderSearchMatch(id) {
   const current = () => !readerEditing && revision === readerSearchState.revision &&
     readerSearchState.activeId === id && getSelectedDocument()?.id === item.id && selectedPageId === page.id;
   try {
-    if (typeof loadReaderContent === "function" && !await loadReaderContent(item, page)) {
+    if (!await loadReaderContent(item, page)) {
       throw new Error("图表内容暂不可用，请重试。");
     }
     if (!current()) return;
@@ -274,7 +274,7 @@ async function openReaderSearchMatch(id) {
     }
     if (!current()) return;
     renderReader();
-    if (current() && typeof setReaderVisualActive === "function") setReaderVisualActive(visual.visualId,
+    if (current()) setReaderVisualActive(visual.visualId,
       { captionId: visual.captionId, cellId: visual.cellId, scrollText: true, scrollImage: true });
   } catch (error) {
     if (current()) { readerSearchState.searchError = error.message; renderReaderSearchPanel(); }
@@ -309,16 +309,7 @@ function applyReaderSearchHighlights(page) {
     if (count > 0 && offset > previous) intervals.push({ start: previous, end: offset, active: active > 0 });
     count += value.count; active += value.active; previous = offset;
   }
-  const nodes = typeof getReaderTextNodes === "function" ? getReaderTextNodes(readerText) : [];
-  if (typeof getReaderTextNodes !== "function") {
-    const walker = document.createTreeWalker(readerText, NodeFilter.SHOW_TEXT);
-    let position = 0;
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      nodes.push({ node, start: position, end: position + node.textContent.length });
-      position += node.textContent.length;
-    }
-  }
+  const nodes = getReaderTextNodes(readerText);
   let firstActive = null, intervalIndex = 0;
   for (const entry of nodes) {
     while (intervalIndex < intervals.length && intervals[intervalIndex].end <= entry.start) intervalIndex += 1;

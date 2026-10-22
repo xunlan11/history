@@ -184,7 +184,7 @@ form?.addEventListener("submit", async (event) => {
   };
 
   documents.unshift(item);
-  if (typeof moveShelfDocument === "function" && formSheet?.dataset.shelfFolderId) {
+  if (formSheet?.dataset.shelfFolderId) {
     moveShelfDocument(item.id, formSheet.dataset.shelfFolderId);
   }
   selectedDocumentId = item.id;
@@ -444,7 +444,7 @@ function moveToReaderPageIndex(value) {
 }
 
 async function initializeApplication() {
-  if (typeof ensureAuthenticated === "function" && !(await ensureAuthenticated())) {
+  if (!(await ensureAuthenticated())) {
     return;
   }
   await initializeServerData();

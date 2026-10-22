@@ -9,7 +9,6 @@ WorkingDirectory=/home/ubuntu/Codefield/history
 Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 Environment=OCR_PUBLIC_BASE_URL=/history/api/ocr
 Environment=OCR_UPSTREAM_URL=http://127.0.0.1:18080
-Environment=OCR_UPSTREAM_STYLE=paddlex
 Environment=OCR_UPSTREAM_TIMEOUT=300
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.ocr:app --host 127.0.0.1 --port 8765
 Restart=always

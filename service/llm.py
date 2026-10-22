@@ -483,22 +483,6 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
     return response
 
 
-def format_conversation_history(options: dict[str, Any]) -> str:
-    history = options.get("history")
-    if not isinstance(history, list):
-        return "[]"
-    turns = []
-    for turn in history:
-        if not isinstance(turn, dict) or not isinstance(turn.get("prompt"), str):
-            continue
-        turns.append({
-            "mode": str(turn.get("mode") or "chat"),
-            "prompt": turn["prompt"],
-            "response": turn.get("payload") if isinstance(turn.get("payload"), dict) else {},
-        })
-    return json.dumps(turns, ensure_ascii=False)
-
-
 @app.post("/llm/chronicle")
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
     return run_evidence_task(payload, "chronicle")

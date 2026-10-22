@@ -109,6 +109,7 @@ test('catalogue saves through the existing edit button and awaits synchronizatio
   const env = setup(); await open(env);
   env.c.readerEditing = true; env.readerText.innerText = 'edited text';
   const button = env.document.createElement('button'); button.id = 'edit-document'; env.document.body.append(button);
+  env.c.editDocumentButton = button;
   button.addEventListener('click', () => {
     env.page.text = env.readerText.innerText.trim(); env.c.readerEditing = false;
     env.item.updatedAt = 'new'; env.c.syncReaderVisualCatalog(env.item);
@@ -130,6 +131,7 @@ test('asynchronous local saving defers navigation and a failed sync preserves th
   const env = setup(); await open(env);
   env.c.readerEditing = true; env.readerText.innerText = 'pending';
   const button = env.document.createElement('button'); button.id = 'edit-document'; env.document.body.append(button);
+  env.c.editDocumentButton = button;
   let save;
   button.addEventListener('click', () => { save = () => { env.page.text = 'pending'; env.c.readerEditing = false; }; });
   env.c.syncDirty = true; env.c.flushPendingSync = async () => false;

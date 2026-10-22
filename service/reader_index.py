@@ -15,7 +15,7 @@ from service.reader_content import NON_BODY_TYPES
 
 logger = logging.getLogger(__name__)
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
-# 索引载荷版本：算法变化时递增，旧索引会被重建（reconcile 落库 / load 即时重建）。
+# 索引载荷版本：算法变化时递增，旧载荷在 reconcile 时重建。
 INDEX_VERSION = 3
 
 
@@ -355,7 +355,7 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
     layout = json.loads(row["layout"])
     status, error, payload = row["status"], row["error"], row["payload"]
     changed = row["source_revision"] != revision or row["text_hash"] != digest
-    # 算法升级后旧载荷要重算：行序修正前存的索引虽为 ready，却没有任何坐标。
+    # 旧载荷没有坐标时必须重算，不能因为状态为 ready 就直接复用。
     outdated = status == "ready" and _stored_index_version(payload) != INDEX_VERSION
     if not layout and status == "failed":
         pass
@@ -409,14 +409,8 @@ def load_reader_index(connection, document_id, page_id):
     result = json.loads(row["payload"]) if status == "ready" else {}
     error = row["error"]
     if status == "ready" and _stored_index_version(row["payload"]) != INDEX_VERSION:
-        # 旧版索引先按当前布局即时重建（不写库，等下次 reconcile 落库）。
-        try:
-            result = build_index_payload(layout=layout, page=page,
-                                         source_revision=row["source_revision"],
-                                         displayed_text=displayed)
-        except Exception as exc:
-            logger.exception("Cannot rebuild reader index for %s", page_id)
-            status, error, result = "failed", str(exc), {}
+        # 非当前 INDEX_VERSION 的载荷一律标记过期，由 reconcile 重建。
+        status, error, result = "stale", "", {}
     result.update(reader_index_status_payload(status, row["source_revision"], row["text_hash"], error))
     result["updatedAt"] = row["updated_at"]
     return result

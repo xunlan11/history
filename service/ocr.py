@@ -169,10 +169,6 @@ def cleanup_orphan_task_dirs(max_age_seconds: int = ORPHAN_TASK_MAX_AGE_SECONDS)
             continue
     return removed
 
-# 不进入正文的版面角色（按服务端标签判定，不含任何本地版面推断）：
-# 页眉、页脚、页码，以及不含文字内容的图片 / 图表 / 印章区域。
-NON_BODY_BLOCK_TYPES = reader_content.NON_BODY_TYPES
-
 
 def upstream_unavailable(exc: ocr_upstream.OcrUpstreamError) -> HTTPException:
     """服务端未部署 / 不可达 / 协议不符 → 503，`detail` 带机器可读的 code。"""
@@ -343,7 +339,7 @@ def cancel_streams_by_document(documentId: str = ""):
         task = load_task(task_file.parent.name)
         if not task or str(task.get("documentId") or "") != document_id:
             continue
-        task_id = str(task.get("taskId") or task_file.parent.name)
+        task_id = str(task["taskId"])
         freed += cancel_task(task_id)
         cancelled.append(task_id)
     return {"status": "ok", "cancelled": cancelled, "freedBytes": freed}
@@ -360,7 +356,7 @@ def recover_pending_tasks() -> None:
         task = load_task(task_path.parent.name)
         if not task:
             continue
-        task_id = str(task.get("taskId") or task_path.parent.name)
+        task_id = str(task["taskId"])
         # 被取消的任务（文献已删除 / 手动停止）不恢复，顺手把缓存清掉。
         if cancel_marker_path(task_id).exists():
             delete_task_storage(task_id)

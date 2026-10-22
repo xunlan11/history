@@ -32,8 +32,8 @@ class ProgressStore:
     def _expired(self, entry, now):
         age = now - entry.get("updatedAt", 0)
         if age > self.max_age:
-            # A request that died before its final response would otherwise stay
-            # "running" forever; keys are per-inference, so nobody reads it again.
+            # 请求在写出最终响应前中断时，条目否则会永远停在 running；
+            # 进度键按推理批次隔离，之后不会再有人读取。
             return True
         return entry.get("status") in {"completed", "failed"} and age > self.ttl
 
@@ -44,7 +44,7 @@ class ProgressStore:
                 if self._expired(old, now):
                     self.entries.pop(name, None)
             if key not in self.entries and len(self.entries) >= self.limit:
-                # Refuse tracking capacity; never evict an active inference.
+                # 容量不足时拒绝登记，绝不淘汰仍在进行的推理。
                 finished = next((name for name, old in self.entries.items()
                                  if old.get("status") in {"completed", "failed"}), None)
                 if finished is None:
@@ -86,7 +86,7 @@ class InferenceProgress:
         self.steps = []
         if enabled("use_doc_orientation_classify", self.config.get("use_doc_preprocessor", True)) or enabled("use_doc_unwarping", self.config.get("use_doc_preprocessor", True)):
             self.steps.append("preprocessing")
-        self.steps.append("layout_detection")  # PP-StructureV3 always runs its layout detector.
+        self.steps.append("layout_detection")  # PP-StructureV3 总会执行版面检测。
         if enabled("use_region_detection"):
             self.steps.append("region_detection")
         self.steps.append("text_detection")
@@ -111,7 +111,7 @@ class InferenceProgress:
                      completedSteps=len(self.finished), totalSteps=len(self.steps))
 
     def finish_ocr(self):
-        # Empty pages legitimately skip orientation and recognition generators.
+        # 空白页本来就会跳过方向分类与识别生成器。
         for step in ("text_detection", "textline_orientation", "text_recognition"):
             if step in self.steps and step not in self.finished:
                 self.update(step, finished=True)
@@ -197,7 +197,7 @@ def instrument_pipeline(pipeline):
         if id(node) in seen:
             return
         seen.add(id(node))
-        # Only follow known model containers; never inspect tensor internals.
+        # 只遍历已知的模型容器，不下钻张量内部。
         inner = vars(node).get("_pipeline")
         if inner is not None:
             visit(inner)

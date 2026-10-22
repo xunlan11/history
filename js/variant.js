@@ -1,6 +1,6 @@
-// Global simplified/traditional switching. OCR and user-entered text may use either form.
-// All visible text is converted to the current target variant and dynamic content is
-// converted incrementally by the MutationObserver.
+// 全局简繁切换：OCR 与用户输入都可能使用任一种字形。
+// 所有可见文本都会转换为当前目标字形，动态内容由 MutationObserver
+// 增量转换。
 (() => {
   const SIMPLIFIED = "simplified";
   const TRADITIONAL = "traditional";
@@ -9,7 +9,7 @@
   const MAX_BATCH = 4000;
   const TRADITIONAL_ALIASES = new Set(["traditional", "t", "hant", "zh-hant", "zh-tw", "zh-hk", "tw", "hk"]);
 
-  const convertedByVariant = new Map(); // target variant -> (raw text -> converted text)
+  const convertedByVariant = new Map(); // 目标字形 ->（原文 -> 转换结果）
 
   function convertedFor(variant) {
     let converted = convertedByVariant.get(variant);

@@ -1,4 +1,4 @@
-/* Shared retrieval and Unicode source anchors. Loaded after core/auth. */
+/* 共享检索与 Unicode 来源锚点。在 core/auth 之后加载。 */
 const RETRIEVAL_LEVEL_LABELS = { exact: "严格匹配", partial: "部分匹配", semantic: "嵌入匹配" };
 
 async function retrievalJson(path, body) {
@@ -21,7 +21,7 @@ async function validateFrozenEvidence(request) {
   if (!library.length) return request;
   const allowed = new Set();
   const warnings = [...(request.warnings || [])];
-  // The API accepts at most 200 locators per request; all matches still get checked.
+  // 接口每次最多接受 200 个定位；所有命中仍会逐一校验。
   for (let offset = 0; offset < library.length; offset += 200) {
     const result = await retrievalJson("validate", {
       evidence: library.slice(offset, offset + 200).map(({chunkId, documentId, pageId, sourceLayer, sourceHash}) =>
@@ -36,7 +36,7 @@ async function validateFrozenEvidence(request) {
   return request;
 }
 
-// Chronicle keeps its existing bounded attachment context; search/chat match on the server.
+// 编年使用有界附件上下文；检索/对话在服务端匹配。
 function attachmentEvidence(query, conversation) {
   return buildConversationAttachmentDocumentsForLlm(query, 8, 500, conversation).flatMap((item) => item.pages.map((page) => ({
     chunkId: `attachment:${item.attachmentId}:${page.pageNumber}`,
@@ -47,7 +47,7 @@ function attachmentEvidence(query, conversation) {
 }
 
 function mergeRetrievalMaterials(library, attachments) {
-  // Interleave so neither kind of material is always lost to the prompt budget.
+  // 交错排列，避免某一类材料总被提示词预算挤掉。
   const evidence = [];
   for (let i = 0; i < Math.max(library.length, attachments.length); i += 1) {
     if (library[i]) evidence.push(library[i]);
@@ -64,8 +64,8 @@ function buildEvidenceHref(evidence) {
   return `reader.html?${params.toString()}`;
 }
 
-// The reader can be served over plain HTTP on an intranet, where WebCrypto
-// may be absent. This fallback hashes only local text; it is not authentication.
+// 内网可能通过明文 HTTP 访问阅览器，此时没有 WebCrypto；
+// 该兜底只对本地文本做哈希，不用于身份认证。
 function sha256EvidenceBytes(bytes) {
   const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
     0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -115,7 +115,7 @@ function getReaderVisualSource(page, layer) {
   let visualId, itemId;
   try {
     [visualId, itemId] = parts.slice(1).map(decodeURIComponent);
-    // Python quote(..., safe="") also escapes characters left by encodeURIComponent.
+    // Python 的 quote(..., safe="") 还会转义 encodeURIComponent 未处理的字符。
     const encode = (id) => encodeURIComponent(id).replace(/[!'()*]/g,
       (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase());
     if (!visualId || !itemId || encode(visualId) !== parts[1] || encode(itemId) !== parts[2]) return null;
@@ -199,7 +199,7 @@ async function showReaderEvidence(page, readerIndex = null) {
   const item = getSelectedDocument();
   if (!params.has("sourceHash") || params.get("page") !== page?.id || params.get("document") !== item?.id || readerEditing) return;
   const current = () => revision === evidenceRenderRevision && !readerEditing && window.location.href === href &&
-    getSelectedDocument()?.id === item.id && (typeof getSelectedPage !== "function" || getSelectedPage()?.id === page.id);
+    getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id;
   const locator = Object.fromEntries(["sourceLayer", "sourceHash", "start", "end"].map((key) => [key, params.get(key)]));
   let anchor;
   try {
@@ -208,7 +208,7 @@ async function showReaderEvidence(page, readerIndex = null) {
       loaded = await loadReaderContent(item, page);
       if (!current()) return;
     }
-    const currentPage = typeof getSelectedPage === "function" ? getSelectedPage() : page;
+    const currentPage = getSelectedPage();
     anchor = loaded ? await resolveEvidenceAnchor(currentPage, locator) : { status: "missing" };
   } catch { anchor = { status: "missing" }; }
   if (!current()) return;
@@ -242,7 +242,7 @@ async function showReaderEvidence(page, readerIndex = null) {
     return;
   }
   setReaderCitationSentence("");
-  // 有句子索引却定位不到该片段时不再画按字符的黄块，避免与选中高亮混淆。
+  // 有句子索引却定位不到该片段时不画按字符的黄块，避免与选中高亮混淆。
   if (sentences) return;
   // 没有句子索引（未校对/索引未就绪）时，退回按字符高亮。
   const source = page[anchor.sourceLayer];
@@ -251,7 +251,7 @@ async function showReaderEvidence(page, readerIndex = null) {
     mark = markEvidenceRange(readerText, anchor.start, anchor.end);
     mark?.setAttribute("data-variant-skip", "");
   } else {
-    // A hit in OCR/notes may belong to a different layer than the displayed body.
+    // OCR/笔记中的命中可能属于与当前正文不同的层。
     const target = document.createElement("div");
     target.className = "reader-evidence-text";
     target.setAttribute("data-variant-skip", "");

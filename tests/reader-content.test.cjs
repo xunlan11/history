@@ -143,6 +143,10 @@ function setup(overrides = {}) {
     readerEditing: false, selectedPageId: data.page.id, DATA_PROCESSING_URL: '/api/documents', currentUser: { id: 'u' },
     getSelectedDocument: () => data.item, getSelectedPage: () => data.item.pages.find((page) => page.id === c.selectedPageId),
     getPagePrimaryText: (page) => page?.text || '', getPageImageSource: (page) => page?.imageUrl || '',
+    applyReaderSearchHighlights: () => {}, renderReaderVisualCatalog: () => {}, setReaderLinkActive: () => {},
+    scrollReaderRegionIntoView: () => {}, toggleReaderPanel: () => {}, readerPanelState: {},
+    getCachedReaderIndex: () => null, syncSelectionToUrl: () => {}, flushPendingSync: async () => {},
+    syncDirty: false,
     fetch: async () => ({ ok: true, json: async () => data.content }), ...overrides });
   vm.runInContext(readerTextDomSource(), c);
   vm.runInContext(fs.readFileSync('js/reader-content.js', 'utf8'), c);
@@ -286,7 +290,7 @@ if (require.main === module) {
   });
   test('clearing temporary hover preserves selection and full sentence clear removes visual state', () => {
     const env = setup(); env.c.renderReaderContent(env.page, env.content);
-    // Parent is free to clear visual state while clearing sentence state.
+    // 父级在清除句子状态时也可以清除视觉状态。
     env.c.setReaderLinkActive = () => env.c.clearReaderVisualActive();
     env.c.setReaderVisualActive('v1');
     env.c.setReaderVisualActive('v1', { hover: true, captionId: 'cap' });

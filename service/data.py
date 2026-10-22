@@ -1001,7 +1001,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             continue
 
         stored_document = processing_scheduler.preserve_server_fields(connection, dict(document))
-        # Attribution is server-owned: a sync cannot create, change or erase it.
+        # 创建者/修改者归属由服务端维护：同步请求不能新增、修改或清除。
         for field in ("creator", "modifier", "provenance"):
             stored_document.pop(field, None)
         if existing:
@@ -1357,22 +1357,6 @@ def conversation_share_turns(conversation: dict[str, Any], selected_ids: list[st
     return result
 
 
-def conversation_share_metadata(connection: sqlite3.Connection, conversation_id: str) -> dict[str, Any] | None:
-    row = connection.execute(
-        "SELECT token, selected_turn_ids, active, updated_at FROM conversation_shares "
-        "WHERE conversation_id = ? AND active = 1 AND deleted_at IS NULL",
-        (conversation_id,),
-    ).fetchone()
-    if not row:
-        return None
-    return {
-        "token": row["token"],
-        "selectedTurnIds": json_load(row["selected_turn_ids"]),
-        "active": True,
-        "updatedAt": row["updated_at"],
-    }
-
-
 def require_owned_conversation(connection: sqlite3.Connection, conversation_id: str, user: dict[str, Any]) -> dict[str, Any]:
     row = connection.execute(
         "SELECT payload, owner_id FROM conversations WHERE id = ? AND owner_id = ? AND deleted_at IS NULL",
@@ -1400,7 +1384,7 @@ def get_conversation_for_share(connection: sqlite3.Connection, conversation_id: 
         (conversation_id,),
     ).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="?????")
+        raise HTTPException(status_code=404, detail="conversation not found")
     return json_load(row["payload"])
 
 
@@ -1638,7 +1622,7 @@ def download_public_document(document_id: str) -> dict[str, Any]:
                 old_id = page["id"]
                 page["id"] = f"page-{secrets.token_hex(16)}"
                 page_ids[old_id] = page["id"]
-            # File records and page identifiers are independent from the public source.
+            # 文件记录与页面标识独立于公开源文件。
             copy_document_assets(connection, document_id, document, page_ids, timestamp, copied_paths)
             document["status"] = "已整理" if document.get("pages") and all(
                 page.get("punctuatedText") for page in document["pages"]) else "待整理"
@@ -1965,7 +1949,7 @@ async def upload_conversation_file(
         require_owned_conversation(connection, conversation_id, user)
         existing = connection.execute("SELECT conversation_id FROM conversation_files WHERE id = ?", (attachment_id,)).fetchone()
         if existing and existing["conversation_id"] != conversation_id:
-            raise HTTPException(status_code=404, detail="???????")
+            raise HTTPException(status_code=404, detail="conversation attachment not found")
 
     content = await attachment.read()
     mime_type = attachment.content_type or mimetypes.guess_type(attachment.filename or "")[0] or "application/octet-stream"

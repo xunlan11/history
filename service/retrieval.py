@@ -40,7 +40,7 @@ LONG_QUERY_GRAM_COUNT = 6
 CONTENT_LAYERS = ("ocrText", "punctuatedText")
 
 
-# Source selection and lossless chunking.
+# 源文本选择与无损分块。
 
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -105,7 +105,7 @@ def chunk_source(source: SourceText) -> list[Chunk]:
     return chunks
 
 
-# SQLite projections and durable indexing jobs.
+# SQLite 投影与持久化索引任务。
 
 def ensure_schema(connection: sqlite3.Connection) -> None:
     connection.executescript("""
@@ -155,9 +155,8 @@ def reconcile_page(connection: sqlite3.Connection, document_id: str, page: dict,
             connection.executemany("INSERT OR IGNORE INTO semantic_chunks VALUES(?,?,?,?,?,?,?,?,?,?)", [
                 (c.chunkId, c.documentId, c.pageId, c.sourceLayer, c.sourceHash,
                  c.ordinal, c.start, c.end, c.text, CHUNKER_VERSION) for c in chunk_source(source)])
-    # Auxiliary visual chunks are retained above for literal retrieval. The
-    # scheduler uses semantic_sources as the selected body source per policy;
-    # visual embedding jobs require a separate auxiliary-source contract.
+    # 辅助视觉切片保留在上方，供字面检索使用。调度器按策略把 semantic_sources 作为正文来源；
+    # 视觉向量任务需要单独的辅助源契约。
     for policy in ("primary", "processed"):
         source = select_page_source(page, policy, document_id)
         if source:
@@ -173,7 +172,7 @@ def reconcile_page(connection: sqlite3.Connection, document_id: str, page: dict,
 
 
 def cleanup_deleted(connection: sqlite3.Connection) -> None:
-    # Exclusion at query time is mandatory; this is only space reclamation.
+    # 查询时必须排除，这里只做空间回收。
     active = "SELECT p.id FROM document_pages p JOIN documents d ON d.id=p.document_id WHERE p.deleted_at IS NULL AND d.deleted_at IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id=d.owner_id AND u.deleted_at IS NULL)"
     connection.execute(f"DELETE FROM semantic_vectors WHERE chunk_id IN (SELECT chunk_id FROM semantic_chunks WHERE page_id NOT IN ({active}))")
     for table in ("semantic_chunks", "semantic_sources", "semantic_jobs"):
@@ -202,7 +201,7 @@ def claim_job(connection: sqlite3.Connection, fingerprint: str, lease_seconds: f
     return dict(row) | {"lease_token": token}
 
 
-# Permission-filtered retrieval and evidence validation.
+# 带权限过滤的检索与证据校验。
 
 def normalized(text: str) -> str:
     return re.sub(r"\s+", "", to_simplified(text).casefold())
@@ -302,8 +301,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
                 emit_sources.insert(0, chosen)
             for source in emit_sources:
                 seen_sentences = set()
-                # Prefer exact matches before sentence deduplication; retain
-                # original ordinals and the first occurrence within each level.
+                # 句子去重前优先保留精确命中；保留原始序号与每一级中的首次出现。
                 for ordinal, match in sorted(enumerate(layer_matches[source.sourceLayer]),
                                              key=lambda entry: entry[1]["level"] != "exact"):
                     sentence_span = (match["sentenceStart"], match["sentenceEnd"])
@@ -397,7 +395,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         if full_mode and any(match["matchStart"] < hit["end"] and match["matchEnd"] > hit["start"]
                              for match in literal_ranges.get((hit["pageId"], hit["sourceLayer"]), [])):
             continue
-        # Repeated passages must not take every result slot.
+        # 重复段落不能占满全部结果位。
         key = (hit["pageId"], hit["start"], hit["end"]) if reader_mode or full_mode else (hit["pageId"], normalized(hit["text"]))
         if parse_visual_source_layer(hit["sourceLayer"]) is not None:
             key = (*key, hit["sourceLayer"])
@@ -416,8 +414,8 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         # 有材料但无一条过相关下限：明确告知，避免下游把“没检索到”当成“材料已用尽”。
         warnings.append(NO_RELEVANT_MATERIAL)
     if request.mode == "chronicle":
-        # Reserve space for neighboring context without exceeding the hard limit.
-        # Select one hit from each page before taking repeated-page hits.
+        # 为相邻上下文预留空间，同时不超过硬上限。
+        # 先每页选一条，再考虑同页重复命中。
         diversified, repeated, pages_seen = [], [], set()
         for hit in hits:
             if hit["pageId"] in pages_seen:
@@ -448,7 +446,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         hits = selected
         warnings.append("基于本次召回材料生成，未穷尽全部史料")
     indexed = 0
-    for page_id, (layer, digest) in page_sources_expected.items():
+    for page_id in page_sources_expected:
         expected = expected_counts[page_id]
         indexed += int(indexed_counts[page_id] == expected and expected > 0)
     failed_pages = set()
@@ -457,8 +455,8 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
     total = len(page_sources_expected)
     if active and indexed < total:
         warnings.append(f"语义索引已完成 {indexed}/{total} 页；未完成页面仍参与字面检索")
-    # Recheck after remote inference: an edit/delete/visibility change while
-    # awaiting the model cannot turn fresh retrieval into stale evidence.
+    # 远程推理返回后重查：等待模型期间的编辑/删除/可见性变化，
+    # 不能让刚检索到的材料变成过期证据。
     current_hits = []
     for hit in hits:
         source = get_evidence(connection, user, hit)

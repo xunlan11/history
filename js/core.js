@@ -10,7 +10,7 @@ const SITE_TITLES = {
 };
 const SITE_TITLE = SITE_TITLES[SITE_ID] || SITE_ID;
 
-// localStorage 按站点隔离（/history 沿用旧前缀，既有用户数据不变）
+// localStorage 按站点隔离；history 固定使用 modernMilitaryHistory 前缀，避免既有数据失效
 const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `wenqu.${SITE_ID}`;
 
 const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema9`;
@@ -42,9 +42,9 @@ const VERSION_STATUS_URL = endpoint("/version/version");
 const VERSION_UPDATE_URL = endpoint("/version/update");
 const VARIANT_API_URL = endpoint("/data/api/variant");
 
-// —— 运行时品牌（config.js 在各页 body 末尾最先加载，可安全访问上方 DOM）——
+// —— 运行时品牌（本文件在各页 body 末尾最先加载，可安全访问上方 DOM）——
 // 首页“大标题”元素用 id="home-site-title" 标记，随站点显示对应名称；
-// 非 /history 子站的页面 <title> 中旧品牌名自动替换为当前站点名。
+// 非 /history 子站把页面 <title> 中的默认品牌名替换为当前站点名。
 const homeSiteTitle = document.getElementById("home-site-title");
 if (homeSiteTitle) {
   homeSiteTitle.textContent = SITE_TITLE;
@@ -533,7 +533,7 @@ function cacheCurrentState() {
   persistDocumentsCache();
   persistConversationsCache();
   persistDeletedIdCache();
-  if (typeof cacheShelfState === "function") cacheShelfState();
+  cacheShelfState();
 }
 
 function persistDeletedIdCache() {
@@ -552,7 +552,7 @@ function applyServerState(payload) {
 
   documents = nextDocuments;
   conversations = nextConversations;
-  if (typeof applyShelfState === "function" && Object.hasOwn(payload, "shelf")) applyShelfState(payload.shelf);
+  if (Object.hasOwn(payload, "shelf")) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -729,7 +729,7 @@ async function pushServerSnapshot() {
   const payload = {
     schemaVersion: DATA_SCHEMA_VERSION,
     clientId: getClientId(),
-    ...(typeof getShelfState === "function" ? { shelf: getShelfState() } : {}),
+    shelf: getShelfState(),
     documents,
     conversations,
     deletedDocumentIds: Array.from(deletedDocumentIds),
@@ -834,9 +834,7 @@ async function archiveDocumentSource(item, file, onProgress) {
     syncCursor = String(result.syncCursor || syncCursor);
     localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
     persist();
-    if (typeof renderAll === "function") {
-      renderAll();
-    }
+    renderAll();
     return true;
   } catch (error) {
     throw error instanceof Error ? error : new Error("原件上传失败。");
@@ -865,7 +863,7 @@ async function syncFromServer(options = {}) {
       }
 
       applyServerState(payload);
-      if (options.render && typeof renderAll === "function") {
+      if (options.render) {
         renderAll();
         renderSmartModeButtons();
       }
@@ -883,7 +881,7 @@ function startPeriodicSync() {
   const syncTick = async () => {
     if (!syncReady) {
       const connected = await initializeServerData();
-      if (connected && typeof renderAll === "function") {
+      if (connected) {
         renderAll();
         renderSmartModeButtons();
       }
@@ -1048,9 +1046,7 @@ function deleteDocument(id) {
   }
 
   cancelDocumentProcessing(id);
-  if (typeof stopDocumentProcessing === "function") {
-    stopDocumentProcessing(id);
-  }
+  stopDocumentProcessing(id);
   persist();
 }
 
@@ -1231,21 +1227,6 @@ function getPagePrimaryText(page) {
 
 function getPageProcessedText(page) {
   return page?.punctuatedText || "";
-}
-
-function getPageProcessedSearchText(page) {
-  return [
-    page?.punctuatedText,
-    page?.notes,
-  ].filter(Boolean).join("\n");
-}
-
-function getPageSearchText(page) {
-  return [
-    page?.ocrText,
-    page?.punctuatedText,
-    page?.notes,
-  ].filter(Boolean).join("\n");
 }
 
 function createProcessingTask(file) {

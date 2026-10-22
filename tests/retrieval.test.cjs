@@ -168,6 +168,7 @@ test('reader highlights the whole sentence in the main text and scrolls to it', 
   readerText.before = (panel) => panels.push(panel);
   const context = setup({ readerText, readerEditing: false, getPagePrimaryText: () => source,
     getSelectedDocument: () => ({ id: 'd' }),
+    getSelectedPage: () => page,
   });
   context.document.querySelector = () => null;
   const sourceHash = await context.hashEvidenceText(source);
@@ -206,6 +207,7 @@ test('reader keeps source-layer fallback when the hit differs from the visible b
   const panels = [];
   readerText.before = (panel) => panels.push(panel);
   const context = setup({ readerText, readerEditing: false, getPagePrimaryText: () => page.punctuatedText,
+    getSelectedPage: () => page,
     getSelectedDocument: () => ({ id: 'd' }) });
   context.document.querySelector = () => null;
   const hash = await context.hashEvidenceText(source);
@@ -222,7 +224,8 @@ test('reader rejects a stale sentence location instead of highlighting changed c
   const readerText = new Element('div');
   const panels = [];
   readerText.before = (panel) => panels.push(panel);
-  const context = setup({ readerText, readerEditing: false, getSelectedDocument: () => ({ id: 'd' }) });
+  const context = setup({ readerText, readerEditing: false, getSelectedDocument: () => ({ id: 'd' }),
+    getSelectedPage: () => ({ id: 'p', punctuatedText: '新的正文。' }) });
   context.document.querySelector = () => null;
   context.window.location = { href: 'http://localhost/reader.html?document=d&page=p&sourceLayer=punctuatedText&sourceHash=old&start=0&end=2' };
   let marked = false;
@@ -395,6 +398,7 @@ test('body citation compares only reader text nodes when captions are interleave
   readerText.before = () => {};
   const marks = [];
   const context = setup({ readerText, readerEditing: false, getSelectedDocument: () => ({ id: 'd' }),
+    getSelectedPage: () => page,
     getPagePrimaryText: () => source,
     getReaderTextNodes: () => [{ node: { textContent: source }, start: 0, end: source.length }],
     setReaderCitationSentence() {},

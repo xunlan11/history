@@ -93,7 +93,7 @@ def extract_visuals(result):
                   "captionCoverage": original.get("captionCoverage", "excluded")}
         if model:
             visual["tableModel"] = model
-        # Keep resource identity; never match unrelated images just by array index.
+        # 保留资源标识，绝不按数组下标匹配无关图片。
         refs = re.findall(r'(?:src=["\']([^"\']+)["\']|!\[[^\]]*\]\(([^)]+)\))', block["text"])
         visual["resourceRef"] = original.get("imageUrl") or original.get("resourceRef") or next((a or b for a, b in refs), "")
         by_block[block["id"]] = visual
@@ -126,7 +126,7 @@ def extract_visuals(result):
             caption["position"] = "before" if index < visual["blockOrder"] else "after"
             visual["captions"].append(caption)
         else:
-            # Preserve unassigned caption outside body, without guessing its owner.
+            # 未匹配的图注留在正文之外，不猜测归属。
             caption["position"] = "after"
             visuals.append({"id": f"unassigned-{index + 1:04d}", "kind": "caption", "blockOrder": index,
                             "sourceBoundary": block["sourceBoundary"], "renderMode": "image", "captions": [caption],
@@ -138,7 +138,7 @@ def extract_visuals(result):
 
 def _normalized(text):
     chars, positions = [], []
-    # OpenCC may change length; maintain original offsets per character for anchors.
+    # OpenCC 转换可能改变长度，逐字维护原文偏移以保证锚点。
     for index, char in enumerate(text):
         for value in to_simplified(char).casefold():
             if value.isalnum():
@@ -166,7 +166,7 @@ def build_reader_content(layout, page):
     normalized_target, target_pos = _normalized(displayed)
     matches = SequenceMatcher(None, normalized_source, normalized_target, autojunk=False).get_matching_blocks() if visuals else []
     mapping = {a + k: b + k for a, b, size in matches for k in range(size)}
-    # Complete paragraph boundaries first; sentence boundaries only when OCR has no paragraph separators.
+    # 先按完整段落断句；仅在 OCR 没有段落分隔时才退到句子边界。
     boundaries = [0] + [m.end() for m in re.finditer(r"\n+", displayed)] + [len(displayed)]
     if len(set(boundaries)) <= 2:
         boundaries += [m.end() for m in re.finditer(r"[。！？!?；;]+", displayed)]

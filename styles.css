@@ -124,7 +124,6 @@ button {
   grid-area: 1 / 3;
 }
 
-/* 内容栏占第二行 */
 .reader-original-panel {
   grid-area: 2 / 1;
 }
@@ -158,9 +157,7 @@ button {
   padding: 20px;
 }
 
-.form-panel,
-.transcription-panel,
-.original-panel {
+.form-panel {
   display: grid;
   gap: 14px;
 }
@@ -289,7 +286,6 @@ label {
   font-weight: 700;
 }
 
-.form-help,
 .meta-line,
 .result-item p {
   margin: 0;
@@ -599,8 +595,7 @@ mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset
 }
 
 .reader-visibility-options {
-  /* 两个选项各占一半宽度（左对齐各自那一格），于是「私密后面的空白」与
-     「公开后面的空白」恒等；原来是 width: max-content，两项挤在左侧、右侧空一大块 */
+  /* 两个选项各占一半宽度（各自左对齐），使「私密」「公开」后的空白一致 */
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   justify-items: start;
@@ -764,14 +759,6 @@ textarea {
   line-height: 1.7;
 }
 
-.layer-textarea {
-  min-height: 160px;
-}
-
-.notes-textarea {
-  min-height: 120px;
-}
-
 input:focus,
 textarea:focus,
 button:focus-visible {
@@ -823,11 +810,6 @@ button:focus-visible {
   margin-bottom: 16px;
 }
 
-.compact-heading {
-  margin-top: 20px;
-  margin-bottom: 12px;
-}
-
 .section-heading h3,
 .form-panel h3 {
   margin: 0;
@@ -840,14 +822,11 @@ button:focus-visible {
 }
 
 .document-list,
-.page-list,
 .result-list {
   display: grid;
   gap: 10px;
 }
 
-.document-card,
-.page-item,
 .result-item {
   display: flex;
   justify-content: space-between;
@@ -858,16 +837,6 @@ button:focus-visible {
   background: #fbfdfc;
 }
 
-.page-item {
-  align-items: center;
-}
-
-.page-item.active {
-  border-color: var(--primary);
-  background: #f1f7f4;
-}
-
-.document-card h4,
 .result-item h4 {
   margin: 0 0 6px;
   font-size: 16px;
@@ -877,29 +846,6 @@ button:focus-visible {
   gap: 8px;
 }
 
-.layer-tools {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: -6px;
-}
-
-.page-image-picker {
-  margin-bottom: 2px;
-}
-
-.original-viewer {
-  display: grid;
-  min-height: 460px;
-  max-height: 70vh;
-  place-items: center;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8faf9;
-  padding: 12px;
-}
-
-.original-viewer img,
 .reader-original-viewer img {
   max-width: 100%;
   height: auto;
@@ -919,16 +865,12 @@ button:focus-visible {
   padding: 12px;
 }
 
-.action-row,
-.page-nav-row,
-.reader-nav-row,
-.page-add-row {
+.reader-nav-row {
   display: flex;
   gap: 12px;
   align-items: end;
 }
 
-.page-nav-row,
 .reader-nav-row {
   justify-content: flex-start;
   align-items: center;
@@ -973,22 +915,6 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.page-add-row {
-  margin-bottom: 12px;
-}
-
-.page-batch-row {
-  margin-bottom: 12px;
-}
-
-.page-batch-row button {
-  width: 100%;
-}
-
-.page-add-row label {
-  flex: 1;
-}
-
 .empty-state {
   border: 1px dashed #bac7c0;
   border-radius: 8px;
@@ -1001,13 +927,6 @@ button:focus-visible {
   color: var(--muted);
   font-size: 13px;
   line-height: 38px;
-}
-
-.stream-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-top: 14px;
 }
 
 /* 与上/下两栏的 .panel 保持同一卡片外观（底色 var(--surface) + 阴影），
@@ -1023,21 +942,6 @@ button:focus-visible {
   box-shadow: var(--shadow);
 }
 
-.progress-row {
-  display: grid;
-  grid-template-columns: 92px 1fr 86px;
-  gap: 10px;
-  align-items: center;
-}
-
-.progress-label {
-  color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .progress-track {
   height: 8px;
   border-radius: 999px;
@@ -1051,17 +955,6 @@ button:focus-visible {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--primary), #3e8f76);
   transition: width 0.3s ease;
-}
-
-.progress-fill-sub {
-  background: linear-gradient(90deg, var(--gold), #d9a566);
-}
-
-.progress-value {
-  color: var(--text);
-  font-size: 12px;
-  text-align: right;
-  white-space: nowrap;
 }
 
 .reader-original-panel,
@@ -1279,8 +1172,7 @@ button:focus-visible {
   white-space: normal;
 }
 
-/* 编辑态只换配色，不改内边距——原来是 padding: 14px（比只读态 18px 小），
-   内容宽因此多出 8px，进出编辑态时整段文字的换行位置会错位 */
+/* 编辑态只换配色，内边距与只读态一致，避免进出编辑态时换行位置错位 */
 .reader-text.is-editing {
   min-height: 220px;
   border-color: var(--focus);
@@ -1326,13 +1218,8 @@ mark {
     grid-template-columns: 1fr;
   }
 
-  .page-item,
   .result-item,
-  .action-row,
-  .page-nav-row,
-  .reader-nav-row,
-  .stream-actions,
-  .page-add-row {
+  .reader-nav-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1401,7 +1288,6 @@ body {
 }
 
 .reader-title-block h2,
-.book-meta strong,
 .conversation-item strong,
 .reference-document-option strong,
 .reference-document-option span span,
@@ -1498,7 +1384,7 @@ body {
   font-weight: 700;
 }
 
-/* 四阶段合并进度条：单条轨道，各阶段按流水线顺序分层叠加（沿用旧版两层叠加的做法） */
+/* 四阶段合并进度条：单条轨道，各阶段按流水线顺序分层叠加 */
 .progress-track-main {
   position: relative;
   height: 12px;
@@ -1660,7 +1546,6 @@ body {
 }
 
 .icon-button,
-.back-button,
 .ghost-link,
 .chip-button,
 .round-send {
@@ -1678,7 +1563,6 @@ body {
 }
 
 .icon-button:hover,
-.back-button:hover,
 .ghost-link:hover {
   background: rgba(32, 36, 31, 0.06);
 }
@@ -1848,8 +1732,7 @@ body {
   text-align: left;
 }
 
-.book-cover,
-.add-document {
+.book-cover {
   aspect-ratio: 0.72;
   width: 100%;
   min-height: 210px;
@@ -2025,66 +1908,6 @@ body {
   font-size: 13px;
   line-height: 1.5;
   text-align: center;
-}
-
-.book-meta {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  color: #333832;
-}
-
-.book-meta strong {
-  font-size: 16px;
-  line-height: 1.35;
-}
-
-.book-meta small,
-.add-document small {
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.add-document {
-  place-items: center;
-  padding: 22px;
-  border: 1px solid #edf0ec;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: var(--book-shadow);
-  text-align: center;
-}
-
-.add-card.trash-card .add-document {
-  border-color: #d9aaa4;
-  background: #fff4f2;
-  color: #a83228;
-}
-
-.add-card.trash-card .add-plus {
-  color: #c94437;
-  font-weight: 400;
-}
-
-.add-card.trash-card .book-meta strong {
-  color: #a83228;
-}
-
-.add-card.trash-card.trash-hover .add-document {
-  border-color: #c94437;
-  background: #f8dedb;
-  box-shadow: 0 18px 32px rgba(201, 68, 55, 0.2);
-  transform: translateY(-2px);
-}
-
-.add-plus {
-  display: grid;
-  width: 84px;
-  height: 84px;
-  place-items: center;
-  color: #c6cac4;
-  font-size: 72px;
-  font-weight: 200;
-  line-height: 1;
 }
 
 .smart-dock {
@@ -2546,22 +2369,6 @@ a.citation:hover {
   overflow: auto;
 }
 
-.back-button {
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 @media (max-width: 980px) {
   .document-list {
     grid-template-columns: repeat(3, minmax(130px, 1fr));
@@ -2644,13 +2451,8 @@ a.citation:hover {
   }
 
   .reader-topbar,
-  .page-item,
   .result-item,
-  .action-row,
-  .page-nav-row,
-  .reader-nav-row,
-  .stream-actions,
-  .page-add-row {
+  .reader-nav-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -2696,8 +2498,7 @@ a.citation:hover {
     row-gap: 38px;
   }
 
-  .book-cover,
-  .add-document {
+  .book-cover {
     min-height: 184px;
   }
 
@@ -3563,11 +3364,6 @@ body {
   place-items: center;
 }
 
-.chat-result p {
-  white-space: pre-wrap;
-}
-
-
 .message-panel .result-list.conversation-history {
   display: flex;
   flex-direction: column;
@@ -3795,8 +3591,7 @@ body {
   row-gap: 24px;
 }
 
-.library-sidebar .book-cover,
-.library-sidebar .add-document {
+.library-sidebar .book-cover {
   height: 160px;
   min-height: 0;
   aspect-ratio: auto;
@@ -3808,23 +3603,12 @@ body {
 }
 
 .library-sidebar .book-facts,
-.library-sidebar .book-author,
-.library-sidebar .book-meta small {
+.library-sidebar .book-author {
   font-size: 11px;
-}
-
-.library-sidebar .book-meta strong {
-  font-size: 13px;
 }
 
 .library-sidebar .book-card::after {
   bottom: -8px;
-}
-
-.library-sidebar .add-plus {
-  width: 52px;
-  height: 52px;
-  font-size: 46px;
 }
 
 #library-view .smart-dock {
@@ -3907,8 +3691,7 @@ body {
   row-gap: 24px;
 }
 
-.documents-stage .book-cover,
-.documents-stage .add-document {
+.documents-stage .book-cover {
   width: 100%;
   height: 160px;
   min-height: 0;
@@ -3921,23 +3704,12 @@ body {
 }
 
 .documents-stage .book-facts,
-.documents-stage .book-author,
-.documents-stage .book-meta small {
+.documents-stage .book-author {
   font-size: 11px;
-}
-
-.documents-stage .book-meta strong {
-  font-size: 13px;
 }
 
 .documents-stage .book-card::after {
   bottom: -8px;
-}
-
-.documents-stage .add-plus {
-  width: 52px;
-  height: 52px;
-  font-size: 46px;
 }
 
 #reader-view.active {
@@ -4044,15 +3816,6 @@ body {
   .library-sidebar .shelf-stage {
     max-height: 42vh;
   }
-}
-
-/* 登记识别失败的三个明确操作，在窄屏上允许换行。 */
-.registration-dialog .confirm-actions {
-  flex-wrap: wrap;
-}
-
-.registration-dialog .confirm-card p {
-  overflow-wrap: anywhere;
 }
 
 /* 失败页：统一标题 + 两字阶段 chip（有失败页才显示） */
@@ -4464,7 +4227,6 @@ body {
   line-height: 1.8;
 }
 
-
 @media (max-width: 980px) {
   .reader-layout { grid-template-rows: max-content max-content; overflow: auto; }
   .reader-sidebar-stack { grid-template-rows: max-content max-content max-content; }
@@ -4472,8 +4234,7 @@ body {
   .reader-search-results { flex: 1 0 auto; max-height: 320px; }
 }
 
-
-/* Shared personal bookshelf folders. */
+/* 共用的个人书架文件夹。 */
 .book-card[data-shelf-key] {
   cursor: grab;
   touch-action: none;
@@ -4651,8 +4412,7 @@ body {
 .shelf-name-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .shelf-name-actions button[type="submit"] { background: #425c47; color: #fff; }
 
-
-/* Fixed add/parent entries inside the nested bookshelf. */
+/* 嵌套书架上固定的「新增文献 / 返回上一级」卡片。 */
 .shelf-utility-cover {
   display: flex;
   flex-direction: column;
@@ -4734,7 +4494,7 @@ body {
   white-space: nowrap;
 }
 
-/* Reader inline figures, tables, highlights, and visual catalog. */
+/* 阅览器内嵌图、表、高亮与图目录。 */
 .reader-content-text { white-space: pre-wrap; }
 .reader-visual { position: relative; display: block; margin: 1.25rem 0; padding: .75rem; border: 1px solid var(--border-color, #ddd6c7); border-radius: .5rem; background: var(--panel-bg, #fffdf7); white-space: normal; }
 .reader-visual > img { display: block; max-width: 100%; height: auto; margin: auto; }

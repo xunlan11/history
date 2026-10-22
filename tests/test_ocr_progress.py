@@ -81,7 +81,7 @@ def test_registration_scanned_pages_include_page_internal_counts(monkeypatch, tm
     assert result["pagesRead"] == 3
     assert "Existing text layer" in result["text"]
     event = next(e for e in events if e.get("pageNumber") == 2 and e.get("completed") == 2)
-    assert event["percent"] == 50  # (one finished page + half of page 2) / three pages
+    assert event["percent"] == 50  # （1 页完成 + 第 2 页完成一半）/ 共 3 页
     assert event["pagePercent"] == 50
     assert event["pageTotal"] == 3
     assert [e["percent"] for e in events] == sorted(e["percent"] for e in events)
@@ -160,7 +160,7 @@ def test_scheduler_polls_both_ocr_paths_and_preserves_counts(registration):
     class Services:
         def ocr_progress(self, key):
             assert key == "unique-attempt"
-            # Stop after setter has run, at the next loop iteration.
+            # setter 执行后立即停止，留到下一次循环迭代。
             stop.wait = lambda timeout: True
             return {"percent": 65, "updatedAt": 1, "stage": "文字识别", "completed": 8, "total": 32}
     worker = scheduler.Scheduler(SimpleNamespace(), Services())

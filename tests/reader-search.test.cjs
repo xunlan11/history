@@ -7,7 +7,7 @@ function setup(item, extra = {}) {
   const context = vm.createContext({
     console, TextEncoder, URLSearchParams, URL, currentUser: { id: 'u' }, readerEditing: false,
     document: { querySelector: () => null, querySelectorAll: () => [] },
-    getSelectedDocument: () => item, ...extra,
+    getSelectedDocument: () => item, loadReaderContent: async () => {}, ...extra,
   });
   vm.runInContext(fs.readFileSync('js/retrieval.js', 'utf8'), context);
   vm.runInContext(fs.readFileSync('js/reader-search.js', 'utf8'), context);

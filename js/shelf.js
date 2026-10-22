@@ -1,4 +1,4 @@
-// Personal shelf layout is independent of document metadata and permissions.
+// 个人书架布局独立于文献元数据与权限。
 let shelfState = { folders: [], order: [] };
 let shelfStorageKey = null;
 
@@ -561,7 +561,7 @@ function createShelfFolderCard(folder, state = getShelfState()) {
   return card;
 }
 
-// 只用于重命名（新建文件夹已改成点击即建，不再走弹窗）。
+// 只用于重命名；新建文件夹直接创建，不经过此弹窗。
 function openShelfNameDialog(folderId = "") {
   const dialog = document.querySelector("#shelf-name-dialog");
   const form = dialog.querySelector("form");
@@ -618,7 +618,7 @@ function getShelfDropTarget(event, state) {
     const card = hit?.closest(".folder-card");
     if (!card || card === state.card || card.closest(".document-list") !== state.listNode) return null;
     const rect = card.getBoundingClientRect();
-    // Both books and folders can reach the center; the edges remain available for sorting.
+    // 文献与文件夹都可投放到中间；两侧边缘仍用于排序。
     const insetX = rect.width * 0.2;
     const insetY = rect.height * 0.15;
     if (event.clientX > rect.left + insetX && event.clientX < rect.right - insetX &&

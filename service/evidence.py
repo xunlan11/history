@@ -51,12 +51,12 @@ def _tokenizer(path):
 
 def count_tokens(messages: list[dict], config: BudgetConfig) -> int:
     text = "".join(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in messages) + "<|im_start|>assistant\n"
-    # For Qwen's byte-level tokenizer, UTF-8 bytes provide a conservative bound.
-    # Operators can supply the matching tokenizer.json to avoid over-trimming.
+# Qwen 的字节级分词器下，UTF-8 字节数可作为保守上界；
+        # 运维可提供匹配的 tokenizer.json，避免过度裁剪。
     return len(_tokenizer(config.tokenizer_path).encode(text).ids) if config.tokenizer_path else len(text.encode("utf-8"))
 
 
-def build_evidence_context(evidence: list[dict], mode: str) -> list[dict]:
+def build_evidence_context(evidence: list[dict]) -> list[dict]:
     return [{k: v for k, v in e.items() if k in {"chunkId", "documentId", "attachmentId", "sourceType", "title", "author", "year", "publisher", "pageId", "pageNumber", "sourceLayer", "text"}} for e in evidence]
 
 
@@ -73,7 +73,7 @@ def evidence_messages(query: str, mode: str, evidence: list[dict], history: list
               "dateGregorian 为该时间换算成的公历纪年，用 YYYY 或 YYYY-MM 或 YYYY-MM-DD 表示（农历、年号、干支均换算为公历），"
               "只能精确到哪一级就写到哪一级；无法确定、缺少年份锚点或换算没把握时必须留空，禁止编造或估算。"
               "格式：" + formats[mode])
-    content = json.dumps({"问题": query, "历史": history, "证据": build_evidence_context(evidence, mode)}, ensure_ascii=False, separators=(",", ":"))
+    content = json.dumps({"问题": query, "历史": history, "证据": build_evidence_context(evidence)}, ensure_ascii=False, separators=(",", ":"))
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
@@ -93,7 +93,7 @@ def fit_prompt_budget(query: str, mode: str, evidence: list[dict], history: list
         messages = evidence_messages(query, mode, evidence, history)
         tokens = count_tokens(messages, config)
     if tokens > budget:
-        # Find the longest fitting prefix without reserializing every smaller list.
+        # 找出能放下的最长前缀，避免对每个更短列表重复序列化。
         low, high, best = 1, len(evidence) - 1, None
         while low <= high:
             middle = (low + high) // 2
@@ -124,7 +124,7 @@ def validate_result_citations(result: dict, evidence: list[dict], mode: str) -> 
         if not item or not isinstance(quote, str) or not quote.strip() or quote not in item["text"]:
             warnings.append("已剔除无法在本轮证据中核验的引用")
             return None
-        # Source identity, metadata and offsets come from our evidence, never the model.
+        # 来源标识、元数据与偏移取自本地证据，绝不采用模型返回值。
         answer = {k: v for k, v in item.items() if k not in {"text", "score", "matchedBy", "ordinal"}}
         answer["quote"] = quote
         if item.get("sourceLayer") == "notes":
@@ -152,7 +152,7 @@ def validate_result_citations(result: dict, evidence: list[dict], mode: str) -> 
             if not isinstance(entry, dict):
                 continue
             citations = [s for c in entry.get("sources", []) if (s := source(c))] if isinstance(entry.get("sources"), list) else []
-            # A note alone cannot establish a historical event.
+            # 仅有笔记不足以构成史事条目。
             citations = [c for c in citations if c.get("sourceLayer") != "notes"]
             original_date = entry.get("dateOriginal")
             date_verified = isinstance(original_date, str) and original_date.strip() and any(

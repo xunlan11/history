@@ -47,13 +47,12 @@ function postFormDataWithProgress(url, formData, options = {}) {
     };
 
     xhr.open("POST", url);
-    // 本地登录站点（history）手动附加 Bearer Token；SSO 站点没有本地 Token，
-    // 改由 wenqu_session Cookie 自动携带。
+    // 本地登录站点（history）手动附加 Bearer Token；SSO 站点由 wenqu_session Cookie 自动携带。
     const token = getStoredAuthToken();
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
-    // 大文件上传不设总超时，改用“无进展即中断”的看门狗。
+    // 大文件上传不设总超时，采用“无进展即中断”的看门狗。
     xhr.timeout = 0;
     if (xhr.upload && typeof onProgress === "function") {
       xhr.upload.onprogress = (event) => {
@@ -192,7 +191,7 @@ function shortenDocumentCardStatus(text) {
   return percent ? `${label} ${percent}` : label;
 }
 // 登记进度只覆盖耗时阶段：上传 0→20%，候选页 OCR 20→50%，元数据识别 50→100%。
-// 保存记录、落库排队都很短，不再单独占用百分比；没有实测值时退回各阶段起点值。
+// 保存记录、落库排队很短，不单独占用百分比；没有实测值时退回各阶段起点值。
 const BACKEND_REGISTRATION_STAGES = {
   "": { percent: 20 },
   metadata_candidate: { percent: 20 },
@@ -295,11 +294,7 @@ function markDocumentUploadFinished(documentId) {
     window.clearTimeout(state.paintTimer);
   }
   documentUploadStates.delete(documentId);
-  if (typeof renderAll === "function") {
-    renderAll();
-  } else {
-    refreshDocumentCardStatusIndicators(documentId);
-  }
+  renderAll();
 }
 
 function markDocumentUploadFailed(documentId, error) {
@@ -338,7 +333,7 @@ function refreshDocumentCardStatusIndicators(documentId) {
       } else {
         // 文案清空后必须把「N 页」放回去：进度来源（下载副本重建）消失时不会触发整列表重绘。
         pages.removeAttribute("title");
-        const item = typeof getLiveDocument === "function" ? getLiveDocument(documentId) : null;
+        const item = getLiveDocument(documentId);
         pages.textContent = `${item?.pages?.length || 0} 页`;
       }
     }

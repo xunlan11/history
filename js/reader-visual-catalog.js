@@ -1,4 +1,4 @@
-/* Optional floating catalogue. The parent calls syncReaderVisualCatalog(item) from renderReader. */
+/* 可选的浮动图目录。父级在 renderReader 中调用 syncReaderVisualCatalog(item)。 */
 const readerVisualCatalogCache = new Map();
 const readerVisualCatalogButtons = new WeakSet();
 const readerVisualCatalogState = {
@@ -134,8 +134,8 @@ function renderReaderVisualCatalog() {
     const stateLabel = entry.status === "missing" ? " · 图像待提取" : entry.status === "unassigned" ? " · 待核对" : "";
     button.append(readerVisualCatalogNode("span", "reader-visual-catalog-title", `${kindLabel} · ${title}${stateLabel}`));
     button.append(readerVisualCatalogNode("span", "reader-visual-catalog-page", `第 ${entry.pageNumber} 页`));
-    const selected = typeof getSelectedPage === "function" ? getSelectedPage() : null;
-    if (selected?.id === entry.pageId && typeof readerVisualState !== "undefined" && readerVisualState.selected?.id === entry.visualId) {
+    const selected = getSelectedPage();
+    if (selected?.id === entry.pageId && readerVisualState.selected?.id === entry.visualId) {
       button.setAttribute("aria-current", "true");
     }
     li.append(button); list.append(li);
@@ -209,20 +209,20 @@ async function syncReaderVisualCatalog(item) {
 }
 
 async function saveReaderBeforeVisualNavigation(item, page) {
-  if (typeof readerEditing === "undefined" || !readerEditing) return true;
-  const button = typeof editDocumentButton === "undefined" ? document.querySelector("#edit-document") : editDocumentButton;
+  if (!readerEditing) return true;
+  const button = editDocumentButton;
   if (!button || button.disabled) return false;
   const expected = readerText.innerText.trim();
   button.click();
-  // The existing save handler writes locally synchronously, then awaits flushPendingSync().
-  // Also tolerate a parent save handler that completes its local work asynchronously.
+  // 现有保存逻辑先同步写本地，再等待 flushPendingSync()。
+  // 同时兼容本地写入异步完成的父级保存逻辑。
   const deadline = Date.now() + 10000;
   while (readerEditing || getPagePrimaryText(page) !== expected) {
     if (getSelectedDocument()?.id !== item.id || getSelectedPage()?.id !== page.id || Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  if (typeof flushPendingSync === "function") await flushPendingSync();
-  if (typeof syncDirty !== "undefined" && syncDirty) return false;
+  await flushPendingSync();
+  if (syncDirty) return false;
   return !readerEditing && getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id;
 }
 
@@ -238,26 +238,21 @@ async function navigateReaderVisualCatalog(pageId, visualId) {
     if (token !== state.navigationRevision) return false;
     const live = getSelectedDocument(), page = live.pages.find((p) => p.id === pageId);
     if (!page || entry.sourceRevision !== page.processingRevision) throw new Error("图表目录已更新，请重试");
-    const contentKey = typeof getReaderContentKey === "function" ? getReaderContentKey(live, page) :
-      JSON.stringify([page.id, page.processingRevision, getPagePrimaryText(page)]);
+    const contentKey = getReaderContentKey(live, page);
     selectedPageId = pageId;
-    if (typeof syncSelectionToUrl === "function") syncSelectionToUrl();
+    syncSelectionToUrl();
     renderReader();
     const content = await loadReaderContent(live, page);
     const current = getSelectedDocument(), currentPage = getSelectedPage();
-    if ((typeof readerEditing !== "undefined" && readerEditing) || token !== state.navigationRevision || current?.id !== live.id || currentPage?.id !== pageId ||
-        (typeof getReaderContentKey === "function" ? getReaderContentKey(current, currentPage) :
-          JSON.stringify([currentPage.id, currentPage.processingRevision, getPagePrimaryText(currentPage)])) !== contentKey) return false;
+    if (readerEditing || token !== state.navigationRevision || current?.id !== live.id || currentPage?.id !== pageId ||
+        getReaderContentKey(current, currentPage) !== contentKey) return false;
     if (!content || content.sourceRevision !== entry.sourceRevision || !Object.hasOwn(content.visuals || {}, visualId)) {
       throw new Error("该图表内容暂不可用，请重试");
     }
     renderReader();
-    // Parent rendering normally consumes the cache. This fallback also makes the module usable before integration.
-    if (typeof renderReaderContent === "function") {
-      const index = typeof getCachedReaderIndex === "function" ? getCachedReaderIndex(current, currentPage) : null;
-      if (!renderReaderContent(currentPage, content, index)) throw new Error("该图表内容暂不可用，请重试");
-      if (typeof renderReaderVisualOverlay === "function") renderReaderVisualOverlay(currentPage, content);
-    }
+    const index = getCachedReaderIndex(current, currentPage);
+    if (!renderReaderContent(currentPage, content, index)) throw new Error("该图表内容暂不可用，请重试");
+    renderReaderVisualOverlay(currentPage, content);
     setReaderVisualActive(visualId, { scrollImage: true, scrollText: true });
     state.error = "";
     renderReaderVisualCatalog();

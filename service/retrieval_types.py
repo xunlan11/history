@@ -109,5 +109,5 @@ class EvidenceValidationRequest(BaseModel):
     evidence: list[EvidenceLocator] = Field(default_factory=list, max_length=200)
 
 
-# Evidence is deliberately a JSON object at the HTTP/LLM boundary. All identity
-# fields come from Chunk.to_dict(); callers only add current metadata and rank.
+# 证据在 HTTP/LLM 边界上刻意使用 JSON 对象：标识字段全部来自 Chunk.to_dict()，
+# 调用方只补充当前元数据与排序信息。

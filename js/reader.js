@@ -1,5 +1,5 @@
 /* reader-text-dom:start */
-/* Plain-text offsets are UTF-16, matching DOM Range and reader-content ranges. */
+/* 纯文本偏移为 UTF-16，与 DOM Range 及 reader-content 的区间一致。 */
 function getReaderTextNodes(container) {
   const result = [];
   function visit(node, offset) {
@@ -501,7 +501,7 @@ async function loadReaderIndex(documentId, pageId) {
 }
 
 // 引用跳转定位到的句子：高亮该句（正文句子 + 原文区域），与「选中高亮」同一形式。
-// 悬停其它句子会改高亮那一句；从其它句子移开后不再恢复本句（与阅览器原有悬停行为一致）。
+// 悬停其它句子会改高亮那一句；移开后不恢复本句（与阅览器悬停行为一致）。
 function setReaderCitationSentence(sentenceId) {
   window.clearTimeout(readerLinkSelectionTimer);
   setReaderLinkActive(sentenceId || null, { scrollText: true, scrollImage: true, selected: true });
@@ -530,8 +530,8 @@ function scrollReaderRegionIntoView(element, container) {
 }
 
 function setReaderLinkActive(sentenceId, options = {}) {
-  if (sentenceId && options.selected && typeof clearReaderVisualActive === "function") clearReaderVisualActive();
-  if (typeof setReaderVisualSentenceActive === "function") setReaderVisualSentenceActive(Boolean(sentenceId));
+  if (sentenceId && options.selected) clearReaderVisualActive();
+  setReaderVisualSentenceActive(Boolean(sentenceId));
   const textNodes = readerText?.querySelectorAll("[data-sentence-id]") || [];
   const imageNodes = readerOriginalPreview?.querySelectorAll("[data-sentence-id]") || [];
   let activeText = null;

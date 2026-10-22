@@ -119,7 +119,7 @@ def _matrix(value: Any, border: str = "unknown", rows: int | None = None,
             raise _InvalidTable("Ragged rows")
         for column, item in enumerate(items):
             if isinstance(item, dict):
-                # Matrix cell objects may carry text/header, but not a nested model.
+                # 矩阵单元格可带 text/header，但不能嵌套模型对象。
                 if set(item) - {"text", "header"} or "text" not in item:
                     raise _InvalidTable("Unsupported matrix cell")
                 cells.append(_cell(row, column, item["text"], header=item.get("header", False)))
@@ -145,7 +145,7 @@ def _structured(value: Any) -> dict:
             raise _InvalidTable("Ambiguous table representation")
         return _matrix(raw_rows, border, row_count, column_count)
     row_count = _field(value, "rows", "rowCount", "row_count", default=None)
-    # Explicit null counts are not omitted counts.
+    # 显式 null 的计数不等于省略计数。
     for name in ("rows", "rowCount", "row_count", "columns", "columnCount", "column_count", "colCount", "col_count"):
         if name in value:
             _integer(value[name], 1)
@@ -186,7 +186,7 @@ class _TableHTMLParser(HTMLParser):
     _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input",
              "link", "meta", "param", "source", "track", "wbr"}
     _SECTIONS = {"thead", "tbody", "tfoot"}
-    # Flattening these elements would lose rendered content or control values.
+    # 展平这些元素会丢失渲染内容或控件值。
     _UNSUPPORTED_CONTENT = {
         "img", "image", "svg", "math", "object", "embed", "iframe", "canvas",
         "picture", "audio", "video", "applet", "frame", "frameset", "portal",
@@ -359,7 +359,7 @@ def _markdown_row(line: str, columns: int | None = None) -> list[str]:
     leading_pipe = line.startswith("|")
     if leading_pipe:
         cells.pop(0)
-    # An escaped final pipe belongs to the cell, rather than the boundary.
+    # 转义的结尾竖线属于单元格内容，不是边界。
     trailing_slashes = len(line[:-1]) - len(line[:-1].rstrip("\\")) if line.endswith("|") else 0
     if line.endswith("|") and trailing_slashes % 2 == 0:
         if leading_pipe or columns is None or len(cells) > columns:
@@ -417,7 +417,7 @@ def parse_table_model(value: Any) -> dict | None:
             except ValueError:
                 if language == "json":
                     raise
-                # Unfenced Markdown headers can begin with links or braces.
+                # 无围栏的 Markdown 表头可能以链接或花括号开头。
             else:
                 return _structured(parsed)
         if language == "html" or (language is None and value.startswith("<")):

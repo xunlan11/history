@@ -70,8 +70,8 @@ def create_app(pipeline, config):
                 original_call = wrapper.call
 
                 async def tracked_call(func, *args, **kwargs):
-                    # PaddleX uses a dedicated serial worker thread. ContextVars do not
-                    # cross its queue unless explicitly copied at submission time.
+                    # PaddleX 使用专用串行工作线程；ContextVar 不会跨其队列传递，
+                    # 除非在提交任务时显式复制。
                     context = contextvars.copy_context()
                     return await original_call(lambda: context.run(func, *args, **kwargs))
 

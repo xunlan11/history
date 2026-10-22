@@ -731,7 +731,7 @@ function renderLlmSearchResults(matches, warnings = [], query = "", container = 
     const sourceLabel = `${title} · ${location}` + (match.sourceLayer === "notes" ? " · 笔记" : "");
     const href = match.chunkId && match.sourceType === "document-page"
       ? buildEvidenceHref(match) : searchResultHref(attachment, item, page);
-    // 出处不再做成独立链接（否则会出现下划线与焦点框）；整行本身即可点击跳转。
+    // 出处不做独立链接（避免下划线与焦点框）；整行本身即可点击跳转。
     source.textContent = sourceLabel;
     if (href) {
       row.tabIndex = 0;
@@ -932,13 +932,13 @@ function getConversationTurnHistory(conversation, beforeTurnId = "") {
 async function captureConversationTurnRequest(conversation, mode, prompt, beforeTurnId = "", previousRequest = null) {
   const report = getConversationContextReport(conversation);
   if (!previousRequest && report.error) throw new Error(report.error);
-  // Capture IDs, policy, history and attachments before the first await.
+  // 在首个 await 之前固定 ID、策略、历史与附件。
   const retrieval = previousRequest ? JSON.parse(JSON.stringify(previousRequest.retrieval)) : {
     documentIds: getSmartScopeDocuments(conversation).map((item) => item.id),
     textPolicy: isReferenceScopeActive(conversation) ? "processed" : "primary",
   };
   if (previousRequest) {
-    // Edited prompts may contain document IDs captured before the personal scope rule.
+    // 编辑过的提问可能包含个人范围规则生效前记录的文献 ID。
     const ownIds = new Set(getOwnReferenceDocuments().map((item) => item.id));
     retrieval.documentIds = Array.isArray(retrieval.documentIds)
       ? retrieval.documentIds.filter((id) => ownIds.has(id)) : [...ownIds];
@@ -1057,7 +1057,7 @@ async function generateConversationTurn(conversationId, turnId, scrollToTurn = f
   refreshConversationTurnView(conversationId, scrollToTurn);
   try {
     if (!turn.request) throw new Error("本轮材料缺失，请重新发送问题。");
-    // Persist before sending so a page interruption still leaves a retryable request.
+    // 发送前先保存，页面中断后仍可重试。
     persistConversations();
     const request = await validateFrozenEvidence(JSON.parse(JSON.stringify(turn.request)));
     turn.request = request;
@@ -1080,7 +1080,7 @@ async function generateConversationTurn(conversationId, turnId, scrollToTurn = f
     ({ conversation, turn } = getConversationTurn(conversationId, turnId));
     if (!conversation || !turn || conversationTurnRequests.get(conversationId) !== token) return;
     if (Array.isArray(response.usedEvidence)) {
-      // Keep complete retrieval results for display/retry; generation has its own budget.
+      // 完整检索结果留作展示与重试；生成阶段另有自己的预算。
       request.usedEvidence = response.usedEvidence;
       request.usedHistory = response.usedHistory || request.body.options.history;
       turn.request = request;
@@ -1424,9 +1424,9 @@ async function copyConversationShareLink(token) {
   try {
     if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
     await navigator.clipboard.writeText(url);
-    if (typeof showUploadToast === "function") showUploadToast("链接已自动复制");
+    showUploadToast("链接已自动复制");
   } catch (_) {
-    if (typeof showUploadToast === "function") showUploadToast("链接已创建，请点击复制按钮");
+    showUploadToast("链接已创建，请点击复制按钮");
   }
 }
 
@@ -1468,7 +1468,7 @@ async function saveConversationShare() {
     renderConversationShareEditor();
     copyConversationShareLink(currentConversation.share.token);
   } catch (error) {
-    if (typeof showUploadToast === "function") showUploadToast(error.message || "分享保存失败。");
+    showUploadToast(error.message || "分享保存失败。");
   } finally {
     saveConversationShareButton.disabled = false;
     updateConversationShareSelectionSummary();
@@ -1489,7 +1489,7 @@ async function deleteConversationShare() {
     renderConversationList();
     closeConversationShareEditor();
   } catch (error) {
-    if (typeof showUploadToast === "function") showUploadToast(error.message || "删除分享失败。");
+    showUploadToast(error.message || "删除分享失败。");
   } finally {
     deleteConversationShareButton.disabled = false;
   }

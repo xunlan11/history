@@ -68,15 +68,14 @@ class SemanticWorker:
         try:
             for offset in range(0, len(chunks), self.batch_size):
                 if self._stop.is_set():
-                    return False  # lease recovery resumes only missing vectors
+                    return False  # 租约恢复只补缺失的向量
                 batch = chunks[offset:offset + self.batch_size]
-                # Skip successfully published batches after a crash.
+                # 崩溃后跳过已成功发布的批次。
                 with self.connection_factory() as connection:
                     batch = [c for c in batch if not connection.execute("SELECT 1 FROM semantic_vectors WHERE chunk_id=? AND model_fingerprint=?", (c["chunk_id"], identity.fingerprint)).fetchone()]
                 if not batch:
                     continue
-                # Identical passages share computation even
-                # though their source anchors remain distinct.
+                # 相同段落共享计算，但各自的来源锚点仍保持独立。
                 by_text, missing = {}, []
                 with self.connection_factory() as connection:
                     for chunk in batch:

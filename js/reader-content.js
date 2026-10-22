@@ -1,4 +1,4 @@
-/* Reader content is optional: invalid/stale payloads leave the parent's plain-text renderer in charge. */
+/* 阅览器增强内容是可选的：载荷无效或过期时，仍由父级的纯文本渲染负责。 */
 const readerContentCache = new Map();
 const readerContentTextHashes = new Map();
 const readerVisualBoundContainers = new WeakSet();
@@ -12,7 +12,7 @@ function getReaderContentKey(item, page) {
     getPageImageSource(page), getPagePrimaryText(page)]);
 }
 
-// Synchronous SHA-256 also works outside secure contexts, so direct rendering validates the same contract as loading.
+// 同步 SHA-256 在非安全上下文也可用，因此直接渲染与加载走同一套校验。
 function hashReaderContentText(text) {
   if (readerContentTextHashes.has(text)) return readerContentTextHashes.get(text);
   const bytes = new TextEncoder().encode(text);
@@ -272,7 +272,7 @@ function renderReaderContent(page, content, readerIndex = null) {
     warning.dataset.readerAuxiliary = "true";
     fragment.append(warning);
   }
-  const key = JSON.stringify([typeof getSelectedDocument === "function" ? getSelectedDocument()?.id : "", page.id, page.processingRevision]);
+  const key = JSON.stringify([getSelectedDocument()?.id, page.id, page.processingRevision]);
   if (readerVisualState.pageKey !== key) {
     readerVisualState.pageKey = key;
     readerVisualState.selected = null;
@@ -284,7 +284,7 @@ function renderReaderContent(page, content, readerIndex = null) {
   readerText.classList.remove("is-empty");
   bindReaderVisualEvents(readerText);
   applyReaderVisualActive();
-  if (typeof applyReaderSearchHighlights === "function") applyReaderSearchHighlights(page);
+  applyReaderSearchHighlights(page);
   return true;
 }
 
@@ -370,7 +370,7 @@ function applyReaderVisualActive() {
   }
 }
 
-// Parent sentence selection clears visual selection; temporary hover can clear only visual hover.
+// 父级选中句子会清除视觉选中；临时悬停只清除视觉悬停。
 function clearReaderVisualHover() {
   readerVisualState.hovered = null;
   applyReaderVisualActive();
@@ -392,13 +392,13 @@ function setReaderVisualSentenceActive(active) {
 }
 
 function notifyReaderVisualSelected(id, options = {}) {
-  if (typeof renderReaderVisualCatalog === "function") renderReaderVisualCatalog();
+  renderReaderVisualCatalog();
 }
 
 function setReaderVisualActive(id, options = {}) {
   readerVisualState.sentenceActive = false;
   const selected = readerVisualState.selected;
-  if (id && typeof setReaderLinkActive === "function") setReaderLinkActive(null);
+  if (id) setReaderLinkActive(null);
   if (options.hover) readerVisualState.selected = selected;
   const state = id ? { id, captionId: options.captionId || null } : null;
   if (options.hover) readerVisualState.hovered = state;
@@ -410,13 +410,11 @@ function setReaderVisualActive(id, options = {}) {
   const scroll = (container) => {
     const node = find(container);
     if (!node) return;
-    if (typeof scrollReaderRegionIntoView === "function") scrollReaderRegionIntoView(node, container);
-    else node.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    scrollReaderRegionIntoView(node, container);
   };
-  if (!options.hover && options.scrollImage && typeof readerPanelState !== "undefined" &&
-      readerPanelState.originalCollapsed && typeof toggleReaderPanel === "function") toggleReaderPanel("original");
-  if (!options.hover && options.scrollText) scroll(typeof readerText === "undefined" ? null : readerText);
-  if (!options.hover && options.scrollImage) scroll(typeof readerOriginalPreview === "undefined" ? null : readerOriginalPreview);
+  if (!options.hover && options.scrollImage && readerPanelState.originalCollapsed) toggleReaderPanel("original");
+  if (!options.hover && options.scrollText) scroll(readerText);
+  if (!options.hover && options.scrollImage) scroll(readerOriginalPreview);
 }
 
 function openReaderVisualLarge(id) {

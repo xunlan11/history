@@ -8,8 +8,6 @@
 
 - `OCR_UPSTREAM_URL`：服务端基地址，例如 `http://10.0.0.5:8080`。
   未设置即视为「服务端未部署」，所有识别接口返回 503。
-- `OCR_UPSTREAM_STYLE`：`paddlex` | `native` | `auto`（默认 `auto`，
-  先按 PaddleX/PaddleOCR 官方 serving 调用，404/405 时再试 native 契约）。
 - `OCR_UPSTREAM_TOKEN`：可选，按 `Authorization: Bearer <token>` 发送。
 - `OCR_UPSTREAM_TIMEOUT`：单页识别超时秒数，默认 180。
 - `OCR_UPSTREAM_HEALTH_TIMEOUT`：健康检查超时秒数，默认 5。
@@ -129,11 +127,6 @@ def upstream_url() -> str:
     return os.getenv("OCR_UPSTREAM_URL", "").strip().rstrip("/")
 
 
-def upstream_style() -> str:
-    style = os.getenv("OCR_UPSTREAM_STYLE", "auto").strip().lower()
-    return style if style in {"auto", "paddlex", "native"} else "auto"
-
-
 def model_name() -> str:
     """首页状态栏展示的识别模型名；部署时可用 OCR_UPSTREAM_MODEL 覆盖。"""
     return os.getenv("OCR_UPSTREAM_MODEL", "").strip() or "PP-StructureV3"
@@ -179,7 +172,7 @@ def describe() -> dict[str, Any]:
     return {
         "configured": bool(upstream_url()),
         "url": upstream_url() or None,
-        "style": upstream_style(),
+        "style": "paddlex",
         "model": model_name(),
         "geometryFix": geometry_fix_enabled(),
         "geometryFixByMode": {
@@ -241,49 +234,25 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
     base = upstream_url()
     if not base:
         raise not_configured_error()
-    if mode not in {"formal", "quick", "reader"}:
-        mode = "formal"
 
     image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    style = upstream_style()
-    candidates = [style] if style != "auto" else ["paddlex", "native"]
-
     started = time.perf_counter()
-    last_error: OcrUpstreamError | None = None
-    for candidate in candidates:
-        try:
-            if candidate == "paddlex":
-                payload = _call_paddlex(base, image_base64, path.name, page_number, mode, on_progress=on_progress)
-                normalized = _normalize_paddlex(payload)
-            else:
-                payload = _call_native(base, image_base64, path.name, page_number, mode)
-                normalized = _normalize_native(payload)
-            if candidate == "paddlex":
-                normalized["coordinateSpace"] = "input" if mode in {"quick", "reader"} else "processed"
-        except OcrUpstreamHttpError as exc:
-            if style == "auto" and exc.status in {404, 405}:
-                last_error = exc
-                continue
-            raise OcrUpstreamUnavailable(
-                f"服务端识别失败（HTTP {exc.status}）：{exc.body or '无响应内容'}",
-                status=exc.status,
-            ) from exc
-        except OcrUpstreamProtocolError as exc:
-            if style == "auto" and candidate == "paddlex":
-                last_error = exc
-                continue
-            raise
+    try:
+        payload = _call_paddlex(base, image_base64, path.name, page_number, mode, on_progress=on_progress)
+    except OcrUpstreamHttpError as exc:
+        raise OcrUpstreamUnavailable(
+            f"服务端识别失败（HTTP {exc.status}）：{exc.body or '无响应内容'}",
+            status=exc.status,
+        ) from exc
 
-        normalized["upstream"] = {
-            "style": candidate,
-            "url": base,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-        }
-        return normalized
-
-    raise OcrUpstreamUnavailable(
-        f"服务端 {base} 既不是 PaddleX 版面解析接口，也不符合 native 契约：{last_error}",
-    )
+    normalized = _normalize_paddlex(payload)
+    normalized["coordinateSpace"] = "input" if mode in {"quick", "reader"} else "processed"
+    normalized["upstream"] = {
+        "style": "paddlex",
+        "url": base,
+        "latencyMs": int((time.perf_counter() - started) * 1000),
+    }
+    return normalized
 
 
 def _call_paddlex(
@@ -315,8 +284,8 @@ def _call_paddlex(
     if page_number is not None:
         payload["pageNumber"] = page_number
     payload["filename"] = filename
-    # A random per-inference ID prevents stale progress on retries and separates
-    # two sites using the same model server. It is never a document identifier.
+    # 每次推理都用随机 ID：重试时不会读到旧进度，也把共用同一模型服务的两个站点区分开；
+    # 它不是文献标识。
     request_key = uuid.uuid4().hex if on_progress else ""
     stop = threading.Event()
     watcher = None
@@ -344,31 +313,10 @@ def _watch_model_progress(base: str, key: str, callback: Any, stop: threading.Ev
                 return
             if progress.get("updatedAt") and progress.get("status") not in {"completed", "failed"}:
                 callback(progress)
-        except OcrUpstreamHttpError as exc:
-            if exc.status in {404, 405}:
-                return  # Older PaddleX serving: keep recognition usable, no invented percent.
+        except OcrUpstreamHttpError:
+            return  # 进度接口不可用时停止轮询，不影响识别本身。
         except (OcrUpstreamError, ValueError, TypeError):
-            continue  # A failed progress query never submits a second inference.
-
-
-def _call_native(
-    base: str,
-    image_base64: str,
-    filename: str,
-    page_number: int | None,
-    mode: str,
-) -> dict[str, Any]:
-    """native 契约：POST /ocr，JSON + base64，响应直接是统一结构。"""
-    payload: dict[str, Any] = {
-        "image": image_base64,
-        "filename": filename,
-        "mode": "formal" if mode == "reader" else mode,
-        "preserveInputCoordinates": mode == "reader",
-    }
-    if page_number is not None:
-        payload["pageNumber"] = page_number
-    _status, body = _request_json(f"{base}/ocr", payload, timeout=recognize_timeout())
-    return body
+            continue  # 进度查询失败时绝不重复提交推理。
 
 
 def _request_json(
@@ -569,79 +517,6 @@ def _first_text(pruned: dict[str, Any], first: dict[str, Any]) -> str:
     return markdown or ""
 
 
-def _normalize_native(payload: dict[str, Any]) -> dict[str, Any]:
-    container = payload.get("result")
-    if isinstance(container, dict) and "blocks" not in payload and "lines" not in payload:
-        payload = container
-
-    raw_blocks = payload.get("blocks")
-    raw_lines = payload.get("lines")
-
-    lines = [_normalize_line(item) for item in raw_lines] if isinstance(raw_lines, list) else []
-    lines = [line for line in lines if line]
-
-    blocks: list[dict[str, Any]] = []
-    if isinstance(raw_blocks, list):
-        for index, item in enumerate(raw_blocks):
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("type") or item.get("label") or "text")
-            order = _int_or_none(item.get("order"))
-            block_lines = [_normalize_line(line) for line in item.get("lines") or []]
-            block_lines = [line for line in block_lines if line]
-            text = str(item.get("text") or "").strip()
-            if not text:
-                text = "\n".join(line["text"] for line in block_lines).strip()
-            blocks.append(
-                _make_block(
-                    label,
-                    _coerce_bbox(item.get("bbox")),
-                    order if order is not None else index + 1,
-                    _float_or_none(item.get("confidence")),
-                    text,
-                    block_lines,
-                )
-            )
-
-    for block, raw in zip(blocks, (item for item in (raw_blocks if isinstance(raw_blocks, list) else []) if isinstance(item, dict))):
-        for key in ("id", "visualId", "parentId", "imageUrl", "resourceRef", "tableModel", "html", "captionCoverage"):
-            if key in raw:
-                block[key] = raw[key]
-    if not blocks:
-        blocks = _block_from_lines(lines) or _block_from_text(str(payload.get("text") or ""))
-
-    return {
-        "engine": str(payload.get("engine") or "remote:native"),
-        "coordinateSpace": payload.get("coordinateSpace", "unknown"),
-        "width": _int_or_none(payload.get("width")),
-        "height": _int_or_none(payload.get("height")),
-        "blocks": blocks,
-        "lines": lines or [line for block in blocks for line in block["lines"]],
-        "markdown": payload.get("markdown") if isinstance(payload.get("markdown"), str) else None,
-        "markdownImages": payload.get("markdownImages") or {},
-        "warnings": [str(item) for item in payload.get("warnings") or [] if str(item).strip()],
-    }
-
-
-def _normalize_line(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        text = item.strip()
-        return {"text": text, "confidence": None, "polygon": [], "bbox": None} if text else None
-    if not isinstance(item, dict):
-        return None
-
-    text = str(item.get("text") or "").strip()
-    if not text:
-        return None
-    polygon = _coerce_polygon(item.get("polygon") or item.get("points") or item.get("poly"))
-    return {
-        "text": text,
-        "confidence": _float_or_none(item.get("confidence")),
-        "polygon": polygon,
-        "bbox": _coerce_bbox(item.get("bbox")) or _bbox_from_polygon(polygon),
-    }
-
-
 def _block_type(label: str) -> str:
     key = label.strip().lower()
     return BLOCK_TYPE_MAP.get(key, key or "text")
@@ -777,7 +652,7 @@ def _float_or_none(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number != number:  # NaN
+    if number != number:  # 非数值
         return None
     return number
 

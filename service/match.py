@@ -69,7 +69,7 @@ def literal_match_ranges(text: str, query: str) -> list[dict]:
     return sorted(matches, key=lambda item: (item["start"], item["end"], item["level"]))
 
 
-# Keep closing quotation marks with their sentence; decimal dots are not endings.
+# 句末引号归入本句；小数点不算句末标点。
 SENTENCE_END = re.compile(r"[。！？!?]+[”’」』）】\"']*|\.[”’」』）】\"']*(?=\s|$)|\r?\n[ \t]*\r?\n")
 
 
