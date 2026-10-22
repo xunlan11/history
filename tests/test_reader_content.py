@@ -66,6 +66,48 @@ def test_ambiguous_caption_is_preserved_outside_body():
     assert page["visuals"][1]["captions"][0]["associationStatus"] == "unassigned"
 
 
+def test_bilingual_titles_attach_to_their_own_chart_by_geometry():
+    raw = {"width": 100, "height": 100, "coordinateSpace": "input", "blocks": [
+        {"type": "text", "text": "正文一。", "order": 1},
+        {"type": "figure", "text": "", "bbox": [50, 5, 95, 35], "order": 2},
+        {"type": "figure_title", "text": "图1 示意图", "bbox": [52, 36, 93, 40], "order": 3},
+        {"type": "figure_title", "text": "Fig.1 Diagram", "bbox": [52, 41, 93, 45], "order": 4},
+        {"type": "figure_title", "text": "表1 样本统计", "bbox": [52, 49, 93, 53], "order": 5},
+        {"type": "figure_title", "text": "Table 1 Statistics", "bbox": [52, 54, 93, 58], "order": 6},
+        {"type": "table", "text": "|甲|乙|\n|---|---|\n|1|2|", "bbox": [50, 59, 95, 95], "order": 7},
+    ]}
+    page, _ = page_for(raw)
+    assert [v["kind"] for v in page["visuals"]] == ["figure", "table"]
+    figure, table = page["visuals"]
+    assert [c["text"] for c in figure["captions"]] == ["图1 示意图", "Fig.1 Diagram"]
+    assert [c["text"] for c in table["captions"]] == ["表1 样本统计", "Table 1 Statistics"]
+    assert [c["position"] for c in table["captions"]] == ["before", "before"]
+
+
+def test_caption_below_figure_ignores_text_in_other_column():
+    raw = {"width": 100, "height": 100, "coordinateSpace": "input", "blocks": [
+        {"type": "figure", "text": "", "bbox": [5, 5, 45, 50], "order": 1},
+        {"type": "title", "text": "2.1 模型", "bbox": [5, 80, 30, 84], "order": 2},
+        {"type": "figure_title", "text": "图2 效果", "bbox": [10, 52, 40, 56], "order": 3},
+        {"type": "text", "text": "另一栏正文。", "bbox": [55, 5, 95, 60], "order": 4},
+    ]}
+    page, _ = page_for(raw)
+    assert [v["kind"] for v in page["visuals"]] == ["figure"]
+    assert page["visuals"][0]["captions"][0]["text"] == "图2 效果"
+
+
+def test_note_between_figure_and_title_does_not_block_attachment():
+    raw = {"width": 100, "height": 100, "coordinateSpace": "input", "blocks": [
+        {"type": "figure", "text": "", "bbox": [5, 5, 45, 50], "order": 1},
+        {"type": "figure_title", "text": "注：a 表示 b。", "bbox": [5, 51, 45, 70], "order": 2},
+        {"type": "formula", "text": "X=1", "bbox": [55, 51, 95, 60], "order": 3},
+        {"type": "figure_title", "text": "图4 结构", "bbox": [10, 71, 40, 75], "order": 4},
+    ]}
+    page, _ = page_for(raw)
+    assert [v["kind"] for v in page["visuals"]] == ["figure"]
+    assert [c["text"] for c in page["visuals"][0]["captions"]] == ["注：a 表示 b。", "图4 结构"]
+
+
 def test_visual_crops_are_independent_and_unknown_space_is_not_guessed(tmp_path):
     path = tmp_path / "page.png"
     Image.new("RGB", (100,100), "white").save(path)
@@ -198,53 +240,6 @@ def test_unplaced_visual_does_not_push_later_anchor_to_end():
     assert entries[2]['visualId']=='found'
     assert entries[2]['placement']=='aligned'
 
-def test_backfill_completed_job_preserves_manual_body_and_uses_new_source(library, tmp_path):
-    from concurrent.futures import Future
-    from service import scheduler
-    client, connection, user = library
-    image=Image.new('RGB',(100,100)); stream=io.BytesIO();image.save(stream,format='PNG')
-    old={'id':'d','pages':[{'id':'p','pageNumber':1,'ocrText':'old OCR','punctuatedText':'manual text must survive',
-                          'processingRevision':2,'imageDataUrl':'data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode()}]}
-    data.upsert_documents(connection,[old],'now',user);connection.commit()
-    assert client.post('/api/documents/d/pages/p/extract-visuals').status_code==200
-    worker=scheduler.Scheduler(data,services=object())
-    loaded=worker._load(connection,'d',allow_terminal=True)
-    assert loaded and loaded[0]['status']=='completed'
-    job,doc,cp=loaded;cp['visualQueue'][0]['status']='running'
-    connection.execute('UPDATE processing_jobs SET checkpoint=? WHERE document_id=?',(json.dumps(cp),'d'));connection.commit()
-    raw=result();raw['visuals'],raw['contentBlocks']=content.extract_visuals(raw);raw['contentSourceText']=content.body_text(raw);raw['text']=raw['contentSourceText']
-    future=Future();future.set_result(raw)
-    try:
-        worker._record('d','visual_backfill',1,future)
-        actual=json.loads(connection.execute('SELECT payload FROM document_pages WHERE id=?',('p',)).fetchone()['payload'])
-        assert actual['punctuatedText']=='manual text must survive'
-        assert actual['ocrText']=='old OCR'
-        assert actual['visualsExtracted']
-        assert actual['processingRevision']==3
-        layout=json.loads(connection.execute('SELECT layout FROM page_reader_indexes WHERE page_id=?',('p',)).fetchone()['layout'])
-        assert layout['contentSourceText']==raw['contentSourceText']
-        assert client.get('/api/documents/d/pages/p/extract-visuals').json()['status']=='completed'
-    finally:
-        worker.executor.shutdown()
-
-
-def test_backfill_rejects_changed_source_revision(library):
-    from concurrent.futures import Future
-    from service import scheduler
-    client,connection,user=library
-    data.upsert_documents(connection,[{'id':'d','pages':[{'id':'p','pageNumber':1,'punctuatedText':'manual','processingRevision':2}]}],'now',user)
-    cp={'visualQueue':[{'pageId':'p','pageNumber':1,'imageHash':'','sourceRevision':1,'status':'running'}]}
-    connection.execute("INSERT INTO processing_jobs(document_id,mode,phase,status,source_path,checkpoint,created_at,updated_at) VALUES('d','serial','body','completed','',?,'now','now')",(json.dumps(cp),));connection.commit()
-    future=Future();future.set_result({'visuals':[]})
-    worker=scheduler.Scheduler(data,services=object())
-    try:
-        worker._record('d','visual_backfill',1,future)
-        page=json.loads(connection.execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()['payload'])
-        assert page['punctuatedText']=='manual' and not page.get('visualsExtracted')
-        assert client.get('/api/documents/d/pages/p/extract-visuals').json()['status']=='failed'
-    finally:worker.executor.shutdown()
-
-
 def test_public_copy_rebinds_all_visual_assets(library,tmp_path,monkeypatch):
     client,connection,user=library
     connection.execute("INSERT INTO users(id,username,password_hash,created_at) VALUES(2,'reader','unused','now')")
@@ -259,114 +254,9 @@ def test_public_copy_rebinds_all_visual_assets(library,tmp_path,monkeypatch):
     assert visual['asset']['id'].startswith(copied['id']+':')
     assert (data.FILE_STORAGE_DIR/visual['asset']['path']).exists()
 
-def _prepare_backfill(library, page):
-    from service import scheduler
-    client,connection,user=library
-    image=Image.new('RGB',(100,100));stream=io.BytesIO();image.save(stream,format='PNG')
-    page={**page,'id':'p','pageNumber':1,'processingRevision':2,
-          'imageDataUrl':'data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode()}
-    data.upsert_documents(connection,[{'id':'d','pages':[page]}],'now',user);connection.commit()
-    assert client.post('/api/documents/d/pages/p/extract-visuals').status_code==200
-    row=connection.execute("SELECT checkpoint FROM processing_jobs WHERE document_id='d'").fetchone()
-    cp=json.loads(row['checkpoint']);cp['visualQueue'][0]['status']='running'
-    connection.execute("UPDATE processing_jobs SET checkpoint=? WHERE document_id='d'",(json.dumps(cp),));connection.commit()
-    return scheduler.Scheduler(data,services=object())
-
-
-def test_backfill_never_deletes_a_manually_authored_caption_matching_paragraph(library):
-    from concurrent.futures import Future
-    page={'ocrText':'Before\nAfter','punctuatedText':'Before\nA user-authored paragraph\nAfter'}
-    worker=_prepare_backfill(library,page)
-    raw={'blocks':[{'type':'figure','order':1},{'type':'figure_title','text':'A user-authored paragraph','order':2}]}
-    raw['visuals'],raw['contentBlocks']=content.extract_visuals(raw)
-    future=Future();future.set_result(raw)
-    try:
-        worker._record('d','visual_backfill',1,future)
-        actual=json.loads(library[1].execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()['payload'])
-        assert actual['punctuatedText']==page['punctuatedText']
-        assert actual['ocrText']==page['ocrText']
-    finally:worker.executor.shutdown()
-
-
-def test_backfill_keeps_changed_final_rendition_and_marks_separation_for_review(library):
-    from concurrent.futures import Future
-    page={'ocrText':'Before\nFigure title\nAfter','punctuatedText':'Before,\nFigure title\nAfter!'}
-    worker=_prepare_backfill(library,page)
-    raw={'blocks':[{'type':'figure','order':1},{'type':'figure_title','text':'Figure title','order':2}]}
-    raw['visuals'],raw['contentBlocks']=content.extract_visuals(raw)
-    future=Future();future.set_result(raw)
-    try:
-        worker._record('d','visual_backfill',1,future)
-        actual=json.loads(library[1].execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()['payload'])
-        assert actual['punctuatedText']==page['punctuatedText']
-        assert actual['ocrText']=='Before\nAfter'
-        assert actual['visualSeparationStatus']=='needs_review'
-        assert content.build_reader_content({},actual)['warnings']
-    finally:worker.executor.shutdown()
-
-
-def test_backfill_asset_failure_rolls_back_page_and_previous_working_assets(library,monkeypatch):
-    from concurrent.futures import Future
-    stream=io.BytesIO();Image.new('RGB',(10,10),'blue').save(stream,format='PNG')
-    image_data='data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode()
-    old={'id':'old','kind':'figure','renderMode':'image','status':'ready','imageDataUrl':image_data,'sourceBoundary':0}
-    worker=_prepare_backfill(library,{'ocrText':'body','punctuatedText':'manual','visualsExtracted':True,'visuals':[old]})
-    stored=json.loads(library[1].execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()['payload'])
-    old_asset=stored['visuals'][0]['asset']['id']
-    store=data.store_data_url_asset
-    def fail_new(connection,**kwargs):
-        if kwargs.get('role')=='page-visual:new':raise OSError('injected disk error')
-        return store(connection,**kwargs)
-    monkeypatch.setattr(data,'store_data_url_asset',fail_new)
-    future=Future();future.set_result({'visuals':[{**old,'id':'new','imageDataUrl':image_data}],'contentBlocks':[]})
-    try:
-        worker._record('d','visual_backfill',1,future)
-        actual=json.loads(library[1].execute("SELECT payload FROM document_pages WHERE id='p'").fetchone()['payload'])
-        assert actual['processingRevision']==2
-        assert actual['visuals'][0]['id']=='old' and actual['visuals'][0]['url']
-        assert library[1].execute('SELECT deleted_at FROM document_files WHERE id=?',(old_asset,)).fetchone()['deleted_at'] is None
-        assert not library[1].execute("SELECT 1 FROM document_files WHERE role='page-visual:new'").fetchone()
-        assert library[0].get('/api/documents/d/pages/p/extract-visuals').json()['status']=='failed'
-    finally:worker.executor.shutdown()
-
-
-def test_backfill_only_job_does_not_block_first_original_upload(library):
-    worker=_prepare_backfill(library,{'ocrText':'body','punctuatedText':'manual'})
-    try:
-        response=library[0].post('/api/files/upload',data={'documentId':'d','role':'source'},files={'document':('source.pdf',b'%PDF-test-original','application/pdf')})
-        assert response.status_code==200,response.text
-        job=library[1].execute("SELECT * FROM processing_jobs WHERE document_id='d'").fetchone()
-        assert job['phase']=='registration' and job['status']=='queued'
-        assert not json.loads(job['checkpoint']).get('visualOnly')
-    finally:worker.executor.shutdown()
-
-
 def test_zero_valued_explicit_caption_identity_does_not_fall_back_to_neighbor():
     raw={'blocks':[{'type':'figure','id':0,'order':1},{'type':'text','text':'body','order':2},
                    {'type':'figure','id':1,'order':3},{'type':'figure_title','parentId':0,'text':'caption zero','order':4}]}
     visuals,_=content.extract_visuals(raw)
     assert visuals[0]['captions'][0]['text']=='caption zero'
     assert not visuals[1]['captions']
-
-def test_backfill_queue_worker_executes_ocr_and_records_completion(library, monkeypatch):
-    worker=_prepare_backfill(library,{'ocrText':'body','punctuatedText':'manual'})
-    connection=library[1]
-    cp=json.loads(connection.execute("SELECT checkpoint FROM processing_jobs WHERE document_id='d'").fetchone()['checkpoint'])
-    cp['visualQueue'][0]['status']='queued'
-    connection.execute("UPDATE processing_jobs SET checkpoint=? WHERE document_id='d'",(json.dumps(cp),));connection.commit()
-    calls=[]
-    class Services:
-        def execute(self, operation,job,doc,checkpoint,number):
-            calls.append(operation)
-            page=doc['pages'][0]
-            assert (data.FILE_STORAGE_DIR/page['imageFile']['path']).exists()
-            return {'visuals':[],'contentBlocks':[],'contentSourceText':'body'}
-    worker.services=Services()
-    try:
-        worker.tick()
-        assert 'visual_backfill' in worker.running
-        worker.running['visual_backfill'][0].result(timeout=3)
-        worker.tick()
-        assert calls==['visual_backfill']
-        assert library[0].get('/api/documents/d/pages/p/extract-visuals').json()['status']=='completed'
-    finally:worker.executor.shutdown()

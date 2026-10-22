@@ -1052,7 +1052,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             server_pages = {page["id"]: page for page in load_document_pages(connection, document_id)}
             for page in stored_document.get("pages") or []:
                 old_page = server_pages.get(page.get("id"), {})
-                for key in ("visuals", "visualsExtracted", "visualMigrationOriginal", "visualSeparationStatus"):
+                for key in ("visuals", "visualsExtracted"):
                     if key in old_page:
                         page[key] = old_page[key]
         stored_document.pop("ownerId", None)
@@ -1571,7 +1571,7 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
     if not row:
         raise HTTPException(status_code=404, detail="文献不存在")
     document = json_load(row["payload"])
-    if existing and not json_load(existing["checkpoint"]).get("visualOnly"):
+    if existing:
         return document
     source = connection.execute("SELECT * FROM document_files WHERE document_id=? AND role='source' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", (document_id,)).fetchone()
     if not source:
@@ -1941,8 +1941,8 @@ async def upload_file(
     timestamp = now_iso()
     # 在写入新的孤立资产前拒绝替换。重新上传相同内容是幂等的，但不允许修改已提交原件。
     with database() as connection:
-        submitted = connection.execute("SELECT source_path,checkpoint FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
-    if submitted and not json_load(submitted["checkpoint"]).get("visualOnly"):
+        submitted = connection.execute("SELECT source_path FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
+    if submitted:
         existing_path = Path(submitted["source_path"]).as_posix()
         expected_digest = hashlib.sha256(content).hexdigest()
         expected_path = relative_storage_path(document_id, normalized_role, expected_digest, mime_type, document.filename or "").as_posix()
@@ -2419,42 +2419,6 @@ def get_document_visual_catalog(document_id: str):
         document = json_load(row["payload"])
         document["pages"] = [json_load(p["payload"]) for p in connection.execute("SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number", (document_id,))]
         return reader_content.build_visual_catalog(document)
-
-
-@app.post("/api/documents/{document_id}/pages/{page_id}/extract-visuals")
-def extract_page_visuals(document_id: str, page_id: str):
-    user = current_user()
-    with database() as connection, connection:
-        connection.execute("BEGIN IMMEDIATE")
-        require_owned_document(connection, document_id, user)
-        require_visible_document_page(connection, user, document_id, page_id)
-        doc = attach_document_pages(connection, json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]), rehydrate=True)
-        page = next((p for p in doc.get("pages", []) if p["id"] == page_id), None)
-        if not page or not (page.get("imageFile") or {}).get("path"):
-            raise HTTPException(status_code=409, detail="本页没有可用原图，无法补提取")
-        row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
-        cp = json_load(row["checkpoint"]) if row else {"visualOnly": True}
-        queue = cp.setdefault("visualQueue", [])
-        if not any(q["pageId"] == page_id and q["status"] in {"queued", "running"} for q in queue):
-            queue[:] = [q for q in queue if q["pageId"] != page_id]
-            queue.append({"pageId": page_id, "pageNumber": page["pageNumber"], "imageHash": page.get("imageHash", ""),
-                          "sourceRevision": page.get("processingRevision", 0), "status": "queued", "attempts": 0})
-        stamp = now_iso()
-        if row:
-            connection.execute("UPDATE processing_jobs SET checkpoint=?,updated_at=? WHERE document_id=?", (json_dump(cp), stamp, document_id))
-        else:
-            connection.execute("INSERT INTO processing_jobs(document_id,mode,phase,status,source_path,checkpoint,created_at,updated_at) VALUES(?, 'serial','body','completed',?,?,?,?)",
-                (document_id, (doc.get("sourceFile") or {}).get("path", ""), json_dump(cp), stamp, stamp))
-        return {"status": "queued", "pageId": page_id}
-
-
-@app.get("/api/documents/{document_id}/pages/{page_id}/extract-visuals")
-def get_visual_extraction_status(document_id: str, page_id: str):
-    user = current_user()
-    with database() as connection:
-        require_visible_document_page(connection, user, document_id, page_id)
-        row = connection.execute("SELECT checkpoint FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
-        return next((q for q in json_load(row["checkpoint"]).get("visualQueue", []) if q["pageId"] == page_id), {"status": "idle"}) if row else {"status": "idle"}
 
 
 @app.get("/api/documents/{document_id}/pages/{page_id}/reader-index")

@@ -440,7 +440,6 @@ function normalizeDocuments(items) {
             ocr: normalizeStoredOcr(page.ocr),
             visuals: Array.isArray(page.visuals) ? page.visuals : [],
             visualsExtracted: page.visualsExtracted === true,
-            visualSeparationStatus: page.visualSeparationStatus || "",
             processingRevision: Number(page.processingRevision) || 0,
             readerIndexStatus: page.readerIndexStatus || "",
             readerIndexRevision: Number(page.readerIndexRevision) || 0,

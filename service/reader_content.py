@@ -22,7 +22,11 @@ from service.table_content import parse_table_model
 VISUAL_TYPES = {"figure", "image", "chart", "table"}
 CAPTION_TYPES = {"figure_title", "table_title", "chart_title", "figure_caption", "table_caption", "caption"}
 NON_BODY_TYPES = VISUAL_TYPES | CAPTION_TYPES | {"header", "footer", "page_number", "seal"}
+# 题注与图表之间允许夹着这些块（同组题注/注释、公式），不算距离。
+CAPTION_GAP_TYPES = CAPTION_TYPES | {"formula", "formula_number"}
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+TABLE_CAPTION_HINT = re.compile(r"^(?:表|tab(?:le)?\.?)\s*[0-9０-９一二三四五六七八九十百零〇]*", re.I)
+FIGURE_CAPTION_HINT = re.compile(r"^(?:图|fig(?:ure)?\.?|chart|illustration|map|plate)\s*[0-9０-９一二三四五六七八九十百零〇]*", re.I)
 
 
 def digest(text):
@@ -53,6 +57,108 @@ def region_for(block, width, height):
         return []
 
 
+def block_box(block):
+    try:
+        x1, y1, x2, y2 = (float(n) for n in block.get("bbox"))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(n) for n in (x1, y1, x2, y2)) or x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+def caption_family(block):
+    """图/表家族：先看“图/Fig./表/Table”文字前缀，再看上游块类型。"""
+    text = re.sub(r"\s+", "", str(block.get("text") or ""))[:16]
+    if TABLE_CAPTION_HINT.match(text):
+        return "table"
+    if FIGURE_CAPTION_HINT.match(text):
+        return "figure"
+    kind = str(block.get("kind") or "")
+    if kind.startswith("table"):
+        return "table"
+    if kind.startswith(("figure", "chart")):
+        return "figure"
+    return ""
+
+
+def family_accepts(family, visual):
+    return not family or (visual.get("kind") == "table") == (family == "table")
+
+
+def _gap_allowance(caption_box, visual_box, above, blocks, page_width):
+    """题注与图表之间只隔着同组题注/注释或公式时返回可放宽的像素数，夹着正文返回 None。"""
+    low, high = (visual_box[3], caption_box[1]) if above else (caption_box[3], visual_box[1])
+    center = (caption_box[0] + caption_box[2]) / 2
+    tolerance = max(1.0, 0.02 * page_width)
+    allowance = 0.0
+    for other in blocks:
+        box = block_box(other)
+        if not box or box in (caption_box, visual_box):
+            continue
+        if box[3] <= low or box[1] >= high or not (box[0] - tolerance <= center <= box[2] + tolerance):
+            continue
+        if other["kind"] not in CAPTION_GAP_TYPES:
+            return None
+        allowance += min(box[3] - box[1], high - low)
+    return allowance
+
+
+def caption_target_by_geometry(block, blocks, visuals, boxes, family, page_width, page_height):
+    """按坐标找同栏、同一侧、最近的图表；图题优先配上方图表，表题优先配下方表格。"""
+    caption_box = block_box(block)
+    if not caption_box:
+        return None
+    center = (caption_box[0] + caption_box[2]) / 2
+    tolerance = max(1.0, 0.02 * page_width)
+    line = max(caption_box[3] - caption_box[1], 4.0)
+    base_gap = max(3 * line, 0.02 * page_height)
+    candidates = []
+    for visual in visuals:
+        visual_box = boxes.get(visual["id"])
+        if not visual_box or not family_accepts(family, visual):
+            continue
+        if not (visual_box[0] - tolerance <= center <= visual_box[2] + tolerance):
+            continue
+        if visual_box[1] <= caption_box[1] and caption_box[3] <= visual_box[3]:
+            candidates.append(("inside", 0.0, visual))
+            continue
+        above = visual_box[3] <= caption_box[1] + tolerance
+        below = caption_box[3] <= visual_box[1] + tolerance
+        if not above and not below:
+            continue
+        gap = max(0.0, caption_box[1] - visual_box[3] if above else visual_box[1] - caption_box[3])
+        allowance = _gap_allowance(caption_box, visual_box, above, blocks, page_width)
+        if allowance is None or gap > base_gap + min(allowance, 0.3 * page_height):
+            continue
+        candidates.append(("above" if above else "below", gap, visual))
+    if not candidates:
+        return None
+    preferred = {"table": "below", "figure": "above"}.get(family)
+    if preferred:
+        pool = [c for c in candidates if c[0] == preferred] or [c for c in candidates if c[0] == "inside"]
+        candidates = pool or candidates
+    candidates.sort(key=lambda c: c[1])
+    if len(candidates) > 1 and candidates[1][1] <= candidates[0][1] + 2.0:
+        return None
+    return candidates[0][2]
+
+
+def caption_target_by_neighbor(index, blocks, by_block, family):
+    """无坐标时按阅读顺序兜底：跳过紧邻的其它题注，左右各找一次，唯一才认。"""
+    candidates = {}
+    for step in (-1, 1):
+        cursor = index + step
+        while 0 <= cursor < len(blocks) and blocks[cursor]["kind"] in CAPTION_TYPES:
+            cursor += step
+        if not 0 <= cursor < len(blocks):
+            continue
+        visual = by_block.get(blocks[cursor]["id"])
+        if visual and family_accepts(family, visual):
+            candidates[visual["id"]] = visual
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
+
+
 def normalize_content_blocks(result):
     """Keep source block identities and boundaries in code-point coordinates internally."""
     source, blocks = "", []
@@ -72,12 +178,12 @@ def normalize_content_blocks(result):
 
 
 def extract_visuals(result):
-    """Extract objects and pair only explicitly typed, unambiguous captions."""
+    """Extract objects and attach captions by explicit id, then geometry, then reading order. 歧义保持 unassigned."""
     blocks = normalize_content_blocks(result)
     raw = ordered_blocks(result)
     width, height = result.get("width") or 0, result.get("height") or 0
     same_space = result.get("coordinateSpace") == "input"
-    visuals, by_block = [], {}
+    visuals, by_block, boxes = [], {}, {}
     for index, block in enumerate(blocks):
         if block["kind"] not in VISUAL_TYPES:
             continue
@@ -100,38 +206,37 @@ def extract_visuals(result):
         for alias in (original.get("id"), original.get("visualId")):
             if alias is not None:
                 by_block[str(alias)] = visual
+        boxes[visual_id] = block_box(block) if same_space else None
         visuals.append(visual)
         block["visualId"] = visual_id
+    unassigned = []
     for index, block in enumerate(blocks):
         if block["kind"] not in CAPTION_TYPES or not block["text"]:
             continue
         explicit = raw[index].get("visualId")
         if explicit is None:
             explicit = raw[index].get("parentId")
-        candidates = []
-        if explicit is not None and str(explicit) in by_block:
-            candidates = [by_block[str(explicit)]]
-        elif explicit is None:
-            for neighbor in (index - 1, index + 1):
-                if 0 <= neighbor < len(blocks) and blocks[neighbor].get("visualId"):
-                    visual = by_block[blocks[neighbor]["id"]]
-                    compatible = (block["kind"].startswith("table") == (visual["kind"] == "table")) or block["kind"] == "caption"
-                    if compatible:
-                        candidates.append(visual)
+        family = caption_family(block)
+        if explicit is not None:
+            target = by_block.get(str(explicit))
+        else:
+            target = caption_target_by_geometry(block, blocks, visuals, boxes, family, width, height) if same_space else None
+            if target is None:
+                target = caption_target_by_neighbor(index, blocks, by_block, family)
         caption = {"id": f"caption-{index + 1:04d}", "text": block["text"], "sourceBlockIds": [block["id"]],
                    "order": index, "sourceRegions": region_for(block, width, height) if same_space else [],
-                   "associationStatus": "confirmed" if len(candidates) == 1 else "unassigned"}
-        if len(candidates) == 1:
-            visual = candidates[0]
-            caption["position"] = "before" if index < visual["blockOrder"] else "after"
-            visual["captions"].append(caption)
-        else:
-            # 未匹配的图注留在正文之外，不猜测归属。
-            caption["position"] = "after"
-            visuals.append({"id": f"unassigned-{index + 1:04d}", "kind": "caption", "blockOrder": index,
-                            "sourceBoundary": block["sourceBoundary"], "renderMode": "image", "captions": [caption],
-                            "sourceRegions": caption["sourceRegions"], "sourceImageWidth": width, "sourceImageHeight": height,
-                            "geometryStatus": "exact" if caption["sourceRegions"] else "unavailable", "status": "unassigned"})
+                   "associationStatus": "confirmed" if target else "unassigned"}
+        if target:
+            caption["position"] = "before" if index < target["blockOrder"] else "after"
+            target["captions"].append(caption)
+            continue
+        # 仍然无法确定的图注留在正文之外，不猜测归属。
+        caption["position"] = "after"
+        unassigned.append({"id": f"unassigned-{index + 1:04d}", "kind": "caption", "blockOrder": index,
+                           "sourceBoundary": block["sourceBoundary"], "renderMode": "image", "captions": [caption],
+                           "sourceRegions": caption["sourceRegions"], "sourceImageWidth": width, "sourceImageHeight": height,
+                           "geometryStatus": "exact" if caption["sourceRegions"] else "unavailable", "status": "unassigned"})
+    visuals.extend(unassigned)
     visuals.sort(key=lambda v: v["blockOrder"])
     return visuals, blocks
 
@@ -213,8 +318,7 @@ def build_reader_content(layout, page):
             "textHash": digest(displayed), "displayedText": displayed, "imageHash": image_hash,
             "status": "ready", "layoutStatus": "ready" if page.get("visualsExtracted") and current_image else "layout_unavailable",
             "items": items, "visuals": {v["id"]: v for v in visuals},
-            "warnings": (["源页图已变化，请重新提取图表。"] if not current_image else []) +
-                        (["部分历史图题或表格文字无法安全分离，请对照原页核对整理稿。"] if page.get("visualSeparationStatus") == "needs_review" else [])}
+            "warnings": ["源页图已变化，请重新处理本页。"] if not current_image else []}
 
 
 def build_visual_catalog(document):
