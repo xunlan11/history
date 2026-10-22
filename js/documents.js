@@ -380,7 +380,7 @@ function renderShelfSearchResults(listNode, countNode, scopedDocuments, query) {
   countNode.textContent = `匹配 ${matches.length} / ${scopedDocuments.length} 项`;
   for (const item of matches) listNode.append(createBookCard(item, documents.indexOf(item)));
   if (!matches.length) {
-    const empty = emptyState("没有匹配的文献，请尝试其他关键词或清空搜索。");
+    const empty = emptyState("没有匹配的文献。");
     empty.classList.add("shelf-search-empty");
     listNode.append(empty);
   }

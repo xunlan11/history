@@ -372,7 +372,11 @@ for (const useHelper of [true, false]) {
     const container = { nodeType: 1, childNodes: useHelper ? [first, auxiliary, second] : [first, second] };
     const context = setup({ readerText: container, NodeFilter: { SHOW_TEXT: 4 } });
     if (useHelper) {
-      vm.runInContext(fs.readFileSync('js/reader-text-dom.js', 'utf8'), context);
+      const readerSource = fs.readFileSync('js/reader.js', 'utf8');
+      const start = readerSource.indexOf('/* reader-text-dom:start */');
+      const end = readerSource.indexOf('/* reader-text-dom:end */');
+      if (start < 0 || end < start) throw new Error('reader.js missing reader-text-dom block');
+      vm.runInContext(readerSource.slice(start, end), context);
       context.document.createTreeWalker = () => { throw new Error('reader helper bypassed'); };
     } else {
       let index = -1;

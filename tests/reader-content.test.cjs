@@ -113,6 +113,14 @@ class FakeDocument extends FakeNode {
 }
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 const plain = (value) => JSON.parse(JSON.stringify(value));
+// getReaderTextNodes 现已合并进 reader.js，用标记注释截取该片段再注入沙箱。
+function readerTextDomSource() {
+  const source = fs.readFileSync('js/reader.js', 'utf8');
+  const start = source.indexOf('/* reader-text-dom:start */');
+  const end = source.indexOf('/* reader-text-dom:end */');
+  if (start < 0 || end < start) throw new Error('reader.js missing reader-text-dom block');
+  return source.slice(start, end);
+}
 function fixture() {
   const page = { id: 'p/1', pageNumber: 4, processingRevision: 7, imageHash: 'image-hash', imageUrl: '/original.png', text: 'A😀B\nC' };
   const item = { id: 'doc/1', pages: [page] };
@@ -136,7 +144,8 @@ function setup(overrides = {}) {
     getSelectedDocument: () => data.item, getSelectedPage: () => data.item.pages.find((page) => page.id === c.selectedPageId),
     getPagePrimaryText: (page) => page?.text || '', getPageImageSource: (page) => page?.imageUrl || '',
     fetch: async () => ({ ok: true, json: async () => data.content }), ...overrides });
-  for (const name of ['reader-text-dom', 'reader-content']) vm.runInContext(fs.readFileSync(`js/${name}.js`, 'utf8'), c);
+  vm.runInContext(readerTextDomSource(), c);
+  vm.runInContext(fs.readFileSync('js/reader-content.js', 'utf8'), c);
   return { ...data, c, document, readerText, readerOriginalPreview };
 }
 function addImage(env, width = 100, height = 200) {

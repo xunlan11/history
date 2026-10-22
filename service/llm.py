@@ -14,8 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from service.chronology import normalize_chronicle_entries
-from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, validate_result_citations
+from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, normalize_chronicle_dates, validate_result_citations
 from service.task_progress import progress_reporter, read_progress
 
 
@@ -515,7 +514,7 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
 2. 从材料中提取与主题相关的史事，按时间插入。
 3. 材料中的史事与已有条目重复时（同一史事或同一日期），合并为一条：sources 中并列多个来源，不重复叙述。
 4. 不同来源对同一史事记载冲突时，保留并列来源，并在该条的 conflict 字段写明冲突点；无冲突则 conflict 为空字符串。
-5. 只使用输入材料，不引入外部史实；不做历法换算，只按原文和上下文填写 calendarType、year、month、day、eraName、eraYear、lunarMonth、lunarDay、lunarLeap、ganzhiYear，无法确定留空。
+5. 只使用输入材料，不引入外部史实。每条必须给出两个时间字段：dateOriginal 原样摘抄材料中的时间表述（不得改写）；dateGregorian 为该时间换算成的公历纪年（农历、年号、干支均换算），格式为 YYYY 或 YYYY-MM 或 YYYY-MM-DD，只能精确到哪一级就写到哪一级；无法确定或换算没把握时 dateGregorian 留空，禁止编造。
 6. 每条 sources 必须保留 documentId、attachmentId、sourceType、pageId、pageNumber、author、title、publisher、year、quote。
 7. 输出必须是 JSON，不要输出解释文字或 Markdown。
 
@@ -524,6 +523,7 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
   "entries": [
     {{
       "dateOriginal": "原文时间表述",
+      "dateGregorian": "公历纪年，无法确定留空",
       "summary": "客观史事",
       "conflict": "冲突说明或空字符串",
       "sources": [ {{ 与生成编年相同的来源字段 }} ]
@@ -544,10 +544,10 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
 
     try:
         result = call_json_task(prompt)
-        entries, chronology_warnings = normalize_chronicle_entries(
+        entries, date_warnings = normalize_chronicle_dates(
             normalize_entries(result.get("entries"))
         )
-        warnings = list_value(result.get("warnings")) + chronology_warnings
+        warnings = list_value(result.get("warnings")) + date_warnings
         response = base_response("chronicle-supplement", ready=True)
     except LlmServiceError as exc:
         entries = []
@@ -936,9 +936,6 @@ def run_evidence_task(payload, mode: str) -> dict[str, Any]:
             checked["warnings"].append(NO_RELEVANT_MATERIAL)
             if mode == "chat":
                 checked["answer"] = conversational_reply(query, config)
-        if mode == "chronicle":
-            checked["entries"], date_warnings = normalize_chronicle_entries(checked["entries"])
-            checked["warnings"].extend(date_warnings)
         response = base_response(mode, ready=True)
         response.update(checked)
         response["warnings"] = budgeted.warnings + response.get("warnings", [])

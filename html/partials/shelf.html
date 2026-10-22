@@ -4,14 +4,13 @@
       <circle cx="10.5" cy="10.5" r="6.5"></circle>
       <path d="m16 16 5 5"></path>
     </svg>
-    <input id="shelf-search-input" type="search" placeholder="在当前目录检索" aria-label="搜索当前目录及子目录的文献信息" aria-describedby="shelf-search-hint" autocomplete="off" />
+    <input id="shelf-search-input" type="search" placeholder="在当前目录检索" aria-label="搜索当前目录及子目录的文献信息" autocomplete="off" />
     <button id="shelf-search-clear" type="button" aria-label="清空文献搜索" title="清空搜索" hidden>×</button>
-    <span class="sr-only" id="shelf-search-hint">搜索当前目录及子目录中的文献，匹配文献信息栏的所有栏目；多个关键词以空格分隔。</span>
   </form>
   <dialog class="shelf-name-dialog" id="shelf-name-dialog" aria-labelledby="shelf-name-title">
     <form>
       <h2 id="shelf-name-title">重命名</h2>
-      <input id="shelf-name-input" type="text" maxlength="80" required autocomplete="off" placeholder="例如：晚清军事史" aria-label="名称" />
+      <input id="shelf-name-input" type="text" maxlength="80" required autocomplete="off" aria-label="名称" />
       <div class="shelf-name-actions">
         <button type="button" data-shelf-name-cancel>取消</button>
         <button type="submit">保存</button>
