@@ -336,13 +336,19 @@ class Scheduler:
         return dict(row), payload, json.loads(row["checkpoint"])
 
     # —— 单页阶段任务进度（仅内存，供 /processing 读取）——
-    def _set_page_progress(self, document_id, stage, page_number, percent, detail=None, stop=None):
+    def _set_page_progress(self, document_id, stage, page_number, percent, detail=None, stop=None,
+                           monotonic=False):
         with self.progress_lock:
             if stop is not None and stop.is_set():
                 return
             stages = self.page_progress.setdefault(document_id, {})
+            value = max(0, min(100, int(percent or 0)))
+            previous = stages.get(stage)
+            if monotonic and previous and int(previous.get("pageNumber") or 0) == int(page_number):
+                # 重试会换新的进度键并从 0 开始；同一页同一阶段只允许往前推。
+                value = max(value, int(previous.get("percent") or 0))
             stages[stage] = {"pageNumber": int(page_number),
-                             "percent": max(0, min(100, int(percent or 0))), "updatedAt": self.clock(),
+                             "percent": value, "updatedAt": self.clock(),
                              **({"detail": dict(detail)} if detail else {})}
 
     def _clear_page_progress(self, document_id, stage):
@@ -403,8 +409,10 @@ class Scheduler:
                 self._set_registration_progress(document_id, stage, payload.get("percent"),
                                                 detail=payload if source == "ocr" else None, stop=stop)
             else:
+                # 大模型逐字生成时重试会从 0 重新播报，页面进度取历史最大值避免倒退。
                 self._set_page_progress(document_id, stage, page_number, payload.get("percent"),
-                                        detail=payload if source == "ocr" else None, stop=stop)
+                                        detail=payload if source == "ocr" else None, stop=stop,
+                                        monotonic=source != "ocr")
 
     @staticmethod
     def _page(doc, number):
@@ -660,7 +668,8 @@ class Scheduler:
             elif operation in {"punctuation", "proofreading"}:
                 key = f"{progress_key(doc['id'], operation, number)}:{uuid.uuid4().hex}"
                 job["llm_progress_key"] = key
-                self._set_page_progress(doc["id"], operation, number, 0)
+                # 重试不把该页该阶段已有的百分比清零，进度只许前进（完成后由 tick 清掉）。
+                self._set_page_progress(doc["id"], operation, number, 0, monotonic=True)
                 self._start_progress_watcher(lane, doc["id"], operation, number, key=key)
             # 登记元数据识别继续由大模型流式回报（同样每次尝试独立键）。
             elif operation == "metadata":

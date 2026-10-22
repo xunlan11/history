@@ -25,6 +25,14 @@ LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 # 详见 deploy/README.md；设为 1 可恢复思考模式。
 LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
+# 整页文本任务（标点 / 校对）的上下文预算。不给 num_ctx 时 Ollama 用默认 4096，
+# 一页 2600 多字的中文正文加上提示词就放不下，生成会退化成整段复读并被服务端中止
+# （2026-10-22 实测 qwen3:8b 报 "prediction aborted, token repeat limit reached"）。
+LLM_TEXT_CONTEXT_TOKENS = int(os.getenv("LLM_TEXT_CONTEXT_TOKENS", "16384"))
+# 超过这个字数的整页按段落/版面行切段分别标点，避免提示词和输出一起越过上下文。
+LLM_TEXT_CHUNK_CHARS = int(os.getenv("LLM_TEXT_CHUNK_CHARS", "6000"))
+# 模型自带的 repeat_penalty 是 1（等于关闭），长文生成时容易陷入重复。
+LLM_REPEAT_PENALTY = float(os.getenv("LLM_REPEAT_PENALTY", "1.1"))
 
 
 app = FastAPI(title="近代军史数智平台大模型统一接口")
@@ -190,6 +198,78 @@ def validate_finalize_result(source: str, output: str) -> None:
         )
 
 
+def text_task_budget(prompt: str, source_length: int) -> tuple[int, int]:
+    """按字符估算 token，给整页文本任务留足上下文与输出预算。
+
+    中文大致 1 字 1 token，估算时再留 10% 余量；输出要容纳正文加 JSON 转义，
+    所以按 1.6 倍正文长度给 num_predict，避免生成被截断成半截 JSON。
+    """
+    prompt_tokens = int(len(prompt) * 1.1) + 256
+    output_tokens = int(source_length * 1.6) + 512
+    context_tokens = max(LLM_TEXT_CONTEXT_TOKENS, prompt_tokens + output_tokens + 512)
+    context_tokens = min(context_tokens, 40960)
+    output_tokens = max(512, min(output_tokens, context_tokens - prompt_tokens - 256))
+    return context_tokens, output_tokens
+
+
+def split_text_chunks(text: str, limit: int) -> list[str]:
+    """把超长整页按自然段、版面行切成长度不超过 limit 的片段。
+
+    只在段落/换行边界切，尽量不切断句子；单行本身超长时才按字数硬切。
+    """
+    if limit <= 0 or len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for block in re.split(r"\n\s*\n", text):
+        pieces: list[str] = []
+        if len(block) <= limit:
+            pieces = [block]
+        else:
+            buffer = ""
+            for line in block.split("\n"):
+                if len(line) > limit:
+                    if buffer:
+                        pieces.append(buffer)
+                        buffer = ""
+                    pieces.extend(line[i:i + limit] for i in range(0, len(line), limit))
+                elif buffer and len(buffer) + 1 + len(line) > limit:
+                    pieces.append(buffer)
+                    buffer = line
+                else:
+                    buffer = f"{buffer}\n{line}" if buffer else line
+            if buffer:
+                pieces.append(buffer)
+        for piece in pieces:
+            if not piece.strip():
+                continue
+            if not current:
+                current = piece
+            elif len(current) + 2 + len(piece) <= limit:
+                current = f"{current}\n\n{piece}"
+            else:
+                chunks.append(current)
+                current = piece
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
+def offset_reporter(report: Any, offset: int) -> Any:
+    """把分段已生成字数折算成整页进度。
+
+    流式结束不代表结果可用（还要校验 JSON 与正文），所以这里一律不置 100，
+    整页校验通过后由调用方显式上报完成，避免进度先冲到 99% 再因重试清零。
+    """
+    if report is None:
+        return None
+
+    def inner(done_units: int, done: bool = False) -> None:
+        report(offset + done_units, False)
+
+    return inner
+
+
 def provider_configured() -> bool:
     return bool(LLM_PROVIDER and LLM_MODEL and LLM_API_BASE)
 
@@ -265,16 +345,21 @@ def task_progress(key: str) -> dict[str, Any]:
     return {"key": key, "percent": entry["percent"], "updatedAt": entry["updatedAt"]}
 
 
-@app.post("/llm/punctuate")
-def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
+def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
+                             chunk_index: int = 1, chunk_total: int = 1) -> str:
     # 逐行、逐列的换行是 OCR 版面信息（抬头字还常单独成行），不能在这里盲目合并。
     # 注意：提示词不要把任务框成「逐处判断换行是否切断句子」——实测这样会让模型退化成
     # 「按行分组 + 只在段末补句号」，长枚举段落里一个句内标点都不给。要按整页通读后逐句断句。
-    source_text = normalize_layout_text(payload.sourceText)
-    prompt = f"""
+    chunk_note = ""
+    if chunk_total > 1:
+        chunk_note = (
+            f"\n本页较长，已按版面切成 {chunk_total} 段，本次只处理第 {chunk_index} 段。"
+            "只输出这一段的结果：不要补写其它段的内容，也不要在段首或段尾添加说明。\n"
+        )
+    return f"""
 /no_think
 请给下面这一页近代军史文献（多为竖排古籍 OCR 结果）断句，并加上现代汉语标点。
-
+{chunk_note}
 待整理文本（自 OCR 版面导出：换行来自原书的一列、一行，抬头（抬格）的字词也可能单独成行；空行表示原文的段落分隔。这些换行都不是句子或自然段的边界）：
 {source_text}
 
@@ -307,16 +392,41 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 }}
 
 文献信息：
-{format_metadata(payload.metadata)}
+{format_metadata(metadata)}
 """.strip()
 
-    report = progress_reporter(payload.options, len(content_characters(source_text)))
+
+@app.post("/llm/punctuate")
+def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
+    source_text = normalize_layout_text(payload.sourceText)
+    expected_units = len(content_characters(source_text))
+    report = progress_reporter(payload.options, expected_units)
+    chunks = split_text_chunks(source_text, LLM_TEXT_CHUNK_CHARS)
+    punctuated_parts: list[str] = []
+    uncertain_items: list[Any] = []
+    warnings: list[Any] = []
+    punctuated_text = ""
+    processed = 0
     try:
-        result = call_text_task(prompt, "punctuatedText", "标点", report, extra_keys=("uncertainItems",))
-        punctuated_text = normalize_generated_text(result.get("punctuatedText"))
+        for index, chunk in enumerate(chunks, start=1):
+            prompt = build_punctuation_prompt(chunk, payload.metadata, index, len(chunks))
+            context_tokens, output_tokens = text_task_budget(prompt, len(content_characters(chunk)))
+            result = call_text_task(
+                prompt, "punctuatedText", "标点",
+                offset_reporter(report, processed),
+                extra_keys=("uncertainItems",),
+                context_tokens=context_tokens,
+                output_tokens=output_tokens,
+            )
+            punctuated_parts.append(normalize_generated_text(result.get("punctuatedText")))
+            uncertain_items.extend(list_value(result.get("uncertainItems")))
+            warnings.extend(list_value(result.get("warnings")))
+            processed += len(content_characters(chunk))
+        punctuated_text = "\n\n".join(part for part in punctuated_parts if part)
+        # 整页校验通过才算完成：生成流结束、结果被校验拒绝时不能先报 100。
         validate_punctuation_result(source_text, punctuated_text)
-        uncertain_items = list_value(result.get("uncertainItems"))
-        warnings = list_value(result.get("warnings"))
+        if report:
+            report(expected_units, True)
         response = base_response("punctuate", ready=True)
     except LlmServiceError as exc:
         punctuated_text = ""
@@ -381,11 +491,16 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 {punctuation_draft}
 """.strip()
 
-    report = progress_reporter(payload.options, len(content_characters(source_text)))
+    source_units = len(content_characters(source_text))
+    report = progress_reporter(payload.options, source_units)
+    context_tokens, output_tokens = text_task_budget(prompt, source_units)
     try:
-        result = call_text_task(prompt, "punctuatedText", "校对", report)
+        result = call_text_task(prompt, "punctuatedText", "校对", offset_reporter(report, 0),
+                                context_tokens=context_tokens, output_tokens=output_tokens)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         validate_finalize_result(source_text, punctuated_text)
+        if report:
+            report(source_units, True)
         warnings = list_value(result.get("warnings"))
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
@@ -545,7 +660,9 @@ def search(payload: SearchRequest) -> dict[str, Any]:
 def chat(payload: ChatRequest) -> dict[str, Any]:
     return run_evidence_task(payload, "chat")
 
-def call_json_task(prompt: str, on_progress: Any = None) -> dict[str, Any]:
+def call_json_task(prompt: str, on_progress: Any = None,
+                   context_tokens: int | None = None,
+                   output_tokens: int | None = None) -> dict[str, Any]:
     content = call_chat_completion(
         [
             {
@@ -559,20 +676,25 @@ def call_json_task(prompt: str, on_progress: Any = None) -> dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         temperature=0.1,
+        context_tokens=context_tokens,
+        output_tokens=output_tokens,
         on_progress=on_progress,
     )
     return parse_json_object(content)
 
 
 def call_text_task(prompt: str, key: str, task: str, on_progress: Any = None,
-                   extra_keys: tuple[str, ...] = ()) -> dict[str, Any]:
+                   extra_keys: tuple[str, ...] = (),
+                   context_tokens: int | None = None,
+                   output_tokens: int | None = None) -> dict[str, Any]:
     """生成类任务要求返回正文键（punctuatedText）。
 
     模型偶尔会忽略返回格式，例如把论文首页当成文献信息页，返回 title/authors/abstract
     等字段而没有正文。同一个提示词重发往往仍然失败（调度器重试时实测两次都是空正文），
     所以这里用一次带纠正说明的重试代替。
     """
-    result = call_json_task(prompt, on_progress=on_progress)
+    result = call_json_task(prompt, on_progress=on_progress,
+                            context_tokens=context_tokens, output_tokens=output_tokens)
     if isinstance(result.get(key), str) and result[key].strip():
         return result
     allowed = [key, *extra_keys, "warnings"]
@@ -582,7 +704,7 @@ def call_text_task(prompt: str, key: str, task: str, on_progress: Any = None,
 只允许返回一个 JSON 对象，且只能包含 {'、'.join(f'"{name}"' for name in allowed)} 这些键；
 不要输出 title、authors、abstract、keywords、references、journal 之类的字段。
 "{key}" 必须是上面输入文本的完整整理结果，不能摘要、不能省略、不能只写文献信息。
-""", on_progress=on_progress)
+""", on_progress=on_progress, context_tokens=context_tokens, output_tokens=output_tokens)
     if isinstance(result.get(key), str) and result[key].strip():
         return result
     raise LlmServiceError(
@@ -644,6 +766,9 @@ def call_ollama_chat_completion(
         "think": LLM_OLLAMA_THINK,
         "options": {
             "temperature": temperature,
+            # 模型默认 repeat_penalty 为 1（等于关闭），长文生成时容易整段复读并被
+            # 服务端以 token repeat limit 中止；显式给一个轻微的重复惩罚。
+            "repeat_penalty": LLM_REPEAT_PENALTY,
         },
     }
     if context_tokens is not None:
