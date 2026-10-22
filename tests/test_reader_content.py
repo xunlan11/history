@@ -126,8 +126,7 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
     page["visuals"].append(dict(page["visuals"][0], id="another"))
     doc = {"id":"d", "visibility":"private", "pages":[page]}
     data.upsert_documents(connection,[doc],"now",user)
-    stored = json.loads(connection.execute("SELECT payload FROM documents WHERE id='d'").fetchone()["payload"])
-    stored_page = stored["pages"][0]
+    stored_page = data.load_document_pages(connection, "d")[0]
     rows = list(connection.execute("SELECT role FROM document_files WHERE document_id='d' AND role LIKE 'page-visual:%'"))
     assert len(rows) == 2
     assert stored_page["visuals"][0]["url"] != stored_page["visuals"][-1]["url"]

@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "failed", "cancelled"}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = float(os.getenv("PROCESSING_RETRY_SECONDS", "10"))
+# 渲染页既用于阅读回显，也是 OCR 的输入图；JPEG q90 在 1.5 倍缩放下肉眼无损，
+# 体积约为 PNG 的一半，避免单页 data URL 接近 1MB。
+RENDER_SCALE = 1.5
+RENDER_JPEG_QUALITY = 90
+# 校对只用于判断本页开头的续句与简称，喂整页会让提示词越过模型上下文。
+PREVIOUS_PAGE_TAIL_CHARS = int(os.getenv("PROCESSING_PREVIOUS_PAGE_TAIL_CHARS", "300"))
 PROCESSING_STAGES = ("ocr", "variant", "punctuation", "proofreading")
 STAGE_LABELS = {
     "ocr": "文字识别",
@@ -68,6 +74,20 @@ def ensure_schema(connection):
 
 def metadata(document):
     return {key: str(document.get(key) or "") for key in ("title", "author", "year", "publisher")}
+
+
+def previous_page_tail(document, page_number, limit=PREVIOUS_PAGE_TAIL_CHARS):
+    """上一页末尾片段：校对只需要承接关系，不能再把整页正文塞进提示词。"""
+    candidates = [page for page in document.get("pages") or []
+                  if int(page.get("pageNumber") or 0) < page_number
+                  and (page.get("punctuatedText") or page.get("punctuationDraftText") or page.get("normalizedText"))]
+    if not candidates:
+        return []
+    page = max(candidates, key=lambda item: int(item.get("pageNumber") or 0))
+    text = str(page.get("punctuatedText") or page.get("punctuationDraftText") or page.get("normalizedText") or "").strip()
+    if not text:
+        return []
+    return [{"pageNumber": page.get("pageNumber"), "text": ("…… " + text[-limit:].lstrip()) if len(text) > limit else text}]
 
 
 def progress_key(document_id, operation, page_number):
@@ -162,13 +182,17 @@ class HttpServices:
         if operation == "render":
             if source.suffix.lower() != ".pdf":
                 mime = mimetypes.guess_type(source.name)[0] or "image/png"
+                suffix = source.suffix.lower() or ".png"
                 content = source.read_bytes()
             else:
                 import fitz
                 with fitz.open(source) as pdf:
-                    content = pdf.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).tobytes("png")
-                mime = "image/png"
-            return {"imageDataUrl": f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"}
+                    pixmap = pdf.load_page(page_number - 1).get_pixmap(
+                        matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False)
+                content = pixmap.tobytes("jpeg", jpg_quality=RENDER_JPEG_QUALITY)
+                mime, suffix = "image/jpeg", ".jpg"
+            return {"imageDataUrl": f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}",
+                    "imageName": f"page-{page_number}{suffix}"}
         if operation in {"ocr", "visual_backfill"}:
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             image_path = (Path(job["asset_root"]) / page["imageFile"]["path"]).resolve()
@@ -193,18 +217,17 @@ class HttpServices:
             return result
         if operation == "proofreading":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
-            if not page.get("ocrText", "").strip():
+            draft = str(page.get("punctuationDraftText") or page.get("normalizedText") or page.get("ocrText") or "").strip()
+            if not draft:
                 return {"punctuatedText": "", "warnings": []}
-            previous = sorted((p for p in document["pages"] if p["pageNumber"] < page_number and (
-                p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText"))),
-                key=lambda p: p["pageNumber"])[-2:]
+            # 只提交标点稿和上一页末尾：OCR 原文、简体稿和各页整页上下文都交给模型，
+            # 会让提示词超出模型上下文被截断，反而更容易触发校验失败重试。
             result = self._llm("finalize-page", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
-                "metadata": metadata(document), "ocrText": page.get("ocrText", ""),
-                "normalizedText": page.get("normalizedText", ""),
-                "punctuationDraftText": page.get("punctuationDraftText") or page.get("normalizedText", ""),
+                "metadata": metadata(document),
+                "punctuationDraftText": draft,
                 "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "proofreading", page_number)},
-                "previousPages": [{"pageNumber": p["pageNumber"], "text": p.get("punctuatedText") or p.get("punctuationDraftText") or p.get("normalizedText", "")} for p in previous]})
+                "previousPages": previous_page_tail(document, page_number)})
             if not result.get("punctuatedText"):
                 raise ProcessingFailure("校对服务没有返回正文")
             return result
@@ -218,6 +241,10 @@ def preserve_server_fields(connection, document):
     if not row or not job or ("checkpoint" in job and json.loads(job["checkpoint"]).get("visualOnly")):
         return document
     stored = json.loads(row["payload"])
+    # 页正文以 document_pages 为准，payload 里不再内嵌 pages。
+    stored["pages"] = [json.loads(page["payload"]) for page in connection.execute(
+        "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
+        (document["id"],))]
     current_revision = (stored.get("processingTask") or {}).get("revision", 0)
     client_revision = (document.get("processingTask") or {}).get("revision", -1)
     baseline = (document.get("processingTask") or {}).get("metadataSnapshot") or {}
@@ -249,19 +276,30 @@ def preserve_server_fields(connection, document):
     return document
 
 
-def save_job_state(data, connection, job, doc, cp):
+def save_job_state(data, connection, job, doc, cp, page_ids=None):
+    """保存任务状态与页内容。
+
+    `page_ids`：None = 全量对账（结构变化、浏览器推送）；[] = 只保存任务状态；
+    非空列表 = 只写这些页。阶段完成时只传当前页，不再重写整本文献的每一页。
+    """
     stamp = data.now_iso()
     doc["updatedAt"] = stamp
     task = doc.get("processingTask") or {}
     task["revision"] = int(task.get("revision") or 0) + 1
     task["metadataSnapshot"] = metadata(doc)
     doc["processingTask"] = task
-    data.materialize_document_assets(connection, doc["id"], doc, stamp)
-    for page in doc.get("pages", []):
+    allowed = None if page_ids is None else set(page_ids)
+    data.materialize_document_assets(connection, doc["id"], doc, stamp, page_ids=allowed)
+    pages = doc.get("pages") or []
+    touched = pages if allowed is None else [page for page in pages if page.get("id") in allowed]
+    for page in touched:
         reader_index.reconcile_reader_index(connection, doc["id"], page, stamp)
     connection.execute("UPDATE documents SET payload=?, updated_at=?, version=version+1 WHERE id=? AND deleted_at IS NULL",
-                       (data.json_dump(doc), stamp, doc["id"]))
-    data.upsert_document_pages(connection, doc["id"], doc.get("pages", []), stamp)
+                       (data.document_payload(doc), stamp, doc["id"]))
+    if allowed is None:
+        data.upsert_document_pages(connection, doc["id"], pages, stamp)
+    elif touched:
+        data.upsert_document_pages(connection, doc["id"], touched, stamp, sweep=False)
     connection.execute("UPDATE processing_jobs SET phase=?, status=?, checkpoint=?, retry_at=?, updated_at=? WHERE document_id=?",
                        (job["phase"], job["status"], data.json_dump(cp), job["retry_at"], stamp, doc["id"]))
     data.bump_sync_version(connection)
@@ -290,6 +328,9 @@ class Scheduler:
         if not row or not document or (row["status"] in TERMINAL and not allow_terminal):
             return None
         payload = json.loads(document["payload"])
+        payload["pages"] = [json.loads(row["payload"]) for row in connection.execute(
+            "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
+            (document_id,))]
         if allow_terminal:
             self.data.rehydrate_document_assets(connection, payload)
         return dict(row), payload, json.loads(row["checkpoint"])
@@ -507,13 +548,14 @@ class Scheduler:
                     task["totalPages"] = result["totalPages"]
                 elif operation == "render":
                     page = self._page(doc, number)
-                    page.update(imageDataUrl=result["imageDataUrl"], imageName=f"page-{number}.png")
+                    page.update(imageDataUrl=result["imageDataUrl"],
+                                imageName=result.get("imageName") or f"page-{number}")
                     cp["renderedPage"] = number
                 elif operation == "ocr":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page.update(ocrText=str(result.get("text") or ""), ocr={k: result.get(k) for k in ("confidence", "engine", "warnings", "width", "height")}, status="已识别",
-                                imageName=page.get("imageName") or f"page-{number}.png")
+                                imageName=page.get("imageName") or f"page-{number}")
                     page.update(visuals=result.get("visuals") or [], visualsExtracted=True)
                     self._set_stage(page, "ocr", "done")
                     reader_index.save_ocr_layout(connection, doc["id"], page, result, self.data.now_iso())
@@ -537,7 +579,14 @@ class Scheduler:
                                 proofreadingWarnings=result.get("warnings") or [], status="已生成整理稿")
                     self._set_stage(page, "proofreading", "done")
             self._update_status(job, doc, cp)
-            save_job_state(self.data, connection, job, doc, cp)
+            if operation == "prepare":
+                # prepare 会按真实页数重建页列表，必须全量对账（含占位页的软删除）。
+                save_job_state(self.data, connection, job, doc, cp)
+            elif operation in {"render", "ocr", "variant", "punctuation", "proofreading"}:
+                save_job_state(self.data, connection, job, doc, cp, page_ids=[self._page(doc, number)["id"]])
+            else:
+                # 登记类操作只改任务状态，不动页内容。
+                save_job_state(self.data, connection, job, doc, cp, page_ids=[])
 
     def _update_status(self, job, doc, cp):
         if job["status"] in TERMINAL:
@@ -587,7 +636,8 @@ class Scheduler:
             if job["phase"] == "registration":
                 doc["registration"]["stage"] = "metadata"
             self._update_status(job, doc, cp)
-            save_job_state(self.data, connection, job, doc, cp)
+            # 启动阶段只记录任务状态，页内容要到结果回写时才变。
+            save_job_state(self.data, connection, job, doc, cp, page_ids=[])
         job["asset_root"] = str(self.data.FILE_STORAGE_DIR)
         source_path = (self.data.FILE_STORAGE_DIR / job["source_path"]).resolve()
         if not source_path.is_relative_to(self.data.FILE_STORAGE_DIR.resolve()):
@@ -631,7 +681,7 @@ class Scheduler:
                 job, doc, cp = loaded
                 if not doc["processingTask"].get("pausedForRegistration"):
                     doc["processingTask"]["pausedForRegistration"] = True
-                    save_job_state(self.data, connection, job, doc, cp)
+                    save_job_state(self.data, connection, job, doc, cp, page_ids=[])
 
     def _launch_visual_backfill(self):
         if self.running:
@@ -705,7 +755,8 @@ class Scheduler:
                     page.setdefault("visualMigrationOriginal", original)
                 page.update(visuals=result.get("visuals") or [], visualsExtracted=True,
                             processingRevision=int(page.get("processingRevision") or 0) + 1)
-                self.data.materialize_document_assets(connection, doc["id"], doc, self.data.now_iso())
+                self.data.materialize_document_assets(connection, doc["id"], doc, self.data.now_iso(),
+                                                      page_ids={page["id"]} if page else set())
                 reader_index.save_ocr_layout(connection, doc["id"], page, result, self.data.now_iso())
                 request.update(status="completed", error="")
                 connection.execute("RELEASE SAVEPOINT visual_backfill_write")
@@ -715,7 +766,7 @@ class Scheduler:
                 doc = original_doc
                 request["attempts"] = request.get("attempts", 0) + 1
                 request.update(status="queued" if isinstance(exc, ServiceUnavailable) and request["attempts"] < MAX_ATTEMPTS else "failed", error=str(exc), retryAt=self.clock() + RETRY_SECONDS)
-            save_job_state(self.data, connection, job, doc, cp)
+            save_job_state(self.data, connection, job, doc, cp, page_ids=[page["id"]] if page else [])
 
     def tick(self):
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
@@ -785,7 +836,7 @@ class Scheduler:
                             message="正文处理及结果保存完成" + ("，失败页需人工处理" if task.get("failedPages") else ""))
                 task["completedPages"] = total
                 doc["status"] = "已完成"
-                save_job_state(self.data, connection, job, doc, saved)
+                save_job_state(self.data, connection, job, doc, saved, page_ids=[])
             return
         for lane, operation, number in self._body_operations(job, doc, cp, total):
             key = f"{operation}:{number}"
@@ -895,7 +946,7 @@ class Scheduler:
                 if loaded:
                     job, doc, cp = loaded
                     doc["processingTask"]["activeStages"] = {}
-                    save_job_state(self.data, connection, job, doc, cp)
+                    save_job_state(self.data, connection, job, doc, cp, page_ids=[])
         return True
 
     def _run(self):

@@ -56,6 +56,39 @@ def count_tokens(messages: list[dict], config: BudgetConfig) -> int:
     return len(_tokenizer(config.tokenizer_path).encode(text).ids) if config.tokenizer_path else len(text.encode("utf-8"))
 
 
+HISTORY_TURN_LIMIT = 6
+HISTORY_ANSWER_LIMIT = 600
+
+
+def compact_history(history: list[dict]) -> list[dict]:
+    """历史只保留问答本身。
+
+    前端回传的 payload 里还带着每轮展示用的检索结果（每条含至多 800 字原句），
+    单轮可达 20KB。原样塞进提示词会吃光上下文预算：fit_prompt_budget 只能把
+    历史整段丢弃（模型因此完全接不上上一轮），证据也会被裁到只剩一两片。
+    """
+    if not isinstance(history, list):
+        return []
+    compact: list[dict] = []
+    for turn in history[-HISTORY_TURN_LIMIT:]:
+        if not isinstance(turn, dict):
+            continue
+        payload = turn.get("payload") if isinstance(turn.get("payload"), dict) else {}
+        digest = payload.get("answer")
+        if not isinstance(digest, str) or not digest.strip():
+            entries = payload.get("entries")
+            if isinstance(entries, list):
+                digest = "\n".join(str(entry.get("summary") or "") for entry in entries[:8] if isinstance(entry, dict))
+            elif isinstance(payload.get("matches"), list):
+                digest = "；".join(str(match.get("quote") or "") for match in payload["matches"][:3] if isinstance(match, dict))
+        compact.append({
+            "mode": turn.get("mode"),
+            "prompt": str(turn.get("prompt") or "")[:200],
+            "payload": {"answer": str(digest or "")[:HISTORY_ANSWER_LIMIT]},
+        })
+    return compact
+
+
 def build_evidence_context(evidence: list[dict]) -> list[dict]:
     return [{k: v for k, v in e.items() if k in {"chunkId", "documentId", "attachmentId", "sourceType", "title", "author", "year", "publisher", "pageId", "pageNumber", "sourceLayer", "text"}} for e in evidence]
 
@@ -80,7 +113,7 @@ def evidence_messages(query: str, mode: str, evidence: list[dict], history: list
 def fit_prompt_budget(query: str, mode: str, evidence: list[dict], history: list[dict], config: BudgetConfig) -> BudgetedRequest:
     if config.context_tokens <= config.output_tokens + config.template_margin or config.output_tokens < 1 or config.template_margin < 0:
         raise EvidenceError("模型上下文预算配置无效")
-    evidence, history = copy.deepcopy(evidence), copy.deepcopy(history)
+    evidence, history = copy.deepcopy(evidence), compact_history(copy.deepcopy(history))
     warnings = []
     budget = config.context_tokens - config.output_tokens - config.template_margin
     if count_tokens(evidence_messages(query, mode, [], []), config) > budget:

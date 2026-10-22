@@ -857,7 +857,13 @@ def materialize_document_assets(
     document_id: str,
     document: dict[str, Any],
     timestamp: str,
+    page_ids: set[str] | None = None,
 ) -> None:
+    """把内嵌的 data URL 落盘为文件资产。
+
+    `page_ids` 非空时只处理这些页，供调度器每阶段完成时增量保存使用；
+    默认 None 表示全量（浏览器的整本推送、下载副本等）。
+    """
     cover_data_url = str(document.get("coverImageDataUrl") or "")
     if cover_data_url.startswith("data:"):
         asset = store_data_url_asset(
@@ -874,6 +880,8 @@ def materialize_document_assets(
     for page in document.get("pages") or []:
         page_id = str(page.get("id") or "").strip()
         if not page_id:
+            continue
+        if page_ids is not None and page_id not in page_ids:
             continue
         image_data_url = str(page.get("imageDataUrl") or "")
         if image_data_url.startswith("data:"):
@@ -922,6 +930,25 @@ def rehydrate_document_assets(connection: sqlite3.Connection, document: dict[str
     return document
 
 
+def load_document_pages(connection: sqlite3.Connection, document_id: str) -> list[dict[str, Any]]:
+    """页正文只存在 document_pages；documents.payload 不再内嵌 pages。"""
+    return [json_load(row["payload"]) for row in connection.execute(
+        "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
+        (str(document_id),))]
+
+
+def attach_document_pages(connection: sqlite3.Connection, document: dict[str, Any], rehydrate: bool = False) -> dict[str, Any]:
+    document["pages"] = load_document_pages(connection, document.get("id"))
+    if rehydrate:
+        rehydrate_document_assets(connection, document)
+    return document
+
+
+def document_payload(document: dict[str, Any]) -> str:
+    """写入 documents.payload 时去掉页列表，避免每次阶段完成都重写整本正文。"""
+    return json_dump({key: value for key, value in document.items() if key != "pages"})
+
+
 def active_payloads(connection: sqlite3.Connection, table: Literal["documents", "conversations"], user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     where = f"{table}.deleted_at IS NULL"
     params: tuple[Any, ...] = ()
@@ -948,6 +975,19 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
         """, params).fetchall()
     payloads = [json_load(row["payload"]) for row in rows]
     if table == "documents":
+        ids = [str(payload.get("id") or "") for payload in payloads]
+        pages_by_document: dict[str, list[dict[str, Any]]] = {}
+        for start in range(0, len(ids), 400):
+            chunk = [value for value in ids[start:start + 400] if value]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _ in chunk)
+            for page_row in connection.execute(
+                f"SELECT document_id,payload FROM document_pages WHERE deleted_at IS NULL "
+                f"AND document_id IN ({placeholders}) ORDER BY page_number", chunk):
+                pages_by_document.setdefault(page_row["document_id"], []).append(json_load(page_row["payload"]))
+        for payload in payloads:
+            payload["pages"] = pages_by_document.get(str(payload.get("id") or ""), [])
         result = []
         for row, payload in zip(rows, payloads):
             provenance = payload.pop("provenance", {})
@@ -1009,7 +1049,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             if provenance:
                 stored_document["provenance"] = provenance
         if existing:
-            server_pages = {p["id"]: p for p in json_load(existing["payload"]).get("pages", [])}
+            server_pages = {page["id"]: page for page in load_document_pages(connection, document_id)}
             for page in stored_document.get("pages") or []:
                 old_page = server_pages.get(page.get("id"), {})
                 for key in ("visuals", "visualsExtracted", "visualMigrationOriginal", "visualSeparationStatus"):
@@ -1020,7 +1060,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
         materialize_document_assets(connection, document_id, stored_document, timestamp)
         for page in stored_document.get("pages") or []:
             reader_index.reconcile_reader_index(connection, document_id, page, timestamp)
-        payload = json_dump(stored_document)
+        payload = document_payload(stored_document)
 
         visibility = "public" if stored_document.get("visibility") == "public" else "private"
         if existing:
@@ -1049,7 +1089,12 @@ def upsert_document_pages(
     document_id: str,
     pages: list[dict[str, Any]],
     timestamp: str,
+    sweep: bool = True,
 ) -> None:
+    """写入页行。`sweep=False` 时不排查已删除页，也不做空间回收。
+
+    调度器每个阶段只传发生变化的那一页，避免把整本文献的每一页都重写一遍。
+    """
     incoming_ids: set[str] = set()
 
     for page in pages:
@@ -1086,6 +1131,9 @@ def upsert_document_pages(
             )
 
         retrieval.reconcile_page(connection, document_id, page, timestamp)
+
+    if not sweep:
+        return
 
     rows = connection.execute(
         "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
@@ -1549,7 +1597,7 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
         "stageProgress": {stage: {"done": 0, "total": 0} for stage in processing_scheduler.PROCESSING_STAGES},
         "failedPages": []}
     document.update(status="登记中", updatedAt=stamp)
-    connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(document), stamp, document_id))
+    connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(document), stamp, document_id))
     return document
 
 
@@ -1609,7 +1657,7 @@ def download_public_document(document_id: str) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail="公开文献不存在或已取消公开")
             if row["owner_id"] == user["id"]:
                 raise HTTPException(status_code=409, detail="这篇文献已属于你的文献库")
-            document = json_load(row["payload"])
+            document = attach_document_pages(connection, json_load(row["payload"]))
             provenance = document.get("provenance") or {}
             creator = provenance.get("creator") or {"username": row["owner_username"] or "创建者信息不可用"}
             timestamp = now_iso()
@@ -1628,7 +1676,7 @@ def download_public_document(document_id: str) -> dict[str, Any]:
                 page.get("punctuatedText") for page in document["pages"]) else "待整理"
             upsert_documents(connection, [document], timestamp, user)
             stored = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
-            payload = json_load(stored["payload"])
+            payload = attach_document_pages(connection, json_load(stored["payload"]))
             old_page_ids = {new_id: old_id for old_id, new_id in page_ids.items()}
             for page in payload.get("pages") or []:
                 reader_index.copy_reader_index(connection, document_id, old_page_ids[page["id"]],
@@ -1636,7 +1684,7 @@ def download_public_document(document_id: str) -> dict[str, Any]:
             upsert_document_pages(connection, document["id"], payload.get("pages") or [], timestamp)
             payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
                                      "sourceDocumentId": document_id}
-            connection.execute("UPDATE documents SET payload=? WHERE id=?", (json_dump(payload), document["id"]))
+            connection.execute("UPDATE documents SET payload=? WHERE id=?", (document_payload(payload), document["id"]))
             cursor = bump_sync_version(connection)
             result = public_processing_document(connection, document["id"], user)
         return {"document": result, "syncCursor": str(cursor)}
@@ -1752,7 +1800,7 @@ def remove_failed_processing_page(document_id: str, page_number: int):
         row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=409, detail="文献没有后端任务")
-        document = json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"])
+        document = attach_document_pages(connection, json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]))
         page = next((p for p in document.get("pages", []) if p.get("pageNumber") == page_number), None)
         if not page or not page.get("failureStage"):
             raise HTTPException(status_code=409, detail="只能删除已标注的失败页")
@@ -1786,7 +1834,7 @@ def cancel_document_processing(document_id: str):
             task = doc.get("processingTask") or {}
             task.update(status="已取消", activeStages={}, finishedAt=now_iso(), revision=int(task.get("revision") or 0) + 1)
             doc.update(status="已取消", processingTask=task)
-            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(doc), now_iso(), document_id))
+            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(doc), now_iso(), document_id))
             bump_sync_version(connection)
         return {"status": "ok"}
 
@@ -1830,7 +1878,7 @@ def retry_document_processing(document_id: str):
             if row["phase"] == "registration":
                 document["registration"].update(status="running", error="")
             document.update(status=document["processingTask"]["status"], updatedAt=stamp)
-            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (json_dump(document), stamp, document_id))
+            connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(document), stamp, document_id))
             bump_sync_version(connection)
         return {"document": public_processing_document(connection, document_id, user)}
 
@@ -2380,8 +2428,7 @@ def extract_page_visuals(document_id: str, page_id: str):
         connection.execute("BEGIN IMMEDIATE")
         require_owned_document(connection, document_id, user)
         require_visible_document_page(connection, user, document_id, page_id)
-        doc = json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"])
-        rehydrate_document_assets(connection, doc)
+        doc = attach_document_pages(connection, json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]), rehydrate=True)
         page = next((p for p in doc.get("pages", []) if p["id"] == page_id), None)
         if not page or not (page.get("imageFile") or {}).get("path"):
             raise HTTPException(status_code=409, detail="本页没有可用原图，无法补提取")

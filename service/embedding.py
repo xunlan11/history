@@ -15,6 +15,10 @@ from service.retrieval_types import CHUNKER_VERSION
 
 
 DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b-q8_0"
+# 嵌入模型在服务端是纯 CPU 进程：空闲 5 分钟（Ollama 默认）被卸载后，
+# 下一次检索要重新加载约 18 秒，用户感知为「第一句特别慢」。
+# 这里按请求传 keep_alive 让它常驻，可用 EMBEDDING_KEEP_ALIVE 覆盖（"0" 表示沿用服务端默认）。
+DEFAULT_KEEP_ALIVE = "1h"
 DEFAULT_QUERY_PREFIX = (
     "Instruct: Given a question about historical documents, retrieve relevant passages "
     "that answer the question\nQuery: "
@@ -99,7 +103,11 @@ class EmbeddingClient:
     def _embed(self, texts: list[str], dimensions: int | None = None) -> list[list[float]]:
         if not texts:
             return []
-        result = self._request("/api/embed", {"model": self.model, "input": texts, "truncate": False})
+        payload = {"model": self.model, "input": texts, "truncate": False}
+        keep_alive = os.getenv("EMBEDDING_KEEP_ALIVE", DEFAULT_KEEP_ALIVE).strip()
+        if keep_alive and keep_alive != "0":
+            payload["keep_alive"] = keep_alive
+        result = self._request("/api/embed", payload)
         vectors = result.get("embeddings")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
             raise EmbeddingError("嵌入返回数量与输入不一致")

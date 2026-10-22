@@ -28,7 +28,6 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 2. 文献合并。
 3. 大串小并自动分解处理。
 4. 补充上传。
-5. 速度优化。
 
 ### 测试
 

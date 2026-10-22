@@ -342,36 +342,31 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
 
 @app.post("/llm/finalize-page")
 def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
-    # 参考层保留 OCR 的逐行版面（抬头另起一行的信息也在这里），只清理空白；
-    # 正文的换行由标点结果决定，不要照抄参考层的逐行排版。
-    ocr_text = normalize_layout_text(payload.ocrText)
+    # 只把标点稿和上一页末尾交给模型。OCR 原文、OpenCC 简体稿与各页整页上下文
+    # 与标点稿高度重复，全部塞进来会超出模型上下文（实测 4096）被截断，
+    # 截断后结果缩水又会触发重试。
     normalized_text = normalize_layout_text(payload.normalizedText or payload.ocrText)
     punctuation_draft = normalize_layout_text(payload.punctuationDraftText)
-    source_text = punctuation_draft or normalized_text or ocr_text
+    source_text = punctuation_draft or normalized_text or normalize_layout_text(payload.ocrText)
     previous_pages = "\n\n".join(
-        f"第 {page.pageNumber or '?'} 页：\n{normalize_layout_text(page.text)}"
-        for page in payload.previousPages
-        if page.text.strip()
+        normalize_layout_text(page.text) for page in payload.previousPages if page.text.strip()
     ) or "无"
     prompt = f"""
 /no_think
-请将一页近代军史文献 OCR 文本整理成一版可继续人工编辑的正文。
+请把这一页近代军史文献的标点稿整理成可继续人工编辑的正文。
 
-任务：
-1. OCR 原始录文仅作为核对底本；输入文本已经由 OpenCC 完成简体转换，并已经完成一次断句和标点。
-2. 修正常见 OCR 错字、漏字、重复字、断行和明显排版噪声，但只能依据 OCR 底本、当前页文本和上下文作出有依据的修改。只改确有把握的字词，不要整段改写，也不要把正文写成摘要。
-3. 校对结果必须使用简体中文，修正错字、补回漏字时也必须使用简体，不得混入繁体字；OCR 原始录文、文献信息和前页上下文中的繁体字形仅供参考，不得照搬到正文。
-4. 以已有标点文本为基础，只有内容修正导致句界变化时才调整相关标点；输入已经逐句标点，不要退回成整段无标点，也不要在行尾只补句号。
-5. 保留原文意思和专名信息，不增补史实。
-6. OCR 原始录文和简体文本是版面文本：每一行的换行来自原书的一列、一行，或为抬头（抬格）而单独排出的字词，都不是句子或自然段的边界。参考层不要照抄成逐行排版，也不要按原版式逆序；正文只保留自然段分隔，不要按行分组或按行成段。
-7. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
-8. 可参考前页整理文本判断本页开头的续句、承接关系、简称和省略信息，但不得把前页文字重复写入本页。
-9. 必须保留并恢复自然段：输入已有段落时原样保留；输入没有可靠段落时，按语义分成自然段，每段通常包含 2 至 5 个完整句子。段落之间必须使用两个换行字符（JSON 字符串中写作 \\n\\n），不要把整页压成一个大段，也不要每句话单独成段；输出里不要残留逐行换行。
-10. 输出必须是 JSON，不要输出解释文字。
+要求：
+1. 输入已经完成简体转换、断句和标点；只做轻度整理：修正确有把握的 OCR 错字、漏字、重复字、断行和明显排版噪声，有依据才改，不整段改写、不概括、不翻译、不增补史实。
+2. 保留原有标点；只有改字导致句界变化时才调整相关标点，不要退回成无标点，也不要在行尾只补句号。
+3. 结果必须使用简体中文，专名、年代、档案号原样保留。
+4. 保留自然段：段落之间用两个换行字符（JSON 字符串中写作 \\n\\n），不要按行分组，也不要每句单独成段；输出里不要残留逐行换行。
+5. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
+6. 上一页末尾只用于判断本页开头的续句、承接关系和简称，不得把上一页文字重复写入本页。
+7. 只输出 JSON，不要输出解释文字。
 
 返回格式（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段）：
 {{
-  "punctuatedText": "简体标点文本",
+  "punctuatedText": "整理后的简体正文",
   "warnings": ["处理提示"]
 }}
 
@@ -379,16 +374,10 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 文献信息：
 {format_metadata(payload.metadata)}
 
-前页整理文本（仅作上下文）：
+上一页末尾（仅作上下文）：
 {previous_pages}
 
-OCR 原始录文：
-{ocr_text}
-
-OpenCC 简体文本：
-{normalized_text}
-
-已有标点文本：
+待整理正文（标点稿）：
 {punctuation_draft}
 """.strip()
 
