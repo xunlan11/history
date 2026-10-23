@@ -665,14 +665,15 @@ textarea {
 
 .processing-mode-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 「大串小并」里带着页数输入框，给第一列多一点宽度 */
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
 }
 
 /* 用 label 前缀提升优先级，避免被全局 label { display: grid } 撑成竖排 */
 label.processing-mode-option {
   position: relative;
-  display: block;
+  display: flex;
   margin: 0;
   cursor: pointer;
   color: var(--text);
@@ -681,7 +682,8 @@ label.processing-mode-option {
   line-height: 1.4;
 }
 
-.processing-mode-option input {
+/* 只隐藏单选按钮本身，别影响选项内部的数字输入框 */
+.processing-mode-option > input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -694,22 +696,46 @@ label.processing-mode-option {
   white-space: nowrap;
 }
 
-.processing-mode-option span {
+.processing-mode-option > span {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 9px;
   padding: 6px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfdfc;
   text-align: center;
+  white-space: nowrap;
   transition: border-color 140ms ease, background 140ms ease,
     color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
+/* 两行选项：上行标题、下行参数；圆点在左侧与两行整体垂直居中 */
+.processing-mode-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.processing-mode-text > strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.processing-mode-text > small {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* 常驻的圆形指示器，选中时填充，避免文字左右跳动 */
-.processing-mode-option span::before {
+.processing-mode-option > span::before {
   content: "";
   flex: none;
   width: 14px;
@@ -721,16 +747,16 @@ label.processing-mode-option {
   transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
 }
 
-.processing-mode-option:hover span {
+.processing-mode-option:hover > span {
   border-color: var(--primary);
   background: #f2f7f5;
 }
 
-.processing-mode-option:hover span::before {
+.processing-mode-option:hover > span::before {
   border-color: var(--primary);
 }
 
-.processing-mode-option:active span {
+.processing-mode-option:active > span {
   transform: translateY(1px);
 }
 
@@ -753,30 +779,61 @@ label.processing-mode-option {
   outline-offset: 2px;
 }
 
-/* 分块链路的块大小：只在大串小并时可用 */
+/* 每部分页数：缩在「大串小并」选项里，只有选中该项才可编辑 */
 .processing-chunk-size {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 9px;
-  font-size: 12px;
-  font-weight: 600;
+  gap: 1px;
+  margin-left: 2px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.processing-chunk-size em {
+  font-style: normal;
+  opacity: 0.7;
 }
 
 .processing-chunk-size input {
-  width: 4.5rem;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fbfdfc;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
+  width: 2.4em;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  appearance: textfield;
+  -moz-appearance: textfield;
 }
 
+.processing-chunk-size input::-webkit-outer-spin-button,
+.processing-chunk-size input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 选中「大串小并」后才有输入框的样子 */
+.processing-mode-option > input:checked + span .processing-chunk-size input {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+/* 没选中时就是普通文字，且点击落到整个选项上 */
 .processing-chunk-size input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* 窄屏改竖排，避免「大串小并 3 页」被挤成单字竖排 */
+@media (max-width: 520px) {
+  .processing-mode-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 textarea {

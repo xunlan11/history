@@ -48,6 +48,15 @@
       <legend>处理方式</legend>
       <div class="processing-mode-options">
         <label class="processing-mode-option">
+          <input type="radio" name="processingMode" value="chunked" checked />
+          <span>
+            <span class="processing-mode-text">
+              <strong>大串小并</strong>
+              <small>每部分<span class="processing-chunk-size"><input id="chunk-size-input" name="chunkSize" type="number" min="1" max="10" step="1" value="3" inputmode="numeric" aria-label="每部分页数" /><em>页</em></span></small>
+            </span>
+          </span>
+        </label>
+        <label class="processing-mode-option">
           <input type="radio" name="processingMode" value="serial" />
           <span>串行</span>
         </label>
@@ -55,15 +64,7 @@
           <input type="radio" name="processingMode" value="parallel" />
           <span>并行</span>
         </label>
-        <label class="processing-mode-option">
-          <input type="radio" name="processingMode" value="chunked" checked />
-          <span>大串小并</span>
-        </label>
       </div>
-      <label class="processing-chunk-size">
-        每部分页数
-        <input id="chunk-size-input" name="chunkSize" type="number" min="1" max="10" step="1" value="3" inputmode="numeric" />
-      </label>
     </fieldset>
     <button class="primary-button" type="submit">登记</button>
   </form>

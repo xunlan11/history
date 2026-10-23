@@ -144,14 +144,13 @@ function syncDocumentFileName() {
 documentFileInput?.addEventListener("change", syncDocumentFileName);
 form?.addEventListener("reset", syncDocumentFileName);
 
-// 每部分页数只对「大串小并」有意义：其它处理方式下置灰并保留默认值。
+// 每部分页数缩在「大串小并」选项里，只有选中它才可以编辑。
 const chunkSizeInput = document.querySelector("#chunk-size-input");
 
 function syncProcessingChunkInput() {
   if (!chunkSizeInput) return;
   const mode = form?.querySelector('input[name="processingMode"]:checked')?.value || "chunked";
   chunkSizeInput.disabled = mode !== "chunked";
-  chunkSizeInput.title = chunkSizeInput.disabled ? "仅大串小并需要设置每部分页数" : "";
 }
 
 form?.querySelectorAll('input[name="processingMode"]').forEach((input) => {
