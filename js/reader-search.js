@@ -54,7 +54,7 @@ async function resolveReaderMatches(item, hits) {
     if (!sources.has(key)) {
       let source = hit.sourceLayer === "punctuatedText" ? { text: getReaderSearchText(entry.page) }
         : getReaderVisualSource(entry.page, hit.sourceLayer);
-      if (!source && /^(visual_caption|table_cell):/.test(hit.sourceLayer) &&
+      if (!source && /^visual_caption:/.test(hit.sourceLayer) &&
           !loadedPages.has(hit.pageId)) {
         loadedPages.add(hit.pageId);
         await loadReaderContent(item, entry.page);
@@ -76,7 +76,7 @@ async function resolveReaderMatches(item, hits) {
     const match = createReaderSearchMatch(cached.page, cached.pageIndex, hit.level,
       { start: cached.offsets[first], end: cached.offsets[last], text: cached.text,
         sourceLayer: hit.sourceLayer, sourceHash: cached.hash,
-        ...(cached.visualId ? { visualId: cached.visualId, ...(cached.captionId ? { captionId: cached.captionId } : { cellId: cached.cellId }) } : {}) });
+        ...(cached.visualId ? { visualId: cached.visualId, ...(cached.captionId ? { captionId: cached.captionId } : {}) } : {}) });
     if (!seen.has(match.id)) { matches.push(match); seen.add(match.id); }
   }
   return sortReaderSearchMatches(matches);
@@ -275,7 +275,7 @@ async function openReaderSearchMatch(id) {
     if (!current()) return;
     renderReader();
     if (current()) setReaderVisualActive(visual.visualId,
-      { captionId: visual.captionId, cellId: visual.cellId, scrollText: true, scrollImage: true });
+      { captionId: visual.captionId, scrollText: true, scrollImage: true });
   } catch (error) {
     if (current()) { readerSearchState.searchError = error.message; renderReaderSearchPanel(); }
   }

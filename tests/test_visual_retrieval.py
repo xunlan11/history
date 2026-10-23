@@ -33,11 +33,8 @@ def db():
 
 def visual_page(**layers):
     return {"id": "p", **layers, "visuals": [{
-        "id": "figure:一/%", "kind": "table", "renderMode": "html",
+        "id": "figure:一/%", "kind": "table", "renderMode": "image",
         "captions": [{"id": "caption:1/%", "text": "😀军队驻扎。"}],
-        "tableModel": {"rows": 1, "columns": 1, "cells": [
-            {"id": "cell:1/%", "row": 0, "column": 0, "text": "  军队到达。\n"},
-        ]},
         "code": "RAW_TABLE_CODE_ONLY", "html": "RAW_TABLE_HTML_ONLY",
     }]}
 
@@ -80,23 +77,20 @@ def test_page_sources_keep_local_text_and_exclude_raw_table_code():
     page = visual_page(ocrText="原始正文", punctuatedText="整理正文", notes="笔记", cleanText="旧正文")
     sources = retrieval.page_sources("d", page)
     assert set(sources) == {"ocrText", "punctuatedText", "notes",
-        visual_source_layer("visual_caption", "figure:一/%", "caption:1/%"),
-        visual_source_layer("table_cell", "figure:一/%", "cell:1/%")}
+        visual_source_layer("visual_caption", "figure:一/%", "caption:1/%")}
     assert {source.text for source in sources.values()} == {
-        "原始正文", "整理正文", "笔记", "😀军队驻扎。", "  军队到达。\n"}
+        "原始正文", "整理正文", "笔记", "😀军队驻扎。"}
     for source in sources.values():
         assert source.sourceHash == retrieval.text_hash(source.text)
         assert (source.documentId, source.pageId) == ("d", "p")
 
 
-@pytest.mark.parametrize("kind", ["visual_caption", "table_cell"])
-def test_visual_identity_encoding_is_collision_free_and_round_trips(kind):
+def test_visual_identity_encoding_is_collision_free_and_round_trips():
     pairs = [("a:b", "c"), ("a", "b:c"), ("a%3Ab", "c"), ("图/😀 %", "标题:一/二%")]
-    layers = [visual_source_layer(kind, *pair) for pair in pairs]
+    layers = [visual_source_layer("visual_caption", *pair) for pair in pairs]
     assert len(set(layers)) == len(pairs)
-    key = "captionId" if kind == "visual_caption" else "cellId"
     for layer, (visual_id, item_id) in zip(layers, pairs):
-        assert parse_visual_source_layer(layer) == {"visualId": visual_id, key: item_id}
+        assert parse_visual_source_layer(layer) == {"visualId": visual_id, "captionId": item_id}
         assert EvidenceLocator(chunkId="c", documentId="d", pageId="p",
                                sourceLayer=layer, sourceHash="hash").sourceLayer == layer
 
@@ -115,7 +109,7 @@ def test_evidence_locator_rejects_unknown_or_noncanonical_visual_layers(layer):
 def test_visuals_are_retrieved_without_any_body(db, mode, policy):
     page = add_page(db, visual_page(notes="军队笔记。"))
     hits = query(db, mode=mode, policy=policy)["hits"]
-    assert len(hits) == 2
+    assert len(hits) == 1
     sources = retrieval.page_sources("d", page)
     for hit in hits:
         source = sources[hit["sourceLayer"]]
@@ -124,8 +118,7 @@ def test_visuals_are_retrieved_without_any_body(db, mode, policy):
         assert hit["sourceHash"] == source.sourceHash
         if mode != "chronicle":
             assert source.text[hit["matchStart"]:hit["matchEnd"]] == "军队"
-        assert (hit.get("captionId"), hit.get("cellId")) in {
-            ("caption:1/%", None), (None, "cell:1/%")}
+        assert hit.get("captionId") == "caption:1/%"
     validated = retrieval.validate_evidence(db, {"id": "u"},
         EvidenceValidationRequest(evidence=hits).evidence)
     assert set(validated["allowedChunkIds"]) == {hit["chunkId"] for hit in hits}
@@ -135,16 +128,15 @@ def test_visuals_are_retrieved_without_any_body(db, mode, policy):
 
 @pytest.mark.parametrize("mode", ["search", "chat", "reader"])
 @pytest.mark.parametrize("policy", ["primary", "processed", "reader"])
-def test_duplicate_captions_and_cells_stay_independent_of_selected_body(db, mode, policy):
+def test_duplicate_captions_stay_independent_of_selected_body(db, mode, policy):
     page = visual_page(punctuatedText="😀军队驻扎。", ocrText="😀军队驻扎。")
     visual = page["visuals"][0]
     visual["captions"].append({"id": "duplicate", "text": visual["captions"][0]["text"]})
-    visual["tableModel"]["cells"][0]["text"] = visual["captions"][0]["text"]
     add_page(db, page)
     hits = query(db, mode=mode, policy=policy)["hits"]
-    assert len(hits) == 4
-    assert len({hit["chunkId"] for hit in hits}) == 4
-    assert len({hit["sourceLayer"] for hit in hits}) == 4
+    assert len(hits) == 3
+    assert len({hit["chunkId"] for hit in hits}) == 3
+    assert len({hit["sourceLayer"] for hit in hits}) == 3
     assert len([hit for hit in hits if hit["sourceLayer"] == "punctuatedText"]) == 1
     assert all(hit["sourceLayer"] != "ocrText" for hit in hits)
     assert {hit["matchStart"] for hit in hits} == {1}
@@ -154,7 +146,7 @@ def test_duplicate_captions_and_cells_stay_independent_of_selected_body(db, mode
 def test_visuals_do_not_change_ocr_fallback_policy(db, policy, body_expected):
     page = add_page(db, visual_page(ocrText="军队原始正文。", punctuatedText="  ", notes="军队笔记。"))
     hits = query(db, policy=policy)["hits"]
-    assert len(hits) == (4 if body_expected else 2)
+    assert len(hits) == (3 if body_expected else 1)
     assert ("ocrText" in {hit["sourceLayer"] for hit in hits}) is body_expected
     assert (retrieval.select_page_source(page, policy, "d") is not None) is body_expected
 
@@ -200,14 +192,13 @@ def test_changed_and_removed_visual_sources_are_historical_and_never_fresh_hits(
         assert source.text == retrieval.page_sources("d", page)[hit["sourceLayer"]].text
         assert source.sourceHash == hit["sourceHash"]
     page["visuals"][0]["captions"][0]["text"] = "海防图注。"
-    page["visuals"][0]["tableModel"]["cells"] = []
     replace_page(db, page)  # 过期的语义投影不得提供旧证据。
     assert query(db)["hits"] == []
     validated = retrieval.validate_evidence(db, {"id": "u"}, old_hits)
     assert set(validated["allowedChunkIds"]) == {hit["chunkId"] for hit in old_hits}
     assert all(item["historical"] for item in validated["sources"])
     assert {item["sourceHash"] for item in validated["sources"]} == {
-        retrieval.text_hash("海防图注。"), retrieval.text_hash("")}
+        retrieval.text_hash("海防图注。")}
     assert validated["warnings"]
     fresh = query(db, text="海防")["hits"]
     assert len(fresh) == 1 and fresh[0]["chunkId"] not in {hit["chunkId"] for hit in old_hits}
@@ -222,7 +213,6 @@ def test_reconcile_removes_stale_visual_chunks_and_vectors(db):
         db.execute("""INSERT INTO semantic_jobs(page_id,source_layer,source_hash,model_fingerprint)
                       VALUES(?,?,?,?)""", ("p", source.sourceLayer, source.sourceHash, "test-model"))
     page["visuals"][0]["captions"][0]["text"] = "新图注。"
-    page["visuals"][0]["tableModel"]["cells"] = []
     replace_page(db, page, reconcile=True)
     chunks = db.execute("SELECT * FROM semantic_chunks").fetchall()
     assert len(chunks) == 1 and chunks[0]["text"] == "新图注。"
@@ -239,7 +229,6 @@ def test_reordering_and_render_changes_preserve_visual_source_identity(db):
     old_hits = query(db)["hits"]
     visual = page["visuals"][0]
     visual["renderMode"] = "image"
-    visual["tableModel"]["cells"][0].update(row=5, column=3)
     page["visuals"].insert(0, {"id": "unrelated", "kind": "image", "captions": []})
     replace_page(db, page, reconcile=True)
     assert query(db)["hits"] == old_hits
@@ -254,7 +243,7 @@ def test_copied_pages_use_new_document_and_page_identity(db):
     copied_page["id"] = "p"  # 数据库标识会覆盖过期的副本 payload ID。
     db.execute("UPDATE document_pages SET payload=? WHERE id='copied-page'", (json.dumps(copied_page),))
     copied = query(db, document_ids=["copied-document"])["hits"]
-    assert len(copied) == len(original) == 2
+    assert len(copied) == len(original) == 1
     assert {hit["chunkId"] for hit in copied}.isdisjoint(hit["chunkId"] for hit in original)
     assert {hit["sourceLayer"] for hit in copied} == {hit["sourceLayer"] for hit in original}
     for hit in copied:
@@ -273,7 +262,7 @@ def test_copied_pages_use_new_document_and_page_identity(db):
 def test_permissions_apply_to_retrieval_and_saved_visual_evidence(db, change):
     add_page(db, visual_page())
     hits = query(db)["hits"]
-    assert len(hits) == 2
+    assert len(hits) == 1
     db.execute(change)
     assert query(db)["hits"] == []
     assert retrieval.validate_evidence(db, {"id": "u"}, hits)["allowedChunkIds"] == []
@@ -282,7 +271,7 @@ def test_permissions_apply_to_retrieval_and_saved_visual_evidence(db, change):
 
 def test_public_visual_sources_and_document_scope(db):
     add_page(db, visual_page(), owner="other", visibility="public")
-    assert len(query(db)["hits"]) == 2
+    assert len(query(db)["hits"]) == 1
     assert query(db, document_ids=[])["hits"] == []
     assert query(db, document_ids=["missing"])["hits"] == []
 
@@ -296,7 +285,6 @@ def test_visual_evidence_is_rechecked_after_remote_embedding(db, change):
             if change in {"edit", "remove"}:
                 if change == "edit":
                     page["visuals"][0]["captions"][0]["text"] = "图注已变更。"
-                    page["visuals"][0]["tableModel"]["cells"][0]["text"] = "表格已变更。"
                 else:
                     page["visuals"] = []
                 replace_page(db, page)
@@ -318,14 +306,14 @@ def test_copying_to_new_page_rebuilds_stored_and_literal_chunk_ids(db, document_
     add_page(db, page, page_id="new-page", document_id=document_id)
     all_hits = query(db, document_ids=[document_id])["hits"]
     copied = [hit for hit in all_hits if hit["pageId"] == "new-page"]
-    assert len(copied) == 2
+    assert len(copied) == 1
     assert {hit["chunkId"] for hit in copied}.isdisjoint(hit["chunkId"] for hit in original)
     for hit in copied:
         assert hit["documentId"] == document_id
         assert retrieval.get_evidence(db, {"id": "u"}, hit).pageId == "new-page"
     stored_ids = {row[0] for row in db.execute("SELECT chunk_id FROM semantic_chunks WHERE page_id='p'")}
     copied_ids = {row[0] for row in db.execute("SELECT chunk_id FROM semantic_chunks WHERE page_id='new-page'")}
-    assert len(stored_ids) == len(copied_ids) == 2
+    assert len(stored_ids) == len(copied_ids) == 1
     assert stored_ids.isdisjoint(copied_ids)
 
 
@@ -336,20 +324,20 @@ def test_identical_local_ids_in_different_visuals_remain_independent(db):
     page["visuals"].append(other_visual)
     add_page(db, page)
     hits = query(db)["hits"]
-    assert len(hits) == 4
-    assert len({hit["chunkId"] for hit in hits}) == 4
+    assert len(hits) == 2
+    assert len({hit["chunkId"] for hit in hits}) == 2
     assert {hit["visualId"] for hit in hits} == {"figure:一/%", "different-visual"}
     page["visuals"][0]["captions"] = []
     replace_page(db, page, reconcile=True)
     remaining = query(db)["hits"]
-    assert len(remaining) == 3
+    assert len(remaining) == 1
     assert sum(hit.get("captionId") == "caption:1/%" for hit in remaining) == 1
 
 
 def test_long_visual_sources_keep_all_stored_chunks_and_local_unicode_offsets(db):
     page = visual_page()
     long_text = "😀" + "甲" * 790 + "军队驻扎边境。" + "乙" * 1000
-    for item in [page["visuals"][0]["captions"][0], page["visuals"][0]["tableModel"]["cells"][0]]:
+    for item in [page["visuals"][0]["captions"][0]]:
         item["text"] = long_text
     page = add_page(db, page)
     for source in retrieval.page_sources("d", page).values():
@@ -360,7 +348,7 @@ def test_long_visual_sources_keep_all_stored_chunks_and_local_unicode_offsets(db
         for chunk in chunks:
             assert chunk["text"] == long_text[chunk["start"]:chunk["end"]]
     hits = query(db)["hits"]
-    assert len(hits) == 2
+    assert len(hits) == 1
     assert {hit["matchStart"] for hit in hits} == {791}
     assert {hit["matchEnd"] for hit in hits} == {793}
 
@@ -373,11 +361,11 @@ def test_visual_ids_and_quote_offsets_survive_citation_validation(db):
     result = validate_result_citations({"matches": [
         {"chunkId": hit["chunkId"], "quote": "军队"} for hit in hits
     ]}, hits, "search")
-    assert len(result["matches"]) == 2
+    assert len(result["matches"]) == 1
     sources = retrieval.page_sources("d", page)
     for citation in result["matches"]:
         assert citation["visualId"] == "figure:一/%"
-        assert citation.get("captionId") == "caption:1/%" or citation.get("cellId") == "cell:1/%"
+        assert citation.get("captionId") == "caption:1/%"
         source = sources[citation["sourceLayer"]]
         assert source.text[citation["start"]:citation["end"]] == citation["quote"]
 

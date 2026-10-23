@@ -492,7 +492,7 @@ Environment=OCR_UPSTREAM_URL=http://模型内网地址:8080
 
 整页方向分类与校正、文档去畸变按请求模式固定：`formal` 开启，`quick` 和 `reader` 关闭，不由 `OCR_UPSTREAM_GEOMETRY_FIX` 控制。当前正文识别调用 `reader`，保持坐标对应保存的原图；需要纠偏的 `formal` 请求返回处理后坐标，图表使用明确关联的上游裁图，不能按这些坐标裁输入原页。
 
-所有请求固定关闭 `useTableRecognition`、`useChartRecognition`、`useWiredTableCellsTransToHtml` 和 `useWirelessTableCellsTransToHtml`，并启用 `returnMarkdownImages`。新识别的表格与图表统一使用图片链路：版面定位 → 关联区域裁图 → 保存图片资产 → 原位显示及放大；不再生成新的单元格模型或 HTML 表格。保留图表题注、阅读顺序和正文过滤。历史已保存的结构化表格继续可读，需要改成图片时重新识别对应页面。
+所有请求固定关闭 `useTableRecognition`、`useChartRecognition`、`useWiredTableCellsTransToHtml` 和 `useWirelessTableCellsTransToHtml`，并启用 `returnMarkdownImages`。新识别的表格与图表统一使用图片链路：版面定位 → 关联区域裁图 → 保存图片资产 → 原位显示及放大；不再生成单元格模型或 HTML 表格。保留图表题注、阅读顺序和正文过滤。历史数据如需图表图片，重新识别对应页面即可。
 
 公式识别、印章识别继续关闭。模型端 YAML 停止初始化表格结构和单元格模型，启动器同时覆盖旧数据端传入的重建开关；同步 YAML 和启动代码后重启模型端 OCR：
 

@@ -12,8 +12,8 @@ function setup(options = {}) {
   env.item.pages.push(second);
   env.catalog = { documentId: env.item.id, catalogRevision: 'c1', total: 2, indexedPages: 2, totalPages: 2, complete: true,
     items: [
-      { pageId: second.id, pageNumber: second.pageNumber, visualId: 'v1', kind: 'table', renderMode: 'structured', title: 'Second table', blockOrder: 0, sourceRevision: 7, status: 'ready' },
-      { pageId: env.page.id, pageNumber: env.page.pageNumber, visualId: 'v1', kind: 'table', renderMode: 'structured', title: 'First table', blockOrder: 0, sourceRevision: 7, status: 'ready' },
+      { pageId: second.id, pageNumber: second.pageNumber, visualId: 'v1', kind: 'table', renderMode: 'image', title: 'Second table', blockOrder: 0, sourceRevision: 7, status: 'ready' },
+      { pageId: env.page.id, pageNumber: env.page.pageNumber, visualId: 'v1', kind: 'table', renderMode: 'image', title: 'First table', blockOrder: 0, sourceRevision: 7, status: 'ready' },
     ] };
   env.requests = []; env.renders = [];
   env.c.fetch = async (url) => { env.requests.push(url); return { ok: true, json: async () => env.catalog }; };

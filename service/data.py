@@ -911,7 +911,7 @@ def materialize_document_assets(
         active_roles = set()
         for visual in page.get("visuals") or []:
             role = "page-visual:" + str(visual["id"])
-            if visual.get("renderMode") != "structured" and visual.get("status") == "ready":
+            if visual.get("status") == "ready":
                 active_roles.add(role)
             image_data = visual.get("imageDataUrl", "")
             visual.pop("resourceRef", None)

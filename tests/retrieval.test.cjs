@@ -260,52 +260,42 @@ function visualLayer(kind, visualId, itemId) {
 
 function visualPage() {
   return { id: 'p', punctuatedText: 'body', visuals: [{ id: "figure:图/%!'()*", kind: 'table',
-    captions: [{ id: 'caption:😀/%', text: '😀军队图注。' }],
-    tableModel: { cells: [{ id: 'cell:一/%', text: '😀军队单元格。' }] } }] };
+    captions: [{ id: 'caption:😀/%', text: '😀军队图注。' }] }] };
 }
 
-test('visual source lookup decodes canonical Python URL quoting and separates caption and cell text', () => {
-  const context = setup(), page = visualPage(), visual = page.visuals[0];
-  for (const [kind, key, item] of [
-    ['visual_caption', 'captionId', visual.captions[0]], ['table_cell', 'cellId', visual.tableModel.cells[0]],
-  ]) {
-    assert.deepEqual(plain(context.getReaderVisualSource(page, visualLayer(kind, visual.id, item.id))),
-      { text: item.text, visualId: visual.id, [key]: item.id });
-  }
+test('visual source lookup decodes canonical Python URL quoting', () => {
+  const context = setup(), page = visualPage(), visual = page.visuals[0], item = visual.captions[0];
+  assert.deepEqual(plain(context.getReaderVisualSource(page, visualLayer('visual_caption', visual.id, item.id))),
+    { text: item.text, visualId: visual.id, captionId: item.id });
   for (const layer of ['cleanText', 'visual_caption:a:b:c', 'visual_caption::x', 'table_cell:a:%',
     'visual_caption:a%3ab:c', 'table_cell:v:未编码', 'visual_caption:a:%FF']) {
     assert.equal(context.getReaderVisualSource(page, layer), null);
   }
-  assert.equal(context.getReaderVisualSource(page, visualLayer('table_cell', 'missing', 'cell:一/%')), null);
+  assert.equal(context.getReaderVisualSource(page, visualLayer('visual_caption', 'missing', item.id)), null);
 });
 
 test('visual source lookup supports reader-content maps without resurrecting removed page visuals', () => {
   const page = visualPage(), visual = page.visuals[0];
   const context = setup({ getSelectedDocument: () => ({ id: 'd' }),
     getCachedReaderContent: () => ({ visuals: { [visual.id]: visual } }) });
-  const layer = visualLayer('table_cell', visual.id, visual.tableModel.cells[0].id);
-  assert.equal(context.getReaderVisualSource({ id: 'p' }, layer).text, visual.tableModel.cells[0].text);
+  const layer = visualLayer('visual_caption', visual.id, visual.captions[0].id);
+  assert.equal(context.getReaderVisualSource({ id: 'p' }, layer).text, visual.captions[0].text);
   assert.equal(context.getReaderVisualSource({ id: 'p', visuals: [] }, layer), null);
 });
 
 test('visual evidence resolves source-local hashes and rejects stale or out-of-source offsets', async () => {
-  const context = setup(), page = visualPage(), visual = page.visuals[0];
-  for (const [kind, key, item] of [
-    ['visual_caption', 'captionId', visual.captions[0]], ['table_cell', 'cellId', visual.tableModel.cells[0]],
-  ]) {
-    const layer = visualLayer(kind, visual.id, item.id), hash = await context.hashEvidenceText(item.text);
-    const locator = { sourceLayer: layer, sourceHash: hash, start: 1, end: 3 };
-    assert.deepEqual(plain(await context.resolveEvidenceAnchor(page, locator)),
-      { status: 'ready', sourceLayer: layer, start: 1, end: 3, text: item.text, visualId: visual.id, [key]: item.id });
-    assert.equal((await context.resolveEvidenceAnchor(page, { ...locator, sourceHash: 'old' })).status, 'stale');
-    assert.equal((await context.resolveEvidenceAnchor(page, { ...locator, end: 100 })).status, 'missing');
-  }
+  const context = setup(), page = visualPage(), visual = page.visuals[0], item = visual.captions[0];
+  const layer = visualLayer('visual_caption', visual.id, item.id), hash = await context.hashEvidenceText(item.text);
+  const locator = { sourceLayer: layer, sourceHash: hash, start: 1, end: 3 };
+  assert.deepEqual(plain(await context.resolveEvidenceAnchor(page, locator)),
+    { status: 'ready', sourceLayer: layer, start: 1, end: 3, text: item.text, visualId: visual.id, captionId: item.id });
+  assert.equal((await context.resolveEvidenceAnchor(page, { ...locator, sourceHash: 'old' })).status, 'stale');
+  assert.equal((await context.resolveEvidenceAnchor(page, { ...locator, end: 100 })).status, 'missing');
 });
 
-for (const kind of ['visual_caption', 'table_cell']) {
-  test(`${kind} evidence waits for content and selects its visual without body highlighting`, async () => {
+test('visual caption evidence waits for content and selects its visual without body highlighting', async () => {
     const page = visualPage(), visual = page.visuals[0];
-    const item = kind === 'visual_caption' ? visual.captions[0] : visual.tableModel.cells[0];
+    const item = visual.captions[0];
     const readerText = new Element('div'), panels = [], calls = [];
     readerText.before = (panel) => panels.push(panel);
     let finish;
@@ -317,7 +307,7 @@ for (const kind of ['visual_caption', 'table_cell']) {
     });
     context.document.querySelector = () => null;
     context.markEvidenceRange = () => { throw new Error('visual offsets used as body'); };
-    const params = new URLSearchParams({ document: 'd', page: 'p', sourceLayer: visualLayer(kind, visual.id, item.id),
+    const params = new URLSearchParams({ document: 'd', page: 'p', sourceLayer: visualLayer('visual_caption', visual.id, item.id),
       sourceHash: await context.hashEvidenceText(item.text), start: '1', end: '3' });
     context.window.location = { href: `http://localhost/reader.html?${params}` };
     const pending = context.showReaderEvidence(page, { sentences: [{ start: 0, end: 4 }] });
@@ -329,10 +319,9 @@ for (const kind of ['visual_caption', 'table_cell']) {
     assert.equal(calls[0].id, visual.id);
     assert.equal(calls[0].scrollText, true);
     assert.equal(calls[0].scrollImage, true);
-    if (kind === 'visual_caption') assert.equal(calls[0].captionId, item.id);
+    assert.equal(calls[0].captionId, item.id);
     assert.equal(panels.length, 1);
-  });
-}
+});
 
 test('a pending visual citation cannot activate after navigation changes', async () => {
   const page = visualPage(), visual = page.visuals[0], caption = visual.captions[0];
@@ -414,20 +403,20 @@ test('body citation compares only reader text nodes when captions are interleave
 
 
 test('homepage visual matches retain source identity and encode the complete citation URL', async () => {
-  const context = setup(), page = visualPage(), visual = page.visuals[0], cell = visual.tableModel.cells[0];
-  const layer = visualLayer('table_cell', visual.id, cell.id);
-  const source = { ...evidence(1), sourceLayer: layer, visualId: visual.id, cellId: cell.id,
-    sourceHash: await context.hashEvidenceText(cell.text), text: cell.text, start: 0,
-    end: Array.from(cell.text).length, matchStart: 1, matchEnd: 3 };
+  const context = setup(), page = visualPage(), visual = page.visuals[0], caption = visual.captions[0];
+  const layer = visualLayer('visual_caption', visual.id, caption.id);
+  const source = { ...evidence(1), sourceLayer: layer, visualId: visual.id, captionId: caption.id,
+    sourceHash: await context.hashEvidenceText(caption.text), text: caption.text, start: 0,
+    end: Array.from(caption.text).length, matchStart: 1, matchEnd: 3 };
   const [match] = context.conversationRetrievalMatches({ body: { evidence: [source] } });
   const href = new URL(context.buildEvidenceHref(match), 'http://localhost/');
   assert.equal(href.searchParams.get('sourceLayer'), layer);
   assert.equal(href.searchParams.get('sourceHash'), source.sourceHash);
   assert.equal(match.visualId, visual.id);
-  assert.equal(match.cellId, cell.id);
+  assert.equal(match.captionId, caption.id);
   const anchor = await context.resolveEvidenceAnchor(page, Object.fromEntries(href.searchParams));
   assert.equal(anchor.status, 'ready');
-  assert.equal(anchor.cellId, cell.id);
+  assert.equal(anchor.captionId, caption.id);
 });
 
 

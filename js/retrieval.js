@@ -111,7 +111,7 @@ async function hashEvidenceText(text) {
 function getReaderVisualSource(page, layer) {
   if (!page || typeof layer !== "string") return null;
   const parts = layer.split(":");
-  if (parts.length !== 3 || !["visual_caption", "table_cell"].includes(parts[0])) return null;
+  if (parts.length !== 3 || parts[0] !== "visual_caption") return null;
   let visualId, itemId;
   try {
     [visualId, itemId] = parts.slice(1).map(decodeURIComponent);
@@ -125,10 +125,10 @@ function getReaderVisualSource(page, layer) {
   const catalog = page?.visuals ?? cached?.visuals;
   const visuals = Array.isArray(catalog) ? catalog : catalog && typeof catalog === "object" ? Object.values(catalog) : [];
   const visual = visuals.find((entry) => entry?.id === visualId);
-  const entries = parts[0] === "visual_caption" ? visual?.captions : visual?.tableModel?.cells;
+  const entries = visual?.captions;
   const item = Array.isArray(entries) ? entries.find((entry) => entry?.id === itemId) : null;
   if (typeof item?.text !== "string" || !item.text.trim()) return null;
-  return { text: item.text, visualId, [parts[0] === "visual_caption" ? "captionId" : "cellId"]: itemId };
+  return { text: item.text, visualId, captionId: itemId };
 }
 
 async function resolveEvidenceAnchor(page, locator) {
@@ -204,7 +204,7 @@ async function showReaderEvidence(page, readerIndex = null) {
   let anchor;
   try {
     let loaded = true;
-    if (/^(visual_caption|table_cell):/.test(locator.sourceLayer) && typeof loadReaderContent === "function") {
+    if (/^visual_caption:/.test(locator.sourceLayer) && typeof loadReaderContent === "function") {
       loaded = await loadReaderContent(item, page);
       if (!current()) return;
     }
@@ -222,7 +222,7 @@ async function showReaderEvidence(page, readerIndex = null) {
     return;
   }
   const labels = { ocrText: "OCR 原文", punctuatedText: "整理正文", notes: "笔记" };
-  const visualLabel = anchor.captionId ? "图注" : anchor.cellId ? "表格单元格" : "";
+  const visualLabel = anchor.captionId ? "图注" : "";
   const label = document.createElement("p");
   label.className = "meta-line";
   label.textContent = "引用来自：" + (visualLabel || labels[anchor.sourceLayer] || anchor.sourceLayer);
@@ -230,7 +230,7 @@ async function showReaderEvidence(page, readerIndex = null) {
   if (anchor.visualId) {
     setReaderCitationSentence("");
     if (typeof setReaderVisualActive === "function") setReaderVisualActive(anchor.visualId,
-      { captionId: anchor.captionId, cellId: anchor.cellId, scrollText: true, scrollImage: true });
+      { captionId: anchor.captionId, scrollText: true, scrollImage: true });
     return;
   }
   // 高亮与「选中句子」一致：正文句子与原文区域一起高亮；悬停其它句子会临时改变高亮。

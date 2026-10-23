@@ -14,7 +14,7 @@
 - `OCR_UPSTREAM_HEALTH_PATH`：健康检查路径，默认 `/health`；设为 `none` 跳过探活。
 
 整页方向分类与去畸变按识别模式固定：正式识别开启，快速识别关闭。
-正式识别中的有线、无线表格均根据单元格位置生成 HTML 结构；快速识别不处理表格。
+正式识别的表格与图表只保留版面定位与区域裁图，不再生成单元格模型或 HTML 结构；快速识别不处理表格。
 两种模式均关闭公式识别、印章识别和图表转表格，与模型端精简配置一致。
 正式识别返回的坐标以矫正后的图像为准（数据端不保存矫正图）。
 
@@ -481,7 +481,7 @@ def _paddlex_blocks(pruned: dict[str, Any], lines: list[dict[str, Any]]) -> list
 
     if isinstance(parsing, list):
         for block, raw in zip(blocks, (item for item in parsing if isinstance(item, dict))):
-            for key in ("id", "visualId", "parentId", "imageUrl", "resourceRef", "tableModel", "html", "captionCoverage"):
+            for key in ("id", "visualId", "parentId", "imageUrl", "resourceRef", "captionCoverage"):
                 if key in raw:
                     block[key] = raw[key]
             if "block_id" in raw:

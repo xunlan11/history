@@ -154,7 +154,7 @@ function isReaderVisualCatalogValid(catalog, item) {
     catalog.total === catalog.items.length && catalog.indexedPages <= catalog.totalPages && typeof catalog.complete === "boolean" &&
     catalog.items.every((entry) => entry && typeof entry.pageId === "string" && typeof entry.visualId === "string" && entry.visualId &&
       Number.isFinite(entry.pageNumber) && Number.isFinite(entry.blockOrder) &&
-      ["figure", "chart", "table", "caption"].includes(entry.kind) && ["structured", "image"].includes(entry.renderMode)));
+      ["figure", "chart", "table", "caption"].includes(entry.kind) && entry.renderMode === "image"));
 }
 
 async function syncReaderVisualCatalog(item) {

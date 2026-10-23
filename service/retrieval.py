@@ -69,17 +69,14 @@ def page_sources(document_id: str, page: dict) -> dict[str, SourceText]:
     for visual in visuals if isinstance(visuals, list) else []:
         if not isinstance(visual, dict) or not isinstance(visual.get("id"), str) or not visual["id"]:
             continue
-        table = visual.get("tableModel")
-        groups = (("visual_caption", visual.get("captions")),
-                  ("table_cell", table.get("cells") if isinstance(table, dict) else None))
-        for kind, items in groups:
-            for item in items if isinstance(items, list) else []:
-                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    layer = visual_source_layer(kind, visual["id"], item["id"])
-                    sources[layer] = make_source(document_id, str(page["id"]), layer, text)
+        captions = visual.get("captions")
+        for item in captions if isinstance(captions, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                layer = visual_source_layer("visual_caption", visual["id"], item["id"])
+                sources[layer] = make_source(document_id, str(page["id"]), layer, text)
     return sources
 
 

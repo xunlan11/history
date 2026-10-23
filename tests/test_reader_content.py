@@ -125,16 +125,13 @@ def test_visual_crops_are_independent_and_unknown_space_is_not_guessed(tmp_path)
     assert raw["visuals"][0]["status"] == "missing"
 
 
-@pytest.mark.parametrize("stored_mode", ["image", "structured"])
-def test_catalog_includes_new_and_historical_tables_all_pages(stored_mode):
+def test_catalog_includes_new_tables_all_pages():
     page, _ = page_for(result())
-    # 历史保存的结构化表格不迁移，目录及阅读器继续支持它们。
-    page["visuals"][1]["renderMode"] = stored_mode
     second = dict(page, id="p2", pageNumber=2)
     payload = content.build_visual_catalog({"id":"d", "pages":[second,page]})
     assert payload["total"] == 4 and payload["complete"]
     assert [i["pageNumber"] for i in payload["items"]] == [1,1,2,2]
-    assert payload["items"][1]["renderMode"] == stored_mode
+    assert payload["items"][1]["renderMode"] == "image"
     assert not content.build_visual_catalog({"id":"d", "pages":[{"id":"p"}]})["complete"]
 
 

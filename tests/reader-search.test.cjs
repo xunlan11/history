@@ -113,30 +113,29 @@ test('reader ignores removed text layer when final text is blank', async () => {
 
 function visualItem() {
   return { id: 'd', pages: [{ id: 'p', pageNumber: 1, visuals: [{ id: 'visual:图/%',
-    captions: [{ id: 'c:1', text: '😀军队。' }, { id: 'c:2', text: '😀军队。' }],
-    tableModel: { cells: [{ id: 'cell:1', text: '😀军队。' }] } }] }] };
+    captions: [{ id: 'c:1', text: '😀军队。' }, { id: 'c:2', text: '😀军队。' }] }] }] };
 }
 
-async function visualHit(context, item, kind = 'visual_caption', index = 0) {
-  const visual = item.pages[0].visuals[0], entry = kind === 'table_cell' ? visual.tableModel.cells[index] : visual.captions[index];
+async function visualHit(context, item, index = 0) {
+  const visual = item.pages[0].visuals[0], entry = visual.captions[index];
   const encode = (id) => encodeURIComponent(id).replace(/[!'()*]/g, (ch) => '%' + ch.charCodeAt(0).toString(16).toUpperCase());
-  return { documentId: item.id, pageId: item.pages[0].id, sourceLayer: `${kind}:${encode(visual.id)}:${encode(entry.id)}`,
+  return { documentId: item.id, pageId: item.pages[0].id, sourceLayer: `visual_caption:${encode(visual.id)}:${encode(entry.id)}`,
     sourceHash: await context.hashEvidenceText(entry.text), level: 'exact', start: 0,
     end: Array.from(entry.text).length, text: entry.text, matchStart: 1, matchEnd: 3 };
 }
 
-test('reader resolves duplicate captions and table cells independently without body text', async () => {
+test('reader resolves duplicate captions independently without body text', async () => {
   const item = visualItem(), context = setup(item);
-  const hits = await Promise.all([visualHit(context, item), visualHit(context, item, 'visual_caption', 1), visualHit(context, item, 'table_cell')]);
+  const hits = await Promise.all([visualHit(context, item), visualHit(context, item, 1)]);
   const matches = await context.resolveReaderMatches(item, [...hits, hits[0]]);
-  assert.equal(matches.length, 3);
-  assert.equal(new Set(matches.map((match) => match.id)).size, 3);
+  assert.equal(matches.length, 2);
+  assert.equal(new Set(matches.map((match) => match.id)).size, 2);
   for (const match of matches) {
     assert.equal(match.text, '😀军队。');
     assert.equal(match.text.slice(match.start, match.end), '军队');
     assert.equal(match.visualId, item.pages[0].visuals[0].id);
     assert.equal(match.sourceHash, hits[0].sourceHash);
-    assert.ok(match.captionId || match.cellId);
+    assert.ok(match.captionId);
   }
   const stale = await context.resolveReaderMatches(item, [
     { ...hits[0], sourceHash: 'old' }, { ...hits[0], text: 'changed' },
@@ -146,9 +145,9 @@ test('reader resolves duplicate captions and table cells independently without b
   assert.equal(stale.length, 0);
 });
 
-test('table-only reader search still requests and displays backend matches', async () => {
+test('visual-only reader search still requests and displays backend matches', async () => {
   const item = visualItem(), context = setup(item), requests = [];
-  const expected = await visualHit(context, item, 'table_cell');
+  const expected = await visualHit(context, item);
   context.fetchRetrievalEvidence = async (request) => { requests.push(request); return { hits: [expected] }; };
   await context.runReaderSearch('军队');
   assert.equal(requests.length, 1);
@@ -166,43 +165,38 @@ test('visual hit resolution loads uncached reader content for metadata-only page
   assert.equal(matches.length, 1);
 });
 
-test('reader snapshot changes when caption or cell text changes', () => {
+test('reader snapshot changes when caption text changes', () => {
   const item = visualItem(), context = setup(item), original = context.readerSearchSnapshot(item);
   item.pages[0].visuals[0].captions[0].text = 'changed';
-  const captionChanged = context.readerSearchSnapshot(item);
-  assert.notEqual(captionChanged, original);
-  item.pages[0].visuals[0].tableModel.cells[0].text = 'changed too';
-  assert.notEqual(context.readerSearchSnapshot(item), captionChanged);
+  assert.notEqual(context.readerSearchSnapshot(item), original);
 });
 
-for (const kind of ['visual_caption', 'table_cell']) {
-  test(`${kind} search navigation waits for content then renders and activates the visual`, async () => {
-    const item = visualItem(), calls = [];
-    let finish;
-    const context = setup(item, {
-      window: { location: { href: 'http://localhost/reader.html?document=d&page=old&sourceHash=old&start=0&end=2&sourceLayer=punctuatedText' },
-        history: { replaceState(_a, _b, href) { this.href = href; } } },
-      selectedPageId: 'old', renderAll: () => calls.push('all'), renderReader: () => calls.push('reader'),
-      loadReaderContent: (_item, page) => { assert.equal(context.selectedPageId, page.id); calls.push('load'); return new Promise((resolve) => { finish = resolve; }); },
-      setReaderVisualActive: (id, options) => calls.push({ id, ...options }),
-    });
-    context.state.documentId = item.id;
-    context.state.matches = await context.resolveReaderMatches(item, [await visualHit(context, item, kind)]);
-    const pending = context.openReaderSearchMatch(context.state.matches[0].id);
-    await Promise.resolve();
-    assert.equal(calls.includes('reader'), false);
-    assert.equal(typeof finish, 'function');
-    finish({});
-    await pending;
-    assert.deepEqual(calls.slice(0, 3), ['all', 'load', 'reader']);
-    assert.equal(calls[3].id, item.pages[0].visuals[0].id);
-    assert.equal(calls[3].scrollText, true);
-    assert.equal(calls[3].scrollImage, true);
-    if (kind === 'visual_caption') assert.equal(calls[3].captionId, 'c:1');
-    assert.equal(context.state.scrollPending, false);
-    assert.equal(new URL(context.window.history.href).searchParams.has('sourceHash'), false);
+test('visual caption search navigation waits for content then renders and activates the visual', async () => {
+  const item = visualItem(), calls = [];
+  let finish;
+  const context = setup(item, {
+    window: { location: { href: 'http://localhost/reader.html?document=d&page=old&sourceHash=old&start=0&end=2&sourceLayer=punctuatedText' },
+      history: { replaceState(_a, _b, href) { this.href = href; } } },
+    selectedPageId: 'old', renderAll: () => calls.push('all'), renderReader: () => calls.push('reader'),
+    loadReaderContent: (_item, page) => { assert.equal(context.selectedPageId, page.id); calls.push('load'); return new Promise((resolve) => { finish = resolve; }); },
+    setReaderVisualActive: (id, options) => calls.push({ id, ...options }),
   });
-}
+  context.state.documentId = item.id;
+  context.state.matches = await context.resolveReaderMatches(item, [await visualHit(context, item)]);
+  const pending = context.openReaderSearchMatch(context.state.matches[0].id);
+  await Promise.resolve();
+  assert.equal(calls.includes('reader'), false);
+  assert.equal(typeof finish, 'function');
+  finish({});
+  await pending;
+  assert.deepEqual(calls.slice(0, 3), ['all', 'load', 'reader']);
+  assert.equal(calls[3].id, item.pages[0].visuals[0].id);
+  assert.equal(calls[3].scrollText, true);
+  assert.equal(calls[3].scrollImage, true);
+  assert.equal(calls[3].captionId, 'c:1');
+  assert.equal(context.state.scrollPending, false);
+  assert.equal(new URL(context.window.history.href).searchParams.has('sourceHash'), false);
+});
 
 test('pending visual navigation cannot select a visual after page navigation', async () => {
   const item = visualItem(), calls = [];
@@ -246,7 +240,7 @@ class SearchElement {
   replaceChildren() { this.children = []; }
 }
 
-test('reader result panel renders caption and cell match text on a table-only page', async () => {
+test('reader result panel renders visual caption match text', async () => {
   const item = visualItem(), form = new SearchElement('form'), results = new SearchElement('ol'), status = new SearchElement('p');
   const context = setup(item, { document: {
     querySelector(selector) {
@@ -261,7 +255,7 @@ test('reader result panel renders caption and cell match text on a table-only pa
   } });
   context.state.documentId = item.id;
   context.state.query = '军队';
-  context.state.matches = await context.resolveReaderMatches(item, [await visualHit(context, item), await visualHit(context, item, 'table_cell')]);
+  context.state.matches = await context.resolveReaderMatches(item, [await visualHit(context, item), await visualHit(context, item, 1)]);
   context.originalRenderReaderSearchPanel();
   assert.equal(results.children.length, 3);
   for (const row of results.children.slice(1)) assert.equal(row.children[0].children[1].textContent, '军队');

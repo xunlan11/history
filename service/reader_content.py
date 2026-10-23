@@ -391,7 +391,7 @@ def materialize_visual_images(result, source_path):
             reference = visual.pop("resourceRef", "")
             if not isinstance(reference, str):
                 reference = reference.get("url", "") if isinstance(reference, dict) else ""
-            if visual.get("renderMode") == "structured" or visual.get("kind") == "caption":
+            if visual.get("kind") == "caption":
                 continue
             resource_error, image = None, None
             try:

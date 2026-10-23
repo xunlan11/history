@@ -52,30 +52,6 @@ function hashReaderContentText(text) {
   return result;
 }
 
-function readerTableSize(value) {
-  return Array.isArray(value) ? value.length : value;
-}
-
-function isReaderTableModelValid(model) {
-  const rows = readerTableSize(model?.rows), columns = readerTableSize(model?.columns);
-  if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || columns < 1 ||
-      rows * columns > 100000 || !Array.isArray(model.cells)) return false;
-  const occupied = new Set();
-  for (const cell of model.cells) {
-    if (!cell || typeof cell !== "object") return false;
-    const { row, column } = cell, rowSpan = cell.rowSpan ?? 1, colSpan = cell.colSpan ?? 1;
-    if (![row, column, rowSpan, colSpan].every(Number.isInteger) || row < 0 || column < 0 ||
-        rowSpan < 1 || colSpan < 1 || row + rowSpan > rows || column + colSpan > columns ||
-        typeof cell.text !== "string") return false;
-    for (let r = row; r < row + rowSpan; r++) for (let c = column; c < column + colSpan; c++) {
-      const key = r * columns + c;
-      if (occupied.has(key)) return false;
-      occupied.add(key);
-    }
-  }
-  return occupied.size === rows * columns;
-}
-
 function isReaderContentValid(content, page) {
   if (!page || !content || content.version !== 1 || content.sourceRevision !== page.processingRevision ||
       typeof content.displayedText !== "string" || content.displayedText !== getPagePrimaryText(page) ||
@@ -94,8 +70,7 @@ function isReaderContentValid(content, page) {
       const visual = Object.hasOwn(content.visuals, entry.visualId) && content.visuals[entry.visualId];
       if (!visual || !visual.id || visual.id !== entry.visualId || seen.has(visual.id) ||
           !["figure", "chart", "table", "caption"].includes(visual.kind) ||
-          !["structured", "image"].includes(visual.renderMode) ||
-          (visual.renderMode === "structured" && visual.kind === "table" && !isReaderTableModelValid(visual.tableModel)) ||
+          visual.renderMode !== "image" ||
           (visual.captions !== undefined && (!Array.isArray(visual.captions) || visual.captions.some((caption) =>
             !caption || !caption.id || typeof caption.text !== "string" || !["before", "after"].includes(caption.position))))) return false;
       seen.add(visual.id);
@@ -152,28 +127,6 @@ function readerVisualSafeUrl(value) {
   } catch { return ""; }
 }
 
-function createReaderVisualTable(model) {
-  const table = readerVisualElement("table", "reader-visual-table");
-  table.dataset.borderStyle = ["unknown", "ruled", "borderless"].includes(model.borderStyle) ? model.borderStyle : "unknown";
-  const body = document.createElement("tbody");
-  const starts = new Map(model.cells.map((cell) => [cell.row * readerTableSize(model.columns) + cell.column, cell]));
-  for (let row = 0; row < readerTableSize(model.rows); row++) {
-    const tr = document.createElement("tr");
-    for (let column = 0; column < readerTableSize(model.columns); column++) {
-      const cell = starts.get(row * readerTableSize(model.columns) + column);
-      if (!cell) continue;
-      const td = readerVisualElement(cell.header ? "th" : "td", "", cell.text);
-      td.rowSpan = cell.rowSpan || 1;
-      td.colSpan = cell.colSpan || 1;
-      if (cell.id) td.dataset.cellId = cell.id;
-      tr.append(td);
-    }
-    body.append(tr);
-  }
-  table.append(body);
-  return table;
-}
-
 function createReaderVisual(visual) {
   const figure = readerVisualElement("figure", "reader-visual");
   figure.dataset.readerAuxiliary = "true";
@@ -189,11 +142,7 @@ function createReaderVisual(visual) {
     return { node, caption };
   });
   for (const { node, caption } of captions) if (caption.position === "before") figure.append(node);
-  if (visual.kind === "table" && visual.renderMode === "structured") {
-    const scroll = readerVisualElement("div", "reader-visual-table-scroll");
-    scroll.append(createReaderVisualTable(visual.tableModel));
-    figure.append(scroll);
-  } else if (visual.kind === "caption") {
+  if (visual.kind === "caption") {
     if (!captions.length && (visual.title || visual.text)) figure.append(readerVisualElement("figcaption", "reader-visual-caption", visual.title || visual.text));
     figure.append(readerVisualElement("p", "reader-visual-placement-status", "标题归属待核对"));
   } else {

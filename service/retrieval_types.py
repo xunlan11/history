@@ -11,7 +11,7 @@ CHUNKER_VERSION = "paragraph-v1"
 TextPolicy = Literal["primary", "processed", "reader"]
 
 
-VISUAL_SOURCE_KINDS = ("visual_caption", "table_cell")
+VISUAL_SOURCE_KINDS = ("visual_caption",)
 
 
 def visual_source_layer(kind: str, visual_id: str, item_id: str) -> str:
@@ -31,8 +31,7 @@ def parse_visual_source_layer(layer: str) -> dict[str, str] | None:
             return None
     except (ValueError, UnicodeError):
         return None
-    key = "captionId" if parts[0] == "visual_caption" else "cellId"
-    return {"visualId": visual_id, key: item_id}
+    return {"visualId": visual_id, "captionId": item_id}
 
 
 @dataclass(frozen=True)

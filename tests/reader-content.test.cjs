@@ -126,10 +126,7 @@ function fixture() {
   const item = { id: 'doc/1', pages: [page] };
   const content = { version: 1, sourceRevision: 7, displayedText: page.text, textHash: digest(page.text), imageHash: page.imageHash,
     items: [{ type: 'text', start: 0, end: 3 }, { type: 'visual', visualId: 'v1', placement: 'inline' }, { type: 'text', start: 3, end: 6 }],
-    visuals: { v1: { id: 'v1', kind: 'table', renderMode: 'structured', status: 'ready',
-      tableModel: { rows: 2, columns: 2, borderStyle: 'all', cells: [
-        { id: 'a', row: 0, column: 0, rowSpan: 1, colSpan: 2, text: '<script>header</script>', header: true },
-        { id: 'b', row: 1, column: 0, text: 'left' }, { id: 'c', row: 1, column: 1, text: 'right' }] },
+    visuals: { v1: { id: 'v1', kind: 'table', renderMode: 'image', status: 'ready', url: '/visual.png', width: 90, height: 95,
       captions: [{ id: 'cap', text: 'A separate caption', position: 'after', sourceRegions: [{ bbox: [5, 110, 95, 125] }] }],
       sourceImageHash: page.imageHash, sourceImageWidth: 100, sourceImageHeight: 200, geometryStatus: 'exact',
       sourceRegions: [{ bbox: [5, 5, 95, 100] }] } }, warnings: [], layoutStatus: 'ready' };
@@ -174,10 +171,8 @@ if (require.main === module) {
     assert.deepEqual(plain(nodes.map(({ start, end }) => ({ start, end }))), [{ start: 0, end: 3 }, { start: 3, end: 4 }, { start: 4, end: 5 }, { start: 5, end: 6 }]);
     assert.equal(nodes.map(({ node }) => node.nodeValue).join(''), page.text);
     assert.deepEqual(readerText.querySelectorAll('[data-sentence-id]').map((node) => node.dataset.sentenceId), ['s1', 's1', 's2']);
-    assert.equal(readerText.querySelector('th').colSpan, 2);
-    assert.equal(readerText.querySelector('th').textContent, '<script>header</script>');
-    assert.equal(readerText.querySelectorAll('script').length, 0);
-    assert.equal(readerText.querySelectorAll('code').length, 0);
+    assert.equal(readerText.querySelector('img').getAttribute('src'), 'https://reader.example/visual.png');
+    assert.equal(readerText.querySelectorAll('table').length, 0);
     assert.equal(readerText.querySelector('figcaption').dataset.readerCaptionId, 'cap');
   });
   test('invalid content returns false without changing the container', () => {
@@ -185,8 +180,8 @@ if (require.main === module) {
     const mutations = [
       (x) => x.sourceRevision++, (x) => { x.textHash = 'wrong'; }, (x) => { x.displayedText = 'changed'; },
       (x) => { x.imageHash = 'wrong'; }, (x) => { x.items[2].start = 4; }, (x) => { x.items[0].end = 2; x.items[2].start = 2; },
-      (x) => { x.items.push({ type: 'visual', visualId: 'v1' }); }, (x) => { x.visuals.v1.tableModel.cells[1].row = 0; },
-      (x) => { x.visuals.v1.tableModel.cells.pop(); }, (x) => { x.items[1].visualId = '__proto__'; },
+      (x) => { x.items.push({ type: 'visual', visualId: 'v1' }); }, (x) => { x.visuals.v1.renderMode = 'structured'; },
+      (x) => { x.visuals.v1.kind = 'video'; }, (x) => { x.items[1].visualId = '__proto__'; },
     ];
     for (const mutate of mutations) { const broken = structuredClone(content); mutate(broken); assert.equal(c.renderReaderContent(page, broken), false); }
     c.readerEditing = true; assert.equal(c.renderReaderContent(page, content), false);
@@ -276,12 +271,11 @@ if (require.main === module) {
     assert.equal(env.c.readerVisualSafeUrl('data:text/html,bad'), '');
     assert.equal(env.c.readerVisualSafeUrl('/crop.png'), 'https://reader.example/crop.png');
   });
-  test('standalone caption titles render without an image or enlarge control; borderless model is preserved', () => {
+  test('standalone caption titles render without an image or enlarge control', () => {
     const env = setup();
-    env.content.visuals.v1.tableModel.borderStyle = 'borderless';
     env.c.renderReaderContent(env.page, env.content);
-    assert.equal(env.readerText.querySelector('table').dataset.borderStyle, 'borderless');
-    env.content.visuals.v1 = { id: 'v1', kind: 'caption', renderMode: 'structured', title: 'Unassigned title', captions: [] };
+    assert.equal(env.readerText.querySelector('img').getAttribute('src'), 'https://reader.example/visual.png');
+    env.content.visuals.v1 = { id: 'v1', kind: 'caption', renderMode: 'image', title: 'Unassigned title', captions: [] };
     env.c.renderReaderContent(env.page, env.content);
     assert.equal(env.readerText.querySelector('figcaption').textContent, 'Unassigned title');
     assert.equal(env.readerText.querySelector('img'), null);

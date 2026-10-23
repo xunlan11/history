@@ -680,7 +680,7 @@ def build_warnings(result: dict[str, Any]) -> list[str]:
 
     types = {block.get("type") for block in blocks}
     if {"table", "table_title"} & types:
-        warnings.append("表格区域已单独保留，请对照原图核对单元格内容。")
+        warnings.append("表格区域已单独保留为图片，请对照原图核对。")
     if {"figure", "figure_title", "chart", "seal"} & types:
         warnings.append("图表及其标题已单独保留，不进入正文；印章区域不进入正文。")
     if {"header", "footer", "page_number"} & types:
