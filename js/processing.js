@@ -78,7 +78,7 @@ async function requestBackendProcessing(documentId, options = {}) {
 
 async function submitBackendDocument(item) {
   const result = await requestBackendProcessing(item.id, {
-    method: "POST", body: { mode: item.processingMode === "parallel" ? "parallel" : "serial" },
+    method: "POST", body: { mode: normalizeProcessingMode(item.processingMode), chunkSize: clampChunkSize(item.processingChunkSize) },
   });
   return applyBackendProcessingDocument(item.id, result);
 }
@@ -258,13 +258,30 @@ function isStagePageTerminal(page, stageKey) {
   return status === "done" || status === "failed" || status === "skipped";
 }
 
+// 分块模式同一个阶段会有多页并行（activeStages 键形如 "punctuation:12"）：
+// 取页码最小的那条，和右侧环上的数字以及进度快照口径一致。
+function activeStageEntry(task, stageKey) {
+  const stages = task?.activeStages || {};
+  const direct = stages[stageKey];
+  if (direct && Number(direct.pageNumber) > 0) return direct;
+  const prefix = `${stageKey}:`;
+  let best = null;
+  for (const [key, value] of Object.entries(stages)) {
+    if (!key.startsWith(prefix)) continue;
+    if (!(Number(value?.pageNumber) > 0)) continue;
+    if (!best || Number(value.pageNumber) < Number(best.pageNumber)) best = value;
+  }
+  return best;
+}
+
 // 环显示的是「该阶段当前处理到第几页」，环长表示这一页在该阶段的进展：
 // · 正在处理该页 → 实测页内进度；还没有实测值时保持空环（靠 .is-active 呼吸提示进行中），
 //   不画任何假进度，否则第一笔实测值（往往只有 1%~2%）会让环看起来「先涨后缩」；
 // · 该阶段已全部完成 → 满环，数字为总页数；
 // · 该阶段还没轮到该页 → 空环，数字为下一页（而不是已完成页数）。
 function stagePageState(item, task, stageKey, done, total) {
-  const activePage = Number(task.activeStages?.[stageKey]?.pageNumber) || 0;
+  const active = activeStageEntry(task, stageKey);
+  const activePage = Number(active?.pageNumber) || 0;
   if (activePage > 0) return { pageNumber: activePage, percent: null, active: true };
   if (total > 0 && done >= total) return { pageNumber: total, percent: 100, active: false };
   const pending = (item.pages || []).find((page) => page.pageNumber > 0 && !isStagePageTerminal(page, stageKey));
@@ -283,7 +300,9 @@ function renderStreamProgress(item) {
   const finished = task.status === "已完成";
   streamProgress?.classList.remove("hidden");
   if (progressTotalNode) progressTotalNode.textContent = `${total}`;
-  if (progressModeNode) progressModeNode.textContent = task.mode === "parallel" ? "并行" : "串行";
+  if (progressModeNode) progressModeNode.textContent = task.mode === "chunked"
+    ? `大串小并 · ${task.chunkSize || PROCESSING_CHUNK_SIZE_DEFAULT} 页/块`
+    : task.mode === "parallel" ? "并行" : "串行";
   for (const stage of PROCESSING_STAGE_CONFIG) {
     const nodes = progressStageNodes.get(stage.key);
     const fill = progressStageFills.get(stage.key);

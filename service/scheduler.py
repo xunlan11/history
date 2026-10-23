@@ -28,6 +28,37 @@ logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "failed", "cancelled"}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = float(os.getenv("PROCESSING_RETRY_SECONDS", "10"))
+
+
+def _env_int(name, default, minimum=1):
+    """环境变量读成整数；写错时退回默认值，不能因为一个配置笔误让调度器起不来。"""
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# 处理链路：serial 逐页串行、parallel 四阶段流水线、chunked 大串小并（块间串行、块内并行）。
+PROCESSING_MODES = ("serial", "parallel", "chunked")
+DEFAULT_PROCESSING_MODE = "chunked"
+CHUNK_SIZE_DEFAULT = 3
+CHUNK_SIZE_MAX = 10
+# 线程池大小和块内并行度都是环境变量：换大设备只调配置，不改代码。
+STAGE_WORKERS = _env_int("PROCESSING_STAGE_WORKERS", 4)
+# 块内每个阶段可同时处理几页。默认 1 = 和并行链路完全一致（四阶段各一路、错位推进）；
+# 只有确实需要同一阶段并行多页时才调大。
+STAGE_LANES = _env_int("PROCESSING_STAGE_LANES", 1)
+
+
+def normalize_chunk_size(value, default=CHUNK_SIZE_DEFAULT):
+    """块大小只允许 1..CHUNK_SIZE_MAX；非法值退回默认值。"""
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(CHUNK_SIZE_MAX, size))
+
+
 # 渲染页既用于阅读回显，也是 OCR 的输入图；JPEG q90 在 1.5 倍缩放下肉眼无损，
 # 体积约为 PNG 的一半，避免单页 data URL 接近 1MB。
 RENDER_SCALE = 1.5
@@ -51,12 +82,12 @@ class ProcessingFailure(RuntimeError):
     """文件、结果或协议异常使用有限的重试次数。"""
 
 
-def ensure_schema(connection):
-    connection.executescript("""
+PROCESSING_JOBS_DDL = """
         CREATE TABLE IF NOT EXISTS processing_jobs (
             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
             document_id TEXT NOT NULL UNIQUE REFERENCES documents(id),
-            mode TEXT NOT NULL CHECK(mode IN ('serial', 'parallel')),
+            mode TEXT NOT NULL CHECK(mode IN ('serial', 'parallel', 'chunked')),
+            chunk_size INTEGER NOT NULL DEFAULT 3,
             phase TEXT NOT NULL DEFAULT 'registration',
             status TEXT NOT NULL DEFAULT 'queued',
             source_path TEXT NOT NULL,
@@ -65,9 +96,61 @@ def ensure_schema(connection):
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+"""
+
+
+PROCESSING_QUEUE_INDEX_DDL = """
         CREATE INDEX IF NOT EXISTS idx_processing_jobs_queue
-            ON processing_jobs(phase, status, sequence);
-    """)
+            ON processing_jobs(phase, status, sequence)
+"""
+
+
+def ensure_current_schema(connection):
+    """把既有库的 processing_jobs 升级到支持分块链路；新库由 ensure_schema 建表。
+
+    每次 connect 都会调用，所以先用一次 sqlite_master 查询探底：已升级时只剩一句
+    幂等的 CREATE INDEX IF NOT EXISTS。
+    """
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='processing_jobs'").fetchone()
+    if row is None:
+        return  # 新库交给 ensure_schema 建表建索引
+    if "chunked" not in (row["sql"] or ""):
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            _upgrade_processing_jobs(connection)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    # 重建表会连带丢掉旧索引，这里补回来（已存在时是空操作）。
+    connection.execute(PROCESSING_QUEUE_INDEX_DDL)
+
+
+def _upgrade_processing_jobs(connection):
+    """把旧的 processing_jobs 重建成支持分块链路的形状。
+
+    SQLite 无法直接放宽 CHECK 约束，只能重建表。旧库里的任务按默认块大小继续处理，
+    已登记的串行/并行不受影响。
+    """
+    columns = {item[1] for item in connection.execute("PRAGMA table_info(processing_jobs)")}
+    chunk_expr = "chunk_size" if "chunk_size" in columns else str(CHUNK_SIZE_DEFAULT)
+    # 上一次升级若在中间失败，残留的临时表会挡住 RENAME。
+    connection.execute("DROP TABLE IF EXISTS processing_jobs_legacy")
+    connection.execute("ALTER TABLE processing_jobs RENAME TO processing_jobs_legacy")
+    # 索引名会跟着表走；先删掉，避免新表上 CREATE INDEX IF NOT EXISTS 变成空操作。
+    connection.execute("DROP INDEX IF EXISTS idx_processing_jobs_queue")
+    connection.execute(PROCESSING_JOBS_DDL)
+    connection.execute(f"""INSERT INTO processing_jobs
+            (sequence, document_id, mode, chunk_size, phase, status, source_path, checkpoint, retry_at, created_at, updated_at)
+        SELECT sequence, document_id, mode, {chunk_expr}, phase, status, source_path, checkpoint, retry_at, created_at, updated_at
+        FROM processing_jobs_legacy""")
+    connection.execute("DROP TABLE processing_jobs_legacy")
+
+
+def ensure_schema(connection):
+    connection.execute(PROCESSING_JOBS_DDL)
+    ensure_current_schema(connection)
 
 
 def metadata(document):
@@ -256,6 +339,7 @@ def preserve_server_fields(connection, document):
         if key in stored:
             document[key] = stored[key]
     document["processingMode"] = job["mode"]
+    document["processingChunkSize"] = normalize_chunk_size(job.get("chunk_size"))
     # 备注仍可编辑。调度器运行期间负责正文、状态和页列表；普通元数据仍可编辑。
     active = connection.execute("SELECT status FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()["status"] not in TERMINAL
     incoming = {p.get("id"): p for p in document.get("pages", [])}
@@ -309,7 +393,8 @@ class Scheduler:
         self.data = data
         self.services = services or HttpServices()
         self.clock = clock
-        self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="document-stage")
+        # 并发能力全部来自环境变量：换大设备把 worker 数和在飞页数一起调上去即可。
+        self.executor = ThreadPoolExecutor(max_workers=STAGE_WORKERS, thread_name_prefix="document-stage")
         self.running: dict[str, tuple[Future, str, str, int]] = {}
         # 单页任务的实时进度（仅内存）：doc_id -> stage -> {pageNumber, percent, updatedAt}
         self.page_progress: dict[str, dict[str, dict]] = {}
@@ -341,17 +426,25 @@ class Scheduler:
             stages = self.page_progress.setdefault(document_id, {})
             value = max(0, min(100, int(percent or 0)))
             previous = stages.get(stage)
-            if monotonic and previous and int(previous.get("pageNumber") or 0) == int(page_number):
+            if previous and int(previous.get("pageNumber") or 0) != int(page_number):
+                # 分块模式下同一阶段会有多页并行：界面只报最靠前的那一页，避免数字来回跳。
+                if int(previous.get("pageNumber") or 0) < int(page_number):
+                    return
+            elif monotonic and previous:
                 # 重试会换新的进度键并从 0 开始；同一页同一阶段只允许往前推。
                 value = max(value, int(previous.get("percent") or 0))
             stages[stage] = {"pageNumber": int(page_number),
                              "percent": value, "updatedAt": self.clock(),
                              **({"detail": dict(detail)} if detail else {})}
 
-    def _clear_page_progress(self, document_id, stage):
+    def _clear_page_progress(self, document_id, stage, page_number=None):
         with self.progress_lock:
             stages = self.page_progress.get(document_id)
             if not stages:
+                return
+            entry = stages.get(stage)
+            if entry and page_number is not None and int(entry.get("pageNumber") or 0) != int(page_number):
+                # 该阶段还有更靠前的页在处理，清掉会让进度倒退。
                 return
             stages.pop(stage, None)
             if not stages:
@@ -483,7 +576,7 @@ class Scheduler:
             progress[stage] = {"done": min(total, done), "total": total}
         return progress
 
-    def _record(self, document_id, operation, number, future):
+    def _record(self, document_id, operation, number, future, lane=None):
         with self.data.database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             loaded = self._load(connection, document_id)
@@ -492,7 +585,8 @@ class Scheduler:
             job, doc, cp = loaded
             task = doc["processingTask"]
             active_stage = "ocr" if operation == "render" else operation
-            task.setdefault("activeStages", {}).pop(active_stage, None)
+            # 分块模式下 lane 是 "阶段:页号"，每条在飞任务只清理自己那一条。
+            task.setdefault("activeStages", {}).pop(lane or active_stage, None)
             key = f"{operation}:{number}"
             try:
                 result = future.result()
@@ -691,12 +785,12 @@ class Scheduler:
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
             if future.done():
                 self._stop_progress_watcher(lane)
-                self._record(doc_id, operation, number, future)
+                self._record(doc_id, operation, number, future, lane)
                 del self.running[lane]
                 if operation in {"metadata_candidate", "metadata"}:
                     self._clear_registration_progress(doc_id)
                 else:
-                    self._clear_page_progress(doc_id, "ocr" if operation == "render" else operation)
+                    self._clear_page_progress(doc_id, "ocr" if operation == "render" else operation, number)
         with self.data.database() as connection:
             jobs = [dict(row) for row in connection.execute("""
                 SELECT j.* FROM processing_jobs j JOIN documents d ON d.id=j.document_id
@@ -756,7 +850,8 @@ class Scheduler:
                 doc["status"] = "已完成"
                 save_job_state(self.data, connection, job, doc, saved, page_ids=[])
             return
-        for lane, operation, number in self._body_operations(job, doc, cp, total):
+        busy = {(entry[2], entry[3]) for entry in self.running.values()}
+        for lane, operation, number in self._body_operations(job, doc, cp, total, busy=busy):
             key = f"{operation}:{number}"
             if lane in self.running or cp.get("retries", {}).get(key, 0) > self.clock():
                 continue
@@ -781,8 +876,14 @@ class Scheduler:
         return True
 
     @classmethod
-    def _body_operations(cls, job, doc, cp, total):
-        """选择依赖就绪的阶段；串行逐页完成， 并行跨页形成四阶段流水线。"""
+    def _body_operations(cls, job, doc, cp, total, busy=None):
+        """选择依赖就绪的阶段。
+
+        - serial：逐页完成四个阶段后再进入下一页。
+        - parallel：四阶段跨页流水线，每个阶段最多一路。
+        - chunked：按 chunk_size 分块，块间串行；块内就是并行链路（四阶段错位推进），
+          只是可选页被限制在当前块内。
+        """
         omitted = set(cp.get("omittedPages", []))
         pages = {}
         for page in doc.get("pages", []):
@@ -822,6 +923,9 @@ class Scheduler:
                     return []
             return []
 
+        if job["mode"] == "chunked":
+            return cls._chunked_operations(job, total, omitted, page_for, ready, operation_for, busy or set())
+
         operations = []
         for stage in PROCESSING_STAGES:
             for number in range(1, total + 1):
@@ -835,6 +939,54 @@ class Scheduler:
                     operations.append((lane, operation, number))
                     break
         return operations
+
+    @classmethod
+    def _chunked_operations(cls, job, total, omitted, page_for, ready, operation_for, busy):
+        """大串小并：块间串行，块内按并行链路的四阶段错位推进。
+
+        `PROCESSING_STAGE_LANES` 默认 1，即每个阶段同时只处理一页，行为与 parallel 一致；
+        调大后同一阶段也能并行多页（仅换大设备时才需要）。
+        """
+        size = normalize_chunk_size(job.get("chunk_size"))
+        current = None
+        for start in range(1, total + 1, size):
+            numbers = [number for number in range(start, min(start + size, total + 1)) if number not in omitted]
+            if not numbers:
+                continue
+            if all(cls._stage_terminal(page_for(number) or {"pageNumber": number}, "proofreading") for number in numbers):
+                continue
+            current = numbers
+            break
+        if not current:
+            return []
+
+        def previous_punctuation_ready(number):
+            if number <= 1:
+                return True
+            previous = page_for(number - 1)
+            if previous is None or cls._stage_failed(previous, "ocr"):
+                # 没渲染或前页没有正文时没有上文可用，不能让这一页永远等下去。
+                return True
+            return cls._stage_terminal(previous, "punctuation")
+
+        operations = []
+        for stage in PROCESSING_STAGES:
+            picked = 0
+            for number in current:
+                if picked >= STAGE_LANES:
+                    break
+                page = page_for(number) or {"pageNumber": number}
+                if not ready(stage, page):
+                    continue
+                lane, operation = operation_for(stage, page)
+                if (operation, number) in busy:
+                    continue  # 这页这个阶段已在处理，让给块内下一页
+                if stage == "proofreading" and not previous_punctuation_ready(number):
+                    continue  # 等上一页标点完成再借上文
+                operations.append((f"{lane}:{number}", operation, number))
+                picked += 1
+        return operations
+
     def _acquire_worker_lock(self):
         # 进程生命周期内的操作系统锁可防止重复工作器，包括 uvicorn --workers。
         # 进程退出后锁会自动释放。
@@ -880,8 +1032,8 @@ class Scheduler:
         for stop in list(self.progress_watchers.values()):
             stop.set()
         self.progress_watchers.clear()
-        for future, doc_id, operation, number in self.running.values():
-            self._record(doc_id, operation, number, future)
+        for lane, (future, doc_id, operation, number) in list(self.running.items()):
+            self._record(doc_id, operation, number, future, lane)
         if self.lock_file:
             self.lock_file.close()
             self.lock_file = None

@@ -15,8 +15,12 @@ from service.reader_content import NON_BODY_TYPES
 
 logger = logging.getLogger(__name__)
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
+# 空行是自然段边界，也是句子边界：参考文献块、标题、关键词、单位署名等行常常没有
+# 句末标点，只按标点切会把它们与下一段首句粘成一句，原文高亮/引用定位就会一次圈住
+# 好几个互不相干的部分。
+PARAGRAPH_BREAK = re.compile(r'\n[ \t]*\n')
 # 索引载荷版本：算法变化时递增，旧载荷在 reconcile 时重建。
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 
 
 def text_hash(text: str) -> str:
@@ -115,9 +119,11 @@ def normalize_ocr_layout(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def split_sentences(text: str) -> list[dict[str, Any]]:
-    boundaries = [match.end() for match in SENTENCE_END.finditer(text)]
-    if not boundaries or boundaries[-1] != len(text):
-        boundaries.append(len(text))
+    # 段边界取空行的起点，空行本身留在下一句开头（与标点切分的行为一致），
+    # 渲染时由前端把首尾空白拆成普通文本节点。
+    boundaries = sorted({0, len(text),
+                         *(match.end() for match in SENTENCE_END.finditer(text)),
+                         *(match.start() for match in PARAGRAPH_BREAK.finditer(text))})
     sentences = []
     start, offset = 0, 0
     for end in boundaries:
@@ -321,7 +327,7 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
     for match in SequenceMatcher(None, source, target, autojunk=False).get_matching_blocks():
         for delta in range(match.size):
             mapping[match.b + delta] = match.a + delta
-    sentences, cursor = split_sentences(displayed_text), 0
+    sentences, cursor, source_cursor = split_sentences(displayed_text), 0, 0
     for sentence in sentences:
         chars = normalize_for_alignment(to_simplified(sentence["text"]))
         hits = [mapping[i] for i in range(cursor, cursor + len(chars)) if i in mapping]
@@ -333,9 +339,12 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
         exact = len(hits) == len(chars) and span == len(chars)
         fuzzy = (len(chars) >= 8 and len(hits) / len(chars) >= 0.9 and
                  len(chars) - len(hits) <= 2 and span <= len(chars) + 2)
-        ambiguous = source != target and source.count(chars) > 1
-        if not source_consistent or ambiguous or not (exact or fuzzy):
+        # 同一段文字在页面上出现多次（标题同时也出现在参考文献条目里）时，模糊对齐可能落到
+        # 另一处，只接受整段全部命中的精确对齐；同时要求目标位置单调前进，避免跳回前文。
+        repeated = source != target and source.count(chars) > 1
+        if not source_consistent or (repeated and not exact) or not (exact or fuzzy) or hits[0] < source_cursor:
             continue
+        source_cursor = hits[-1] + 1
         offset, safe = 0, True
         for line, part in zip(lines, source_parts):
             # 跨越缺字的行仍保留其空间范围，但不会越过相邻句子。

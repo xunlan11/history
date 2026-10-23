@@ -144,6 +144,22 @@ function syncDocumentFileName() {
 documentFileInput?.addEventListener("change", syncDocumentFileName);
 form?.addEventListener("reset", syncDocumentFileName);
 
+// 每部分页数只对「大串小并」有意义：其它处理方式下置灰并保留默认值。
+const chunkSizeInput = document.querySelector("#chunk-size-input");
+
+function syncProcessingChunkInput() {
+  if (!chunkSizeInput) return;
+  const mode = form?.querySelector('input[name="processingMode"]:checked')?.value || "chunked";
+  chunkSizeInput.disabled = mode !== "chunked";
+  chunkSizeInput.title = chunkSizeInput.disabled ? "仅大串小并需要设置每部分页数" : "";
+}
+
+form?.querySelectorAll('input[name="processingMode"]').forEach((input) => {
+  input.addEventListener("change", syncProcessingChunkInput);
+});
+form?.addEventListener("reset", syncProcessingChunkInput);
+syncProcessingChunkInput();
+
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!currentUser?.id) {
@@ -177,7 +193,8 @@ form?.addEventListener("submit", async (event) => {
     fileType: file.type || "unknown",
     fileSize: file.size,
     processingTask: createProcessingTask(file),
-    processingMode: formData.get("processingMode") === "parallel" ? "parallel" : "serial",
+    processingMode: normalizeProcessingMode(formData.get("processingMode") || "chunked"),
+    processingChunkSize: clampChunkSize(formData.get("chunkSize")),
     createdAt: new Date().toISOString(),
     status: "待整理",
     pages: [firstPage],

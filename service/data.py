@@ -213,7 +213,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
     "semantic_chunks": {"chunk_id", "document_id", "page_id", "source_layer", "source_hash", "ordinal", "start", "end", "text", "chunker_version"},
     "semantic_vectors": {"chunk_id", "model_fingerprint", "dimensions", "vector"},
     "semantic_jobs": {"id", "page_id", "source_layer", "source_hash", "model_fingerprint", "status", "attempts", "retry_at", "lease_until", "lease_token", "error"},
-    "processing_jobs": {"sequence", "document_id", "mode", "phase", "status", "source_path", "checkpoint", "retry_at", "created_at", "updated_at"},
+    "processing_jobs": {"sequence", "document_id", "mode", "chunk_size", "phase", "status", "source_path", "checkpoint", "retry_at", "created_at", "updated_at"},
 }
 
 def _require_current_schema(connection: sqlite3.Connection) -> None:
@@ -255,6 +255,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             raise RuntimeError(f"Database schema_version is invalid; only schema {SCHEMA_VERSION} is supported") from exc
         if schema_version != SCHEMA_VERSION:
             raise RuntimeError(f"Database schema {schema_version} is unsupported; only schema {SCHEMA_VERSION} is supported")
+        # 已有库也要升级处理任务表（新增大串小并链路），再校验列齐全。
+        processing_scheduler.ensure_current_schema(connection)
         _require_current_schema(connection)
         return
     connection.executescript(
@@ -1581,10 +1583,11 @@ def convert_variant(payload: VariantConvertPayload) -> dict[str, Any]:
 
 
 class ProcessingSubmission(BaseModel):
-    mode: Literal["serial", "parallel"] = "serial"
+    mode: Literal["serial", "parallel", "chunked"] = processing_scheduler.DEFAULT_PROCESSING_MODE
+    chunkSize: int | None = None
 
 
-def enqueue_document(connection, document_id: str, mode: str | None = None):
+def enqueue_document(connection, document_id: str, mode: str | None = None, chunk_size: int | None = None):
     existing = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
     row = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
     if not row:
@@ -1595,22 +1598,26 @@ def enqueue_document(connection, document_id: str, mode: str | None = None):
     source = connection.execute("SELECT * FROM document_files WHERE document_id=? AND role='source' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", (document_id,)).fetchone()
     if not source:
         raise HTTPException(status_code=409, detail="原件尚未归档")
-    selected = mode or document.get("processingMode") or "serial"
-    if not isinstance(selected, str) or selected not in {"serial", "parallel"}:
-        raise HTTPException(status_code=422, detail="处理方式必须是串行或并行")
+    selected = mode or document.get("processingMode") or processing_scheduler.DEFAULT_PROCESSING_MODE
+    if not isinstance(selected, str) or selected not in processing_scheduler.PROCESSING_MODES:
+        raise HTTPException(status_code=422, detail="处理方式必须是串行、并行或大串小并")
+    # 块大小是登记参数，1..CHUNK_SIZE_MAX；只对分块链路有意义，但一并保存方便重试时复用。
+    size = processing_scheduler.normalize_chunk_size(
+        chunk_size if chunk_size is not None else document.get("processingChunkSize"))
     source_path = (FILE_STORAGE_DIR / source["storage_path"]).resolve()
     if not source_path.is_relative_to(FILE_STORAGE_DIR) or not source_path.is_file():
         raise HTTPException(status_code=409, detail="归档原件不存在或路径无效")
     stamp = now_iso()
     if existing:
         connection.execute("DELETE FROM processing_jobs WHERE document_id=?", (document_id,))
-    result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,source_path,checkpoint,created_at,updated_at)
-        VALUES(?,?,?,?,?,?)""", (document_id, selected, source["storage_path"], json_dump({"registrationStep": "metadata_candidate"}), stamp, stamp))
+    result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,chunk_size,source_path,checkpoint,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?)""", (document_id, selected, size, source["storage_path"], json_dump({"registrationStep": "metadata_candidate"}), stamp, stamp))
     document["processingMode"] = selected
+    document["processingChunkSize"] = size
     document["registration"] = {"status": "running", "stage": "metadata", "metadata": "pending", "error": "", "completedAt": ""}
     apply_asset_to_document(document, public_asset(source))
     document["processingTask"] = {**(document.get("processingTask") or {}), "backendManaged": True,
-        "remoteTaskId": f"document-{result.lastrowid}", "status": "登记中", "mode": selected,
+        "remoteTaskId": f"document-{result.lastrowid}", "status": "登记中", "mode": selected, "chunkSize": size,
         "queueSequence": result.lastrowid, "revision": 1, "metadataSnapshot": processing_scheduler.metadata(document), "activeStages": {}, "submittedAt": stamp, "finishedAt": "", "message": "原件已归档，后端准备登记",
         "totalPages": 0, "completedPages": 0, "finalizedPages": 0,
         "stageProgress": {stage: {"done": 0, "total": 0} for stage in processing_scheduler.PROCESSING_STAGES},
@@ -1807,7 +1814,7 @@ def submit_document_processing(document_id: str, payload: ProcessingSubmission):
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         require_owned_document(connection, document_id, user)
-        enqueue_document(connection, document_id, payload.mode)
+        enqueue_document(connection, document_id, payload.mode, payload.chunkSize)
         bump_sync_version(connection)
         return {"document": public_processing_document(connection, document_id, user)}
 

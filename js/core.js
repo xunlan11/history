@@ -409,7 +409,8 @@ function normalizeDocuments(items) {
         fileMimeType: item.fileMimeType || "",
         sourceFile: item.sourceFile || null,
         registration: normalizeRegistration(item.registration),
-        processingMode: item.processingMode === "parallel" ? "parallel" : "serial",
+        processingMode: normalizeProcessingMode(item.processingMode),
+        processingChunkSize: clampChunkSize(item.processingChunkSize),
         metadataStatus: item.metadataStatus || "待自动识别",
         coverImageDataUrl: item.coverImageDataUrl || "",
         coverImageUrl: item.coverImageUrl || "",
@@ -1309,6 +1310,20 @@ function normalizeRegistrationProgress(value) {
     detail: normalizeOcrProgressDetail(value.detail),
   };
 }
+// 处理链路：串行 / 并行 / 大串小并（分块）。旧数据没有 mode 时按串行解释。
+function normalizeProcessingMode(value) {
+  return value === "parallel" || value === "chunked" ? value : "serial";
+}
+
+// 块大小与后端保持一致：1..10，默认 3。
+const PROCESSING_CHUNK_SIZE_DEFAULT = 3;
+const PROCESSING_CHUNK_SIZE_MAX = 10;
+function clampChunkSize(value) {
+  const size = Math.round(Number(value));
+  if (!Number.isFinite(size) || size <= 0) return PROCESSING_CHUNK_SIZE_DEFAULT;
+  return Math.min(PROCESSING_CHUNK_SIZE_MAX, Math.max(1, size));
+}
+
 function normalizeProcessingTask(task) {
   if (!task) {
     return null;
@@ -1317,7 +1332,8 @@ function normalizeProcessingTask(task) {
   return {
     id: task.id,
     backendManaged: task.backendManaged === true,
-    mode: task.mode === "parallel" ? "parallel" : "serial",
+    mode: normalizeProcessingMode(task.mode),
+    chunkSize: clampChunkSize(task.chunkSize),
     revision: Number(task.revision) || 0,
     metadataSnapshot: task.metadataSnapshot || null,
     activeStages: task.activeStages || {},
