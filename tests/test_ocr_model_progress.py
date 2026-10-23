@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from service.ocr_model import ImageOnlyVisualPipeline
 from service.ocr_model_progress import (CURRENT, SCOPE, InferenceProgress,
                                         ObservedPredictor, ProgressStore, instrument_pipeline)
 
@@ -184,3 +185,56 @@ def test_failed_http_response_never_reports_completion(status):
         headers=[(b"x-ocr-progress-key",b"error")]), None, send))
     assert store.read("error")["status"] == "failed"
     assert store.read("error")["percent"] < 100
+
+
+class Pipeline:
+    def __init__(self, blocks):
+        self.result = {"parsing_res_list": blocks}
+        self.calls = []
+
+    def predict(self, *args, **kwargs):
+        self.calls.append(kwargs)
+        yield self.result
+
+    __call__ = predict
+
+
+@pytest.mark.parametrize("method", ["predict", "__call__"])
+def test_legacy_requests_disable_reconstruction_and_link_each_crop(method):
+    blocks = [SimpleNamespace(label=kind, content="old OCR", image={"path": f"imgs/{kind}.jpg"})
+              for kind in ("table", "chart", "image")]
+    body = SimpleNamespace(label="text", content="body text", image=None)
+    target = Pipeline([*blocks, body])
+    wrapped = ImageOnlyVisualPipeline(target)
+    result = list(getattr(wrapped, method)(["page"], use_table_recognition=True,
+                 use_chart_recognition=True, use_wired_table_cells_trans_to_html=True,
+                 use_wireless_table_cells_trans_to_html=True, use_doc_unwarping=True))
+    assert result == [target.result]
+    assert target.calls[0]["use_doc_unwarping"] is True
+    assert all(target.calls[0][key] is False for key in (
+        "use_table_recognition", "use_chart_recognition",
+        "use_wired_table_cells_trans_to_html", "use_wireless_table_cells_trans_to_html"))
+    for block in blocks:
+        assert block.content == f"![{block.label}](imgs/{block.label}.jpg)"
+    assert body.content == "body text"
+
+
+def test_missing_crop_and_error_result_pass_through():
+    block = SimpleNamespace(label="table", content="old text", image=None)
+    target = Pipeline([block])
+    list(ImageOnlyVisualPipeline(target).predict(["page"]))
+    assert block.content == "old text"
+    target.result = {"error": "inference failed"}
+    assert list(ImageOnlyVisualPipeline(target).predict(["page"])) == [target.result]
+
+
+def test_progress_uses_effective_table_policy():
+    store = ProgressStore()
+    tracker = InferenceProgress(store, "image-only", {"use_table_recognition": True})
+    token = CURRENT.set(tracker)
+    try:
+        wrapped = ImageOnlyVisualPipeline(ObservedPredictor(Pipeline([]), "root"))
+        list(wrapped.predict(["page"], use_table_recognition=True))
+        assert "table_recognition" not in tracker.steps
+    finally:
+        CURRENT.reset(token)

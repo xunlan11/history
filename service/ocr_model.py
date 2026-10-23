@@ -8,11 +8,41 @@ from __future__ import annotations
 import argparse
 import contextvars
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 
 from service.ocr_model_progress import CURRENT, InferenceProgress, ProgressStore, instrument_pipeline
 
 log = logging.getLogger(__name__)
+
+
+class ImageOnlyVisualPipeline:
+    """Keep native layout crops and accept callers still requesting table reconstruction."""
+
+    def __init__(self, target):
+        self.target = target
+
+    def __getattr__(self, name):
+        return getattr(self.target, name)
+
+    def __call__(self, *args, **kwargs):
+        return self._predict(self.target, *args, **kwargs)
+
+    def predict(self, *args, **kwargs):
+        return self._predict(self.target.predict, *args, **kwargs)
+
+    def _predict(self, method, *args, **kwargs):
+        # 本机不再初始化表格模型；覆盖旧数据端参数，避免其请求不存在的模型。
+        kwargs.update(use_table_recognition=False, use_chart_recognition=False,
+                      use_wired_table_cells_trans_to_html=False,
+                      use_wireless_table_cells_trans_to_html=False)
+        with closing(method(*args, **kwargs)) as results:
+            for result in results:
+                # PaddleX 已在相同坐标系内裁好图片；用其真实路径关联官方 markdown.images。
+                # 仅更新视觉块，正文仍保留未格式化的 OCR 文本。
+                for block in result.get("parsing_res_list", []):
+                    if block.label in {"table", "chart", "image", "figure"} and block.image:
+                        block.content = f"![{block.label}]({block.image['path']})"
+                yield result
 
 
 class ProgressMiddleware:
@@ -58,7 +88,8 @@ def create_app(pipeline, config):
     except Exception:  # noqa: BLE001 - 进度只是观测层，不能连带打挂识别服务
         log.exception("OCR 进度观测不可用：PaddleX 管线结构与预期不符，改为只提供识别")
         observed, tracking = pipeline, False
-    app = create_pipeline_app(observed, config)
+    # 在进度观测外覆盖参数，使进度按实际启用的模型统计。
+    app = create_pipeline_app(ImageOnlyVisualPipeline(observed), config)
     store = ProgressStore()
     original_lifespan = app.router.lifespan_context
 

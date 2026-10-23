@@ -37,8 +37,8 @@ def test_captions_and_table_are_not_body_and_preserve_reference():
     assert figure["captions"][0]["text"] == "图三 部署图"
     assert figure["captions"][0]["position"] == "after"
     assert table["captions"][0]["position"] == "before"
-    assert table["renderMode"] == "structured"
-    assert table["tableModel"]["cells"][-1]["text"] == "001"
+    assert table["renderMode"] == "image"
+    assert "tableModel" not in table
 
 
 def test_ordered_projection_retains_all_body_after_punctuation_and_variant():
@@ -125,13 +125,16 @@ def test_visual_crops_are_independent_and_unknown_space_is_not_guessed(tmp_path)
     assert raw["visuals"][0]["status"] == "missing"
 
 
-def test_catalog_includes_structured_tables_all_pages_and_keeps_identical_titles():
+@pytest.mark.parametrize("stored_mode", ["image", "structured"])
+def test_catalog_includes_new_and_historical_tables_all_pages(stored_mode):
     page, _ = page_for(result())
+    # 历史保存的结构化表格不迁移，目录及阅读器继续支持它们。
+    page["visuals"][1]["renderMode"] = stored_mode
     second = dict(page, id="p2", pageNumber=2)
     payload = content.build_visual_catalog({"id":"d", "pages":[second,page]})
     assert payload["total"] == 4 and payload["complete"]
     assert [i["pageNumber"] for i in payload["items"]] == [1,1,2,2]
-    assert payload["items"][1]["renderMode"] == "structured"
+    assert payload["items"][1]["renderMode"] == stored_mode
     assert not content.build_visual_catalog({"id":"d", "pages":[{"id":"p"}]})["complete"]
 
 
@@ -156,7 +159,7 @@ def library(monkeypatch, tmp_path):
     connection.close()
 
 
-def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
+def test_figure_and_table_image_assets_survive_sync_and_reader_routes(library, tmp_path):
     client, connection, user = library
     page, layout = page_for(result())
     path = tmp_path / "input.png"
@@ -164,13 +167,15 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
     raw = result(); raw["visuals"] = page["visuals"]
     content.materialize_visual_images(raw,path)
     page["imageDataUrl"] = "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
-    # 同一页两个不同图片资源；表格仍按结构化方式处理。
+    # 同一页的插图、表格均保存独立图片资源。
     page["visuals"].append(dict(page["visuals"][0], id="another"))
     doc = {"id":"d", "visibility":"private", "pages":[page]}
     data.upsert_documents(connection,[doc],"now",user)
     stored_page = data.load_document_pages(connection, "d")[0]
     rows = list(connection.execute("SELECT role FROM document_files WHERE document_id='d' AND role LIKE 'page-visual:%'"))
-    assert len(rows) == 2
+    assert len(rows) == 3
+    assert stored_page["visuals"][1]["renderMode"] == "image"
+    assert stored_page["visuals"][1]["url"] != stored_page["visuals"][0]["url"]
     assert stored_page["visuals"][0]["url"] != stored_page["visuals"][-1]["url"]
     assert "imageDataUrl" not in stored_page["visuals"][0]
     reader_index.save_ocr_layout(connection,"d",stored_page,{**result(), "contentBlocks":layout["contentBlocks"],"contentSourceText":page["ocrText"]},"now")
@@ -190,15 +195,23 @@ def test_assets_two_visuals_survive_sync_and_reader_routes(library, tmp_path):
         assert client.get("/api/documents/d/pages/p/reader-content").status_code == 404
 
 
-def test_reader_upstream_requests_input_coordinates(monkeypatch, tmp_path):
+@pytest.mark.parametrize("mode", ["formal", "quick", "reader"])
+def test_upstream_requests_images_without_reconstruction(monkeypatch, tmp_path, mode):
     path=tmp_path/'p.png'; Image.new('RGB',(10,10)).save(path)
     monkeypatch.setenv('OCR_UPSTREAM_URL','http://ocr.example')
     calls=[]
     monkeypatch.setattr(ocr_upstream,'_request_json',lambda url,payload,**kw: (calls.append(payload) or (200, {'result':{'layoutParsingResults':[{'prunedResult':{}}]}})))
-    parsed=ocr_upstream.recognize_page_image(path,mode='reader')
-    assert parsed['coordinateSpace']=='input'
-    assert calls[0]['useDocUnwarping'] is False
-    assert calls[0]['useTableRecognition'] is True
+    parsed=ocr_upstream.recognize_page_image(path,mode=mode)
+    assert parsed['coordinateSpace'] == ('processed' if mode == 'formal' else 'input')
+    assert calls[0]['useDocUnwarping'] is (mode == 'formal')
+    assert calls[0]['useDocOrientationClassify'] is (mode == 'formal')
+    assert calls[0]['useTextlineOrientation'] is (mode != 'quick')
+    assert calls[0]['useLayoutDetection'] is (mode != 'quick')
+    assert calls[0]['useWiredTableCellsTransToHtml'] is False
+    assert calls[0]['useWirelessTableCellsTransToHtml'] is False
+    assert calls[0]['useChartRecognition'] is False
+    assert calls[0]['returnMarkdownImages'] is True
+    assert calls[0]['useTableRecognition'] is False
 
 def test_corrupt_resource_still_uses_verified_original_crop(tmp_path):
     path=tmp_path/'page.png'; Image.new('RGB',(100,100)).save(path)
@@ -260,3 +273,44 @@ def test_zero_valued_explicit_caption_identity_does_not_fall_back_to_neighbor():
     visuals,_=content.extract_visuals(raw)
     assert visuals[0]['captions'][0]['text']=='caption zero'
     assert not visuals[1]['captions']
+
+
+def test_table_pixels_are_cropped_even_when_upstream_sends_html(tmp_path):
+    path = tmp_path / "page.png"
+    image = Image.new("RGB", (100, 100), "white")
+    image.paste("red", (50, 10, 95, 60))
+    image.save(path)
+    raw = result()
+    raw["blocks"][-1]["html"] = "<table><tr><td>wrong reconstruction</td></tr></table>"
+    raw["visuals"], _ = content.extract_visuals(raw)
+    content.materialize_visual_images(raw, path)
+    table = raw["visuals"][1]
+    assert table["renderMode"] == "image" and table["status"] == "ready"
+    assert "tableModel" not in table
+    with Image.open(io.BytesIO(base64.b64decode(table["imageDataUrl"].split(",", 1)[1]))) as crop:
+        assert crop.size == (45, 50)
+        assert crop.tobytes() == image.crop((50, 10, 95, 60)).tobytes()
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_processed_visuals_use_their_own_resources_not_input_coordinates(tmp_path, image_format):
+    path = tmp_path / "page.png"
+    Image.new("RGB", (100, 100), "white").save(path)
+    raw = {"width": 100, "height": 100, "coordinateSpace": "processed", "blocks": [
+        {"type": "table", "text": "![table](imgs/table.jpg)", "bbox": [1, 1, 20, 20]},
+        {"type": "chart", "text": "![chart](imgs/chart.jpg)", "bbox": [30, 1, 50, 20]},
+        {"type": "table", "text": "no image", "bbox": [1, 30, 20, 50]},
+    ], "markdownImages": {}}
+    # 资源顺序与块顺序不同，必须按真实路径绑定，不能按下标猜测。
+    for kind, color in [("chart", "blue"), ("table", "red")]:
+        output = io.BytesIO()
+        Image.new("RGB", (19, 19), color).save(output, format=image_format)
+        raw["markdownImages"][f"imgs/{kind}.jpg"] = base64.b64encode(output.getvalue()).decode()
+    raw["visuals"], _ = content.extract_visuals(raw)
+    content.materialize_visual_images(raw, path)
+    for visual, color in zip(raw["visuals"], [(255, 0, 0), (0, 0, 255)]):
+        assert visual["status"] == "ready" and visual["geometryStatus"] == "unavailable"
+        with Image.open(io.BytesIO(base64.b64decode(visual["imageDataUrl"].split(",", 1)[1]))) as crop:
+            assert all(abs(actual - expected) <= 2 for actual, expected in zip(crop.getpixel((0, 0)), color))
+    assert raw["visuals"][2]["status"] == "missing"
+    assert "imageDataUrl" not in raw["visuals"][2]

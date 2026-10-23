@@ -17,7 +17,6 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image
 from service.variant import to_simplified
-from service.table_content import parse_table_model
 
 VISUAL_TYPES = {"figure", "image", "chart", "table"}
 CAPTION_TYPES = {"figure_title", "table_title", "chart_title", "figure_caption", "table_caption", "caption"}
@@ -189,16 +188,13 @@ def extract_visuals(result):
             continue
         original = raw[index]
         visual_id = f"visual-{index + 1:04d}"
-        model = parse_table_model(original.get("tableModel") or original.get("html") or block["text"]) if block["kind"] == "table" else None
         regions = region_for(block, width, height) if same_space else []
         visual = {"id": visual_id, "blockId": block["id"], "kind": "figure" if block["kind"] == "image" else block["kind"],
                   "blockOrder": index, "sourceBoundary": block["sourceBoundary"],
-                  "renderMode": "structured" if model else "image", "captions": [],
+                  "renderMode": "image", "captions": [],
                   "sourceRegions": regions, "sourceImageWidth": width, "sourceImageHeight": height,
-                  "geometryStatus": "exact" if regions else "unavailable", "status": "ready" if model else "missing",
+                  "geometryStatus": "exact" if regions else "unavailable", "status": "missing",
                   "captionCoverage": original.get("captionCoverage", "excluded")}
-        if model:
-            visual["tableModel"] = model
         # 保留资源标识，绝不按数组下标匹配无关图片。
         refs = re.findall(r'(?:src=["\']([^"\']+)["\']|!\[[^\]]*\]\(([^)]+)\))', block["text"])
         visual["resourceRef"] = original.get("imageUrl") or original.get("resourceRef") or next((a or b for a, b in refs), "")
@@ -343,6 +339,16 @@ def build_visual_catalog(document):
 def _image_bytes(value):
     if not isinstance(value, str) or len(value) > MAX_IMAGE_BYTES * 2:
         raise ValueError("图片内容为空或过大")
+    # JPEG 的裸 Base64 以 /9j/ 开头，不能因为首字符 / 就当作站内 URL。
+    if value.startswith("/9j/"):
+        try:
+            data = base64.b64decode(value, validate=True)
+        except ValueError:
+            pass  # 不是合法 Base64，仍按正常资源地址校验。
+        else:
+            if len(data) > MAX_IMAGE_BYTES:
+                raise ValueError("图片过大")
+            return data
     data_url = value.startswith("data:")
     if data_url:
         value = value.split(",", 1)[1]
