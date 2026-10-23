@@ -171,7 +171,7 @@ if (require.main === module) {
       { id: 's1', start: 0, end: 4, text: 'A😀B' }, { id: 's2', start: 4, end: 6, text: '\nC' }] };
     assert.equal(c.renderReaderContent(page, content, index), true);
     const nodes = c.getReaderTextNodes(readerText);
-    assert.deepEqual(plain(nodes.map(({ start, end }) => ({ start, end }))), [{ start: 0, end: 3 }, { start: 3, end: 4 }, { start: 4, end: 6 }]);
+    assert.deepEqual(plain(nodes.map(({ start, end }) => ({ start, end }))), [{ start: 0, end: 3 }, { start: 3, end: 4 }, { start: 4, end: 5 }, { start: 5, end: 6 }]);
     assert.equal(nodes.map(({ node }) => node.nodeValue).join(''), page.text);
     assert.deepEqual(readerText.querySelectorAll('[data-sentence-id]').map((node) => node.dataset.sentenceId), ['s1', 's1', 's2']);
     assert.equal(readerText.querySelector('th').colSpan, 2);

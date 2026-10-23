@@ -290,8 +290,9 @@ def save_job_state(data, connection, job, doc, cp, page_ids=None):
     data.materialize_document_assets(connection, doc["id"], doc, stamp, page_ids=allowed)
     pages = doc.get("pages") or []
     touched = pages if allowed is None else [page for page in pages if page.get("id") in allowed]
+    source_pdf = data.document_source_pdf(connection, doc["id"])
     for page in touched:
-        reader_index.reconcile_reader_index(connection, doc["id"], page, stamp)
+        reader_index.reconcile_reader_index(connection, doc["id"], page, stamp, source_pdf=source_pdf)
     connection.execute("UPDATE documents SET payload=?, updated_at=?, version=version+1 WHERE id=? AND deleted_at IS NULL",
                        (data.document_payload(doc), stamp, doc["id"]))
     if allowed is None:

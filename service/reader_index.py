@@ -16,7 +16,7 @@ from service.reader_content import NON_BODY_TYPES
 logger = logging.getLogger(__name__)
 SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
 # 索引载荷版本：算法变化时递增，旧载荷在 reconcile 时重建。
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 
 def text_hash(text: str) -> str:
@@ -184,13 +184,34 @@ def _char_span_quad(line, low, high):
     return box, [[round(point[0], 2), round(point[1], 2)] for point in quad]
 
 
-def _line_region(line, start, end):
+def _span_between_x(line, left, right):
+    """按行内绝对横坐标（页面图像像素）切出字级四边形。"""
+    box = line.get("bbox")
+    if not box:
+        return None
+    x1, x2 = box[0], box[2]
+    if x2 <= x1 or right <= left:
+        return None
+    low = min(max((left - x1) / (x2 - x1), 0.0), 1.0)
+    high = min(max((right - x1) / (x2 - x1), 0.0), 1.0)
+    if high - low <= 0.002:
+        return None
+    return _char_span_quad(line, low, high)
+
+
+def _line_region(line, start, end, char_boxes=None):
     box, polygon = line.get("bbox"), line.get("polygon") or []
     if not box:
         return None, False
     normalized = normalize_for_alignment(line["normalizedText"])
     if start == 0 and end == len(normalized):
         return {"lineId": line["id"], "bbox": box, "polygon": polygon}, True
+    # 电子版 PDF 的文字层能给出每个字符的真实位置，按它精确切到字符。
+    if char_boxes and len(char_boxes) == len(normalized) and 0 <= start < end <= len(char_boxes):
+        sliced = _span_between_x(line, char_boxes[start][0], char_boxes[end - 1][1])
+        if sliced:
+            cropped, cropped_polygon = sliced
+            return {"lineId": line["id"], "bbox": cropped, "polygon": cropped_polygon}, True
     raw = line["text"]
     positions = [i for i, c in enumerate(raw) if c.isalnum()]
     # 只有等宽全角汉字能按字符比例切；其余（混排数字/字母、字数与归一化不符）保留整行。
@@ -206,8 +227,90 @@ def _line_region(line, start, end):
     return {"lineId": line["id"], "bbox": cropped, "polygon": cropped_polygon}, True
 
 
+def pdf_line_char_boxes(pdf_path: Any, page_number: Any, lines: list[dict[str, Any]], *,
+                        source_text: str, image_width: Any) -> dict[str, list[list[float]]]:
+    """从 PDF 文字层取每个字符的真实位置，换算成页面图像坐标。
+
+    只有电子版（带文字层）的 PDF 才有：OCR 只能给出整行的多边形，行里混排数字/字母时
+    按比例切会失准；文字层则能精确到字符。扫描件、页序错位、坐标对不上时一律返回空字典，
+    调用方继续走原来的整行/等宽比例兜底。
+    """
+    if not pdf_path or not page_number or not lines or not _dimension(image_width):
+        return {}
+    try:
+        import fitz
+    except ImportError:  # 数据端未装 PyMuPDF 时只是没有字级精度，不影响索引。
+        return {}
+    try:
+        with fitz.open(str(pdf_path)) as document:
+            number = int(page_number)
+            if number < 1 or number > document.page_count:
+                return {}
+            pdf_page = document[number - 1]
+            page_width = float(pdf_page.rect.width or 0)
+            raw_chars: list[tuple[str, float, float, float, float]] = []
+            for block in pdf_page.get_text("rawdict").get("blocks") or []:
+                if block.get("type") != 0:
+                    continue
+                for text_line in block.get("lines") or []:
+                    for span in text_line.get("spans") or []:
+                        for char in span.get("chars") or []:
+                            char_text = str(char.get("c") or "")
+                            char_box = char.get("bbox")
+                            if not char_text.strip() or not char_box or len(char_box) != 4:
+                                continue
+                            raw_chars.append((char_text, float(char_box[0]), float(char_box[1]),
+                                              float(char_box[2]), float(char_box[3])))
+    except Exception:  # 损坏/加密/非 PDF：保持旧行为即可。
+        logger.debug("Cannot read PDF text layer for %s page %s", pdf_path, page_number, exc_info=True)
+        return {}
+    if not raw_chars or not math.isfinite(page_width) or page_width <= 0:
+        return {}
+    scale = float(image_width) / page_width
+    key_parts: list[str] = []
+    owners: list[int] = []
+    for index, (char_text, *_box) in enumerate(raw_chars):
+        if char_text.isalnum():
+            key_parts.append(to_simplified(char_text))
+            owners.append(index)
+    key = "".join(key_parts)
+    if not key:
+        return {}
+    boxes_by_line: dict[str, list[list[float]]] = {}
+    cursor = 0
+    for line in reorder_lines_for_source(lines, source_text):
+        normalized = normalize_for_alignment(line.get("normalizedText") or "")
+        box = line.get("bbox")
+        if not normalized or not box:
+            continue
+        position = key.find(normalized, cursor)
+        if position < 0:
+            # 多栏页面可能与 OCR 行序错开，允许回跳一次重新对齐。
+            position = key.find(normalized)
+            if position < 0:
+                continue
+        cursor = position + len(normalized)
+        matched = [raw_chars[owners[position + offset]] for offset in range(len(normalized))]
+        tolerance = max(6.0, (float(box[3]) - float(box[1])) * 0.5)
+        spans: list[list[float]] = []
+        for _text, x0, y0, x1, y1 in matched:
+            left, right = x0 * scale, x1 * scale
+            middle_y = (y0 + y1) / 2 * scale
+            if not (box[1] - tolerance <= middle_y <= box[3] + tolerance):
+                break
+            if not (box[0] - tolerance <= left and right <= box[2] + tolerance):
+                break
+            spans.append([round(left, 1), round(right, 1)])
+        else:
+            # 该行对不上文字层就不给字级坐标，交给 _line_region 的整行兜底。
+            if spans and spans[-1][1] - spans[0][0] >= (box[2] - box[0]) * 0.4:
+                boxes_by_line[line["id"]] = spans
+    return boxes_by_line
+
+
 def build_reader_index(*, layout: dict[str, Any], source_text: str,
-                       displayed_text: str, source_revision: int) -> dict[str, Any]:
+                       displayed_text: str, source_revision: int,
+                       char_boxes: dict[str, list[list[float]]] | None = None) -> dict[str, Any]:
     lines = reorder_lines_for_source(layout.get("lines") or [], source_text)
     source_parts = [normalize_for_alignment(line["normalizedText"]) for line in lines]
     source = "".join(source_parts)
@@ -238,7 +341,8 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
             # 跨越缺字的行仍保留其空间范围，但不会越过相邻句子。
             low, high = max(hits[0], offset), min(hits[-1] + 1, offset + len(part))
             if low < high:
-                region, precise = _line_region(line, low - offset, high - offset)
+                region, precise = _line_region(line, low - offset, high - offset,
+                                               (char_boxes or {}).get(line["id"]))
                 sentence["lineIds"].append(line["id"])
                 if region and layout.get("imageWidth") and layout.get("imageHeight"):
                     sentence["boxes"].append(region)
@@ -252,11 +356,13 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
 
 
 def build_index_payload(*, layout: dict[str, Any], page: dict[str, Any],
-                        source_revision: int, displayed_text: str) -> dict[str, Any]:
+                        source_revision: int, displayed_text: str,
+                        char_boxes: dict[str, list[list[float]]] | None = None) -> dict[str, Any]:
     """构建可用索引；一条句子都拿不到坐标时直接报错，
     避免出现「状态 ready 但整页没有任何高亮」的静默失败。"""
     index = build_reader_index(layout=layout, source_text=page.get("ocrText") or "",
-                               displayed_text=displayed_text, source_revision=source_revision)
+                               displayed_text=displayed_text, source_revision=source_revision,
+                               char_boxes=char_boxes)
     if not any(sentence["boxes"] for sentence in index["sentences"]):
         raise ValueError("OCR 布局与正文无法对齐，没有任何句子匹配到文字行")
     return index
@@ -316,7 +422,8 @@ def save_ocr_layout(connection, document_id, page, result, timestamp):
     _set_metadata(page, status, revision, "", timestamp)
 
 
-def copy_reader_index(connection, source_document_id, source_page_id, document_id, page, timestamp):
+def copy_reader_index(connection, source_document_id, source_page_id, document_id, page, timestamp,
+                     *, source_pdf=None):
     """Copy the OCR layout and index while rebinding the independent page image."""
     row = connection.execute(
         "SELECT * FROM page_reader_indexes WHERE document_id=? AND page_id=?",
@@ -332,7 +439,7 @@ def copy_reader_index(connection, source_document_id, source_page_id, document_i
         VALUES(?,?,?,?,?,?,?,?,?)""",
         (page["id"], document_id, row["status"], row["source_revision"], row["text_hash"],
          _json(layout), row["payload"], row["error"], timestamp))
-    reconcile_reader_index(connection, document_id, page, timestamp)
+    reconcile_reader_index(connection, document_id, page, timestamp, source_pdf=source_pdf)
 
 
 def _stored_index_version(payload: str) -> int:
@@ -342,7 +449,7 @@ def _stored_index_version(payload: str) -> int:
         return 0
 
 
-def reconcile_reader_index(connection, document_id, page, timestamp):
+def reconcile_reader_index(connection, document_id, page, timestamp, *, source_pdf=None):
     row = connection.execute("SELECT * FROM page_reader_indexes WHERE page_id=? AND document_id=?",
                              (page["id"], document_id)).fetchone()
     if not row:
@@ -369,8 +476,12 @@ def reconcile_reader_index(connection, document_id, page, timestamp):
         try:
             if not layout.get("imageWidth") or not layout.get("imageHeight") or not any(line.get("bbox") for line in layout.get("lines", [])):
                 raise ValueError("OCR 未提供有效的图片尺寸或文字行坐标")
+            char_boxes = pdf_line_char_boxes(source_pdf, page.get("pageNumber"), layout.get("lines") or [],
+                                             source_text=page.get("ocrText") or "",
+                                             image_width=layout.get("imageWidth"))
             index = build_index_payload(layout=layout, page=page,
-                                        source_revision=revision, displayed_text=displayed)
+                                        source_revision=revision, displayed_text=displayed,
+                                        char_boxes=char_boxes)
             # 布局内的校验信息仅供服务端使用。
             index.pop("imageIdentity", None)
             index.pop("sourceTextHash", None)

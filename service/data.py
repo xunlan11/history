@@ -557,6 +557,24 @@ def public_file_url(storage_path: str | Path) -> str:
     return f"{PUBLIC_BASE_URL}/files/{quoted}"
 
 
+def document_source_pdf(connection: sqlite3.Connection, document_id: str) -> Path | None:
+    """文献原件的 PDF 路径；阅读索引用它取文字层的字级坐标。"""
+    try:
+        row = connection.execute(
+            "SELECT storage_path FROM document_files WHERE document_id=? AND role='source' "
+            "AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        if not row or not row["storage_path"]:
+            return None
+        path = (FILE_STORAGE_DIR / row["storage_path"]).resolve()
+        if path.suffix.lower() != ".pdf" or not path.is_relative_to(FILE_STORAGE_DIR.resolve()):
+            return None
+        return path if path.is_file() else None
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None
+
+
 def write_asset_file(
     content: bytes,
     document_id: str,
@@ -1058,8 +1076,9 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
         materialize_document_assets(connection, document_id, stored_document, timestamp)
+        source_pdf = document_source_pdf(connection, document_id)
         for page in stored_document.get("pages") or []:
-            reader_index.reconcile_reader_index(connection, document_id, page, timestamp)
+            reader_index.reconcile_reader_index(connection, document_id, page, timestamp, source_pdf=source_pdf)
         payload = document_payload(stored_document)
 
         visibility = "public" if stored_document.get("visibility") == "public" else "private"
@@ -1678,9 +1697,11 @@ def download_public_document(document_id: str) -> dict[str, Any]:
             stored = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
             payload = attach_document_pages(connection, json_load(stored["payload"]))
             old_page_ids = {new_id: old_id for old_id, new_id in page_ids.items()}
+            copied_source_pdf = document_source_pdf(connection, document["id"])
             for page in payload.get("pages") or []:
                 reader_index.copy_reader_index(connection, document_id, old_page_ids[page["id"]],
-                                               document["id"], page, timestamp)
+                                               document["id"], page, timestamp,
+                                               source_pdf=copied_source_pdf)
             upsert_document_pages(connection, document["id"], payload.get("pages") or [], timestamp)
             payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
                                      "sourceDocumentId": document_id}

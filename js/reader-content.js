@@ -242,6 +242,16 @@ function readerContentSentenceIndex(index, page, text) {
   return offset === text.length ? index : null;
 }
 
+// 句子文本常把上一自然段结尾的换行一起包进来；这些空白若留在高亮节点里，
+// 会在上一段末尾和空行上画出小色块，所以拆成普通文本节点，只高亮正文。
+function splitSentenceEdges(text) {
+  const value = String(text ?? "");
+  const leading = value.match(/^\s*/)[0];
+  const rest = value.slice(leading.length);
+  const trailing = rest.match(/\s*$/)[0];
+  return { leading, body: rest.slice(0, rest.length - trailing.length), trailing };
+}
+
 function renderReaderContent(page, content, readerIndex = null) {
   if ((typeof readerEditing !== "undefined" && readerEditing) || !isReaderContentValid(content, page) ||
       typeof readerText === "undefined" || !readerText) return false;
@@ -260,11 +270,16 @@ function renderReaderContent(page, content, readerIndex = null) {
     const slices = index ? index.sentences.filter((sentence) => sentence.end > entry.start && sentence.start < entry.end) : [entry];
     for (const slice of slices) {
       const start = Math.max(entry.start, slice.start), end = Math.min(entry.end, slice.end);
-      const span = readerVisualElement("span", index ? "reader-sentence" : "reader-content-text", content.displayedText.slice(start, end));
-      span.dataset.readerTextStart = String(start);
-      span.dataset.readerTextEnd = String(end);
-      if (index) { span.dataset.sentenceId = slice.id; span.tabIndex = 0; }
-      fragment.append(span);
+      const { leading, body, trailing } = splitSentenceEdges(content.displayedText.slice(start, end));
+      if (leading) fragment.append(leading);
+      if (body) {
+        const span = readerVisualElement("span", index ? "reader-sentence" : "reader-content-text", body);
+        span.dataset.readerTextStart = String(start + leading.length);
+        span.dataset.readerTextEnd = String(end - trailing.length);
+        if (index) { span.dataset.sentenceId = slice.id; span.tabIndex = 0; }
+        fragment.append(span);
+      }
+      if (trailing) fragment.append(trailing);
     }
   }
   for (const message of content.warnings || []) {

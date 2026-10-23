@@ -1275,12 +1275,17 @@ function renderReaderText(page, readerIndex = null, options = {}) {
     readerText.classList.remove("is-empty");
   } else if (readerIndex && !readerEditing && isReaderIndexValid(readerIndex, page)) {
     for (const sentence of readerIndex.sentences) {
-      const node = document.createElement("span");
-      node.className = "reader-sentence";
-      node.dataset.sentenceId = sentence.id;
-      node.tabIndex = 0;
-      node.textContent = sentence.text;
-      readerText.append(node);
+      const { leading, body, trailing } = splitSentenceEdges(sentence.text);
+      if (leading) readerText.append(leading);
+      if (body) {
+        const node = document.createElement("span");
+        node.className = "reader-sentence";
+        node.dataset.sentenceId = sentence.id;
+        node.tabIndex = 0;
+        node.textContent = body;
+        readerText.append(node);
+      }
+      if (trailing) readerText.append(trailing);
     }
   } else {
     readerText.textContent = text;
