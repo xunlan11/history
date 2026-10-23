@@ -339,7 +339,8 @@ def preserve_server_fields(connection, document):
         if key in stored:
             document[key] = stored[key]
     document["processingMode"] = job["mode"]
-    document["processingChunkSize"] = normalize_chunk_size(job.get("chunk_size"))
+    # job 是 sqlite3.Row（没有 .get），列名直接取；升级过的表一定有 chunk_size。
+    document["processingChunkSize"] = normalize_chunk_size(job["chunk_size"])
     # 备注仍可编辑。调度器运行期间负责正文、状态和页列表；普通元数据仍可编辑。
     active = connection.execute("SELECT status FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()["status"] not in TERMINAL
     incoming = {p.get("id"): p for p in document.get("pages", [])}
