@@ -972,20 +972,24 @@ class Scheduler:
 
         operations = []
         for stage in PROCESSING_STAGES:
-            picked = 0
+            # 名额要按「该阶段真正在飞的数量」算：在飞的页虽然被跳过，但已经占住了这一路。
+            stage_operations = {"render", "ocr"} if stage == "ocr" else {stage}
+            slots = STAGE_LANES - sum(1 for operation, _ in busy if operation in stage_operations)
+            if slots <= 0:
+                continue  # 这一路已经满了，本轮不再给这个阶段排新页
             for number in current:
-                if picked >= STAGE_LANES:
+                if slots <= 0:
                     break
                 page = page_for(number) or {"pageNumber": number}
                 if not ready(stage, page):
                     continue
                 lane, operation = operation_for(stage, page)
                 if (operation, number) in busy:
-                    continue  # 这页这个阶段已在处理，让给块内下一页
+                    continue  # 这页这个阶段已在处理
                 if stage == "proofreading" and not previous_punctuation_ready(number):
                     continue  # 等上一页标点完成再借上文
                 operations.append((f"{lane}:{number}", operation, number))
-                picked += 1
+                slots -= 1
         return operations
 
     def _acquire_worker_lock(self):
