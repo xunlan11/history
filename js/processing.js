@@ -301,7 +301,7 @@ function renderStreamProgress(item) {
   streamProgress?.classList.remove("hidden");
   if (progressTotalNode) progressTotalNode.textContent = `${total}`;
   if (progressModeNode) progressModeNode.textContent = task.mode === "chunked"
-    ? `大串小并 · 每部分 ${task.chunkSize || PROCESSING_CHUNK_SIZE_DEFAULT} 页`
+    ? "大串小并"
     : task.mode === "parallel" ? "并行" : "串行";
   for (const stage of PROCESSING_STAGE_CONFIG) {
     const nodes = progressStageNodes.get(stage.key);
