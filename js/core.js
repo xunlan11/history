@@ -339,6 +339,24 @@ function getDeletedConversationStorageKey() {
 }
 const SYNC_INTERVAL_MS = 30000;
 
+// 处理链路：串行 / 并行 / 大串小并（分块）。旧数据没有 mode 时按串行解释。
+// 注意：这两个常量与 clampChunkSize 会被 normalizeDocuments() 在脚本加载时（下方
+// `let documents = normalizeDocuments(...)`）立刻调用，必须声明在它之前，
+// 否则缓存里有文献时整页 TDZ 报错（ReferenceError），页面直接「死住」。
+const PROCESSING_CHUNK_SIZE_DEFAULT = 3;
+const PROCESSING_CHUNK_SIZE_MAX = 10;
+
+function normalizeProcessingMode(value) {
+  return value === "parallel" || value === "chunked" ? value : "serial";
+}
+
+// 块大小与后端保持一致：1..10，默认 3。
+function clampChunkSize(value) {
+  const size = Math.round(Number(value));
+  if (!Number.isFinite(size) || size <= 0) return PROCESSING_CHUNK_SIZE_DEFAULT;
+  return Math.min(PROCESSING_CHUNK_SIZE_MAX, Math.max(1, size));
+}
+
 let documents = normalizeDocuments(loadCachedDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
@@ -1309,19 +1327,6 @@ function normalizeRegistrationProgress(value) {
     percent: Math.min(100, Math.max(0, Number(value.percent) || 0)),
     detail: normalizeOcrProgressDetail(value.detail),
   };
-}
-// 处理链路：串行 / 并行 / 大串小并（分块）。旧数据没有 mode 时按串行解释。
-function normalizeProcessingMode(value) {
-  return value === "parallel" || value === "chunked" ? value : "serial";
-}
-
-// 块大小与后端保持一致：1..10，默认 3。
-const PROCESSING_CHUNK_SIZE_DEFAULT = 3;
-const PROCESSING_CHUNK_SIZE_MAX = 10;
-function clampChunkSize(value) {
-  const size = Math.round(Number(value));
-  if (!Number.isFinite(size) || size <= 0) return PROCESSING_CHUNK_SIZE_DEFAULT;
-  return Math.min(PROCESSING_CHUNK_SIZE_MAX, Math.max(1, size));
 }
 
 function normalizeProcessingTask(task) {

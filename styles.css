@@ -1396,6 +1396,9 @@ body {
   justify-content: space-between;
   gap: 10px;
   margin: 0;
+  /* .progress-stack 是 grid，默认 min-width:auto 会把整行撑到 min-content
+     （标题 + 方式文字 + 四环 52px = 380），侧栏只有 300 时卡片被裁 → 必须允许收窄 */
+  min-width: 0;
 }
 
 /* 左栏：标题 + 处理方式（串行 / 并行）两行；环固定在右上角。
@@ -1408,6 +1411,9 @@ body {
   gap: 0;
   margin-bottom: -8px;
   min-width: 0;
+  /* 「大串小并 · 每部分 3 页」不能换行也不能被压缩（否则文字溢出到环上），
+     空间不够时让右侧四环按 30px 下限收缩 */
+  flex: 0 0 auto;
 }
 
 .progress-title {
