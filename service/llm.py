@@ -20,14 +20,13 @@ from service.task_progress import progress_reporter, read_progress
 
 # 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
+LLM_MODEL = os.getenv("LLM_MODEL", "spark-x2.6:4b-q4_k_m")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 # 详见 deploy/README.md；设为 1 可恢复思考模式。
 LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
-# 整页文本任务（标点 / 校对）的上下文预算。不给 num_ctx 时 Ollama 用默认 4096，
-# 一页 2600 多字的中文正文加上提示词就放不下，生成会退化成整段复读并被服务端中止
-# （2026-10-22 实测 qwen3:8b 报 "prediction aborted, token repeat limit reached"）。
+# 整页标点 / 校对至少使用 16K 上下文，再按输入和输出预算扩展。
+# 旧 4K 预算曾导致长页截断和重复，不能随模型切换压低。
 LLM_TEXT_CONTEXT_TOKENS = int(os.getenv("LLM_TEXT_CONTEXT_TOKENS", "16384"))
 # 超过这个字数的整页按段落/版面行切段分别标点，避免提示词和输出一起越过上下文。
 LLM_TEXT_CHUNK_CHARS = int(os.getenv("LLM_TEXT_CHUNK_CHARS", "6000"))

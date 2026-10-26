@@ -33,7 +33,4 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 1. 编年。
 2. 水印。
-3. 星火spark x2.5。
-4. 图表。
-5. 大串小并。
-6. 文献合并。
+3. 图表。

@@ -45,7 +45,7 @@ set -euo pipefail
 | 数据端 | 文学站 Data API | `127.0.0.1:18665` | `data/literature.service` |
 | 数据端 | 文学站 OCR 编排 API | `127.0.0.1:18765` | `data/literature-ocr.service` |
 | 模型端 | PaddleX PP-StructureV3，CPU | `127.0.0.1:8080` | `service/history-ocr.service` |
-| 模型端 | Ollama 生成，允许 GPU/CPU 混合 | `127.0.0.1:11434` | `service/history-llm.service` |
+| 模型端 | Ollama 生成，默认 Spark Q4_K_M / 16K，Qwen 备选 | `127.0.0.1:11434` | `service/history-llm.service` |
 | 模型端 | Ollama 嵌入，固定 CPU | `127.0.0.1:11436` | `service/history-embedding.service` |
 | 模型端 | OCR/生成反向隧道 | 数据端 `18080`→模型端 `8080`、数据端 `11435`→模型端 `11434` | `service/history-tunnel.service` |
 | 模型端 | 独立嵌入反向隧道 | 数据端 `11436`→模型端 `11436` | `service/history-embedding-tunnel.service` |
@@ -275,20 +275,22 @@ systemctl --user enable --now history-ocr.service history-llm.service history-em
 
 OCR 保留文档预处理、版面与区域检测和文字识别；表格结构重建、公式识别、印章识别、图表转表格固定关闭，YAML 不再包含这些模型的配置。版面检测仍可标出表格、公式、印章和图表区域；表格及图表使用区域图片，供数据端保存、显示和正文过滤。
 
-CPU OCR 首次启动可能下载 YAML 所需模型；迁移已有 `~/.paddlex` 可减少下载。检查日志直到加载完成。OCR `--device cpu`；嵌入 unit 屏蔽 CUDA/Vulkan/ROCm；生成 unit 不限制为 CPU。嵌入与生成各最多加载一个模型、并行数为 1，上下文配置为 4096，`OLLAMA_KEEP_ALIVE=-1` 在首次推理后保持驻留。预留总 RAM 时计入 OCR、生成 CPU 分担和嵌入同时运行，不能用下载体积代替运行占用。
+CPU OCR 首次启动可能下载 YAML 所需模型；迁移已有 `~/.paddlex` 可减少下载。检查日志直到加载完成。OCR `--device cpu`；嵌入 unit 屏蔽 CUDA/Vulkan/ROCm；生成 unit 不限制为 CPU。嵌入与生成各最多加载一个模型、并行数为 1；生成默认上下文为 16384，嵌入保持 4096，`OLLAMA_KEEP_ALIVE=-1` 在首次推理后保持驻留。预留总 RAM 时计入 OCR、生成 CPU 分担和嵌入同时运行，不能用下载体积代替运行占用。
 
-### 5.2 准备两个模型并真实推理
+### 5.2 准备生成、嵌入模型并真实推理
 
-优先复用源端模型缓存，确保模型标签和 digest 一致。只有目标缺模型或明确计划更新时执行对应 `pull`；已有同名模型时不要无条件拉取，远端标签变化会改变内容。全新安装分别使用两个实例：
+优先复用源端模型缓存，确保模型标签和 digest 一致。只有目标缺模型或明确计划更新时执行对应 `pull`；已有同名模型时不要无条件拉取，远端标签变化会改变内容。全新安装先按下节“Spark 权重校验与 Qwen 备选”下载并注册 Spark，再分别使用两个实例准备备选和嵌入模型：
 
 ```bash
+# Qwen 为备选；已有缓存时跳过 pull，不删除原模型。
 OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" pull qwen3:8b
 OLLAMA_HOST=127.0.0.1:11436 "$HOME/history-service/ollama/bin/ollama" pull qwen3-embedding:0.6b-q8_0
+OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" show spark-x2.6:4b-q4_k_m
 OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" show qwen3:8b
 OLLAMA_HOST=127.0.0.1:11436 "$HOME/history-service/ollama/bin/ollama" show qwen3-embedding:0.6b-q8_0
 ```
 
-嵌入必须是精确标签 `qwen3-embedding:0.6b-q8_0`、Q8_0、1024 维；不能用生成模型代替。生成使用 `qwen3:8b`，生成目录保留生成模型，嵌入目录保留嵌入模型。CPU 嵌入不得加载到生成实例。
+嵌入必须是精确标签 `qwen3-embedding:0.6b-q8_0`、Q8_0、1024 维；不能用生成模型代替。默认生成使用 `spark-x2.6:4b-q4_k_m`、16K 上下文；`qwen3:8b` 留作手动备选，两个生成权重均保留在生成目录。嵌入目录只保留嵌入模型。CPU 嵌入不得加载到生成实例。
 
 模型端执行下面脚本。它先做一次真实生成，再验证嵌入的 digest、量化及查询/正文两条有限非零向量；`truncate=false` 禁止静默截断：
 
@@ -305,8 +307,8 @@ def request(base, route, payload=None):
         return json.load(response)
 
 generation = request('http://127.0.0.1:11434', '/api/chat', {
-    'model': 'qwen3:8b', 'messages': [{'role': 'user', 'content': '请回答：部署测试通过'}],
-    'think': False, 'stream': False, 'options': {'num_ctx': 4096, 'num_predict': 64},
+    'model': 'spark-x2.6:4b-q4_k_m', 'messages': [{'role': 'user', 'content': '请回答：部署测试通过'}],
+    'think': False, 'stream': False, 'options': {'num_ctx': 16384, 'num_predict': 64},
 })
 assert generation.get('message', {}).get('content', '').strip(), generation
 base = 'http://127.0.0.1:11436'
@@ -327,7 +329,57 @@ for port in (11434, 11436):
 PY
 ```
 
-检查嵌入 `/api/ps` 的 `size_vram=0`，生成实例仍有 `qwen3:8b`。记录冷/热耗时和 RAM/VRAM 峰值；GPU 存在时确认生成能利用 GPU，不能为节省排错时间把所有模型改为 CPU。
+检查嵌入 `/api/ps` 的 `size_vram=0`，生成实例驻留 `spark-x2.6:4b-q4_k_m`、上下文 16384，且 `ollama list` 仍能看到备选 `qwen3:8b`。记录冷/热耗时和 RAM/VRAM 峰值；GPU 存在时确认生成能利用 GPU，不能为节省排错时间把所有模型改为 CPU。
+
+### Spark 权重校验与 Qwen 备选
+
+默认生成模型使用官方 `XHToken/Spark-X2.6-4B-GGUF` 的 Q4_K_M，注册为 `spark-x2.6:4b-q4_k_m`，Modelfile 默认上下文为 16384。不使用 `SparkLLM/Spark-X2.6-4B` 默认标签（它是 BF16），也不删除 `qwen3:8b`。
+
+在模型运行账号执行以下命令。权重固定到官方 revision 并校验 SHA-256；已有正确文件会跳过下载，注册用的临时 Modelfile 在命令结束后删除：
+
+```bash
+(
+set -e
+spark_dir="$HOME/history-service/downloads/spark-x2.6-4b"
+spark_file="$spark_dir/Spark-X2.6-4B-Q4_K_M.gguf"
+spark_sha=91cb2811aebb47ac916aa619d27d4cdd7f4143106b7917accb8ead4cd7f5cbd9
+mkdir -p "$spark_dir"
+if [[ ! -f "$spark_file" ]] || ! printf '%s  %s\n' "$spark_sha" "$spark_file" | sha256sum --check --status; then
+  curl --fail --location --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 --continue-at - \
+    'https://huggingface.co/XHToken/Spark-X2.6-4B-GGUF/resolve/83b47fda018fd14f51aa63341f78266f628af5a5/Spark-X2.6-4B-Q4_K_M.gguf?download=true' \
+    --output "$spark_file"
+fi
+printf '%s  %s\n' "$spark_sha" "$spark_file" | sha256sum --check
+spark_modelfile="$(mktemp "$spark_dir/Modelfile.XXXXXX")"
+trap 'rm -f "$spark_modelfile"' EXIT
+printf 'FROM ./Spark-X2.6-4B-Q4_K_M.gguf\nPARAMETER num_ctx 16384\n' > "$spark_modelfile"
+OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" create spark-x2.6:4b-q4_k_m --file "$spark_modelfile"
+)
+```
+
+若直连失败且模型端已有代理，在上面的 `curl` 前添加 `HTTPS_PROXY=http://127.0.0.1:7897`，地址按实际配置填写。文件校验失败时停止，不导入错误权重；损坏文件须先移走再重试。GGUF 会另外导入生成实例的 `models/blobs/`，预留两份磁盘空间。
+
+| 项目 | 固定值 |
+| --- | --- |
+| 官方权重 | `Spark-X2.6-4B-Q4_K_M.gguf` |
+| 文件大小 | `3543441312` 字节（约 3.30 GiB） |
+| 文件 SHA-256 | `91cb2811aebb47ac916aa619d27d4cdd7f4143106b7917accb8ead4cd7f5cbd9` |
+| 本地模型标签 | `spark-x2.6:4b-q4_k_m` |
+| 本次导入识别 | Ollama 0.35.1：`4.4B`、`Q4_K_M`（2026-10-26） |
+| 备选生成模型 | `qwen3:8b`，继续保留，按需手动切换 |
+| 默认上下文 | `16384`（16K），生成 unit、Modelfile 和数据端配置一致 |
+
+上述命令只下载、校验和注册；不运行推理，不卸载已驻留模型，不修改数据端默认选择。`ollama list` 应同时显示 Qwen 和 Spark；`ollama show spark-x2.6:4b-q4_k_m` 应显示 4B 级参数量和 Q4_K_M。下载成功不等于完整 GPU、业务输出或性能验收通过；首次使用前按“生成模型切换与对比”执行验证。
+
+2026-10-26 本机实测（RTX 3060 Laptop 6GB、Ollama 0.35.1）：
+
+| 模型 | 上下文容量 | Ollama 分配 | 整卡显存采样峰值 | 热生成平均速度 |
+| --- | --- | --- | --- | --- |
+| Qwen3-8B Q4_K_M | 16384 | 41% CPU / 59% GPU | 4743 MiB | 21.15 tokens/s |
+| Spark-X2.6-4B Q4_K_M | 4096 | 100% GPU | 3527 MiB | 64.62 tokens/s |
+| Spark-X2.6-4B Q4_K_M | 16384 | 100% GPU | 3970 MiB | 64.32 tokens/s |
+
+相同中文提示词、关闭思考、相同采样设置，预热后各测两次256-token输出。输入约1.1K tokens，并未用满16K；热请求可复用提示缓存。显存约每0.5秒采样，包含桌面开销，可能漏掉瞬时峰值。Spark加载日志确认37/37层与KV缓存在GPU，仍有CPU侧模型映射和辅助缓冲区。首次4K预热总耗时24.63秒，其中加载12.88秒，首轮生成仅8.53 tokens/s；后续热运行才达到表中速度。此结果验证本机4K/16K配置下的GPU分配和热生成速度，不代表更长输入、真实业务质量或端到端性能验收。这次对比测试结束时恢复了Qwen驻留；随后的Spark默认切换见“数据端切换交接”。模型端原始记录：`~/history-service/benchmarks/spark-gpu-20261026-132300/`。
 
 ### OCR 实时进度更新
 
@@ -426,7 +478,9 @@ sudo systemctl daemon-reload
 
 ### 7.2 生成 API 配置
 
-`/etc/history-generation.env` 由数据端 `history-llm.service` 加载。首次创建可用以下默认值；已有文件先合并，保留认证和 tokenizer 路径。以下写文件命令只适用于首次创建，`test` 失败则不要执行后续覆盖命令：
+`/etc/history-generation.env` 是数据端系统级 `history-llm.service` 实际加载的配置，优先于 unit 中的默认值。默认选择 Spark Q4_K_M / 16K，Qwen 为手动备选；只有一个 `LLM_MODEL` 生效。
+
+首次创建时在数据端执行以下命令；已有文件跳过创建并逐项合并，保留认证和其它设置：
 
 ```bash
 sudo test ! -e /etc/history-generation.env &&
@@ -434,17 +488,87 @@ sudo install -m 0640 -o root -g "$(id -gn "$DATA_USER")" /dev/null /etc/history-
 sudo tee /etc/history-generation.env >/dev/null <<'ENV'
 LLM_PROVIDER=ollama
 LLM_API_BASE=http://127.0.0.1:11435/v1
-LLM_MODEL=qwen3:8b
+LLM_MODEL=spark-x2.6:4b-q4_k_m
+# LLM_MODEL=qwen3:8b
 LLM_TIMEOUT_SECONDS=600
-LLM_CONTEXT_TOKENS=4096
+LLM_OLLAMA_THINK=0
+LLM_CONTEXT_TOKENS=16384
 LLM_OUTPUT_TOKENS=1024
 LLM_TEMPLATE_MARGIN_TOKENS=256
+LLM_TEXT_CONTEXT_TOKENS=16384
+LLM_TEXT_CHUNK_CHARS=6000
+LLM_REPEAT_PENALTY=1.1
+LLM_TOKENIZER_PATH=
 # LLM_API_KEY=...
-# LLM_TOKENIZER_PATH=/opt/history-tokenizers/qwen3/tokenizer.json
 ENV
 ```
 
-`LLM_API_BASE` 包含 `/v1`，提供模型列表和兼容接口；代码在 `LLM_PROVIDER=ollama` 时从该根地址调用原生 `/api/chat`。迁移 tokenizer 文件时保持其版本与生成模型一致；未配置 tokenizer 会采用保守预算。上下文、输出、余量须满足预算约束，并与模型实例的实际上下文一致。
+`LLM_API_BASE` 包含 `/v1`，提供模型列表和兼容接口；代码在 `LLM_PROVIDER=ollama` 时从该根地址调用原生 `/api/chat`。同机或内网部署按第 6 节替换该地址。若配置 tokenizer，切换生成模型时同步更换 `LLM_TOKENIZER_PATH`；未配置则采用保守预算。
+
+`LLM_CONTEXT_TOKENS=16384` 是默认问答预算，模型 unit 和 Spark Modelfile 的默认上下文也均为 16384。整页标点、校对仍由 `LLM_TEXT_CONTEXT_TOKENS=16384` 单独控制，实际请求可能随输入和输出预算增大，最高 40960；默认 16K 不会覆盖请求中显式设置的 `num_ctx`。超过16K或更长真实输入的完整GPU与性能仍须另行验证。
+
+### 数据端切换交接
+
+目标：默认 `spark-x2.6:4b-q4_k_m`、16K 上下文、关闭思考；`qwen3:8b` 保留为手动备选，不做自动失败回退。
+
+1. **模型端已准备**：本机两个权重均保留；生成 Ollama 和 Spark Modelfile 默认上下文改为 16384，Spark 已用该默认值执行原生 JSON 输出和本机标点调用，确认 `100% GPU`。OCR、CPU 嵌入及独立隧道保持原配置。对比基线与限制见第 5.2 节。
+2. **数据端待执行**：本次无法用隧道专用账号登录数据端修改配置，因此不宣称远端业务已切换。数据端若继续请求 `qwen3:8b`，模型端仍会按请求重新加载 Qwen；仅预加载 Spark 不会覆盖客户端指定的模型。请将本次仓库改动同步到数据端；其中 `service/llm.py`、`service/evidence.py` 更新代码缺省值，配置内容见上节。已有 `/etc/history-generation.env` 优先于代码和 unit，必须按下面内容合并，不能仅更新仓库。
+
+在**数据端**等正在执行的生成任务结束，先备份，再编辑现有配置，保留原 `LLM_API_BASE`、认证、超时和其它设置：
+
+```bash
+sudo cp -a /etc/history-generation.env "/etc/history-generation.env.before-spark-$(date +%Y%m%d-%H%M%S)"
+sudoedit /etc/history-generation.env
+```
+
+确认以下键只有一条生效值：
+
+```ini
+LLM_PROVIDER=ollama
+LLM_MODEL=spark-x2.6:4b-q4_k_m
+LLM_CONTEXT_TOKENS=16384
+LLM_TEXT_CONTEXT_TOKENS=16384
+LLM_OLLAMA_THINK=0
+LLM_TOKENIZER_PATH=
+```
+
+`LLM_TOKENIZER_PATH=` 留空时使用保守预算，不能沿用 Qwen 的 tokenizer；若已有经过验证的 Spark tokenizer，可填其实际路径。反向隧道部署的 `LLM_API_BASE` 继续为 `http://127.0.0.1:11435/v1`；内网/同机部署保留原来可用的地址。没有环境文件时，按上一节命令首次创建。
+
+仅重启**数据端系统级生成 API**，随后检查健康信息：
+
+```bash
+sudo systemctl restart history-llm.service
+curl --fail --silent --show-error http://127.0.0.1:8865/health | python3 -c '
+import json, sys
+result = json.load(sys.stdin)
+assert result.get("ready") is True and result.get("model") == "spark-x2.6:4b-q4_k_m", result
+print("Spark generation API ready")
+'
+```
+
+再执行一次短标点请求；这一步会真实调用模型，但不会保存到业务文献：
+
+```bash
+curl --fail --silent --show-error --max-time 180 http://127.0.0.1:8865/llm/punctuate \
+  -H 'Content-Type: application/json' \
+  -d '{"sourceText":"军需各款应分别登记每月核对收入支出保存原始凭据以备查核凡已收款项与待收款项均应注明不得混列经手人员应逐项签认以便日后复核"}' | python3 -c '
+import json, sys
+result = json.load(sys.stdin)
+assert result.get("ready") is True and result.get("model") == "spark-x2.6:4b-q4_k_m", result
+assert result.get("punctuatedText", "").strip(), result
+print(result["punctuatedText"])
+'
+```
+
+数据端交付回执须包含：健康接口的 `model`/`ready`、短标点结果，以及一页真实文献的标点/校对结果。模型端用 `OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" ps` 确认仍为 Spark、`CONTEXT=16384`、`100% GPU`；若长页自动扩展上下文，以该次实际分配为准。健康检查通过不等于真实文献或浏览器链路验收通过。
+
+**切回备选 Qwen**：数据端把 `LLM_MODEL` 改成 `qwen3:8b`，上下文仍为 16384，tokenizer 留空或使用匹配的 Qwen 文件，再重启同一个 `history-llm.service`；随后用健康接口确认 `model=qwen3:8b`，并执行一次真实请求。两个模型文件都保留，无需重新下载；Qwen 在本机16K配置下仍会使用 CPU/GPU 混合加载。
+
+### 生成模型切换与对比
+
+默认 Spark、备选 Qwen 的选择入口均为数据端 `/etc/history-generation.env`；模型端 `history-llm.service` 运行 Ollama，数据端同名服务运行生成 API，注意主机和 system/user 管理器的区别。`OLLAMA_MAX_LOADED_MODELS=1` 和 `OLLAMA_NUM_PARALLEL=1` 使两个模型轮流加载。
+
+对比时固定 OCR/嵌入、输入原文、提示词、上下文与输出上限、思考开关、采样和重复惩罚。每个模型先预热，分别记录首次加载耗时、热推理耗时、生成 tokens/s、RAM/VRAM 峰值及 CPU/GPU 分配；标点、校对、问答输出分别保存，检查改字、漏字、引用和 JSON 合法性。避免并发交替请求两个模型，以免加载耗时混入性能结果。默认切换不代表这些业务效果测试已经全部完成。
 
 ### Semantic retrieval
 

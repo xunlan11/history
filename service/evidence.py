@@ -20,14 +20,14 @@ NO_RELEVANT_MATERIAL = "文献库中未检索到与问题足够相关的材料"
 
 @dataclass(frozen=True)
 class BudgetConfig:
-    context_tokens: int = 4096
+    context_tokens: int = 16384
     output_tokens: int = 1024
     template_margin: int = 256
     tokenizer_path: str = ""
 
     @classmethod
     def from_env(cls):
-        return cls(int(os.getenv("LLM_CONTEXT_TOKENS", "4096")), int(os.getenv("LLM_OUTPUT_TOKENS", "1024")),
+        return cls(int(os.getenv("LLM_CONTEXT_TOKENS", "16384")), int(os.getenv("LLM_OUTPUT_TOKENS", "1024")),
                    int(os.getenv("LLM_TEMPLATE_MARGIN_TOKENS", "256")), os.getenv("LLM_TOKENIZER_PATH", ""))
 
 
@@ -51,8 +51,7 @@ def _tokenizer(path):
 
 def count_tokens(messages: list[dict], config: BudgetConfig) -> int:
     text = "".join(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in messages) + "<|im_start|>assistant\n"
-# Qwen 的字节级分词器下，UTF-8 字节数可作为保守上界；
-        # 运维可提供匹配的 tokenizer.json，避免过度裁剪。
+    # 未配置匹配的 tokenizer.json 时，以 UTF-8 字节数保守估算。
     return len(_tokenizer(config.tokenizer_path).encode(text).ids) if config.tokenizer_path else len(text.encode("utf-8"))
 
 

@@ -8,9 +8,12 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/Codefield/history
 Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LLM_PROVIDER=ollama
-Environment=LLM_MODEL=qwen3:8b
+Environment=LLM_MODEL=spark-x2.6:4b-q4_k_m
+Environment=LLM_CONTEXT_TOKENS=16384
+Environment=LLM_TEXT_CONTEXT_TOKENS=16384
 Environment=LLM_API_BASE=http://127.0.0.1:11435/v1
 Environment=LLM_TIMEOUT_SECONDS=600
+# 模型选择和上下文可由此文件覆盖；配置内容见 deploy/README.md 第 7.2 节。
 EnvironmentFile=-/etc/history-generation.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.llm:app --host 127.0.0.1 --port 8865
 Restart=always
