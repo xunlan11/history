@@ -212,7 +212,7 @@ function uploadNameKey(name) {
 
 function duplicateUploadMessage(names) {
   const list = names.map((name) => `「${name}」`).join("");
-  return `${list}已在本次登记的待合并列表中，已取消重复的上传`;
+  return `${list}已上传，取消重复操作`;
 }
 
 function startRegistrationUploads(files) {

@@ -137,7 +137,7 @@ test('same file name added again in one registration is skipped with a prompt', 
   assert.deepEqual(Array.from(s.batch().files, (entry) => entry.file.name), ['one.pdf', 'two.pdf', 'three.pdf']);
   assert.deepEqual(Array.from(s.batch().files.slice(0, 2), (entry) => entry.id), existing);
   assert.equal(s.find('#upload-file-list').children.length, 3);
-  assert.match(s.find('#registration-error').textContent, /「one\.pdf」.*已取消重复的上传/);
+  assert.match(s.find('#registration-error').textContent, /「one\.pdf」已上传，取消重复操作/);
   assert.equal(s.find('#register-document').disabled, false);
   s.c.cancelRegistrationUpload();
 });
@@ -149,7 +149,7 @@ test('a selection of only duplicates uploads nothing and the name can be re-adde
   await s.c.startRegistrationUploads([file(' book.PDF '), file('BOOK.pdf')]);
   assert.equal(s.requests.length, before);
   assert.equal(s.batch().files.length, 1);
-  assert.match(s.find('#registration-error').textContent, /已在本次登记的待合并列表中/);
+  assert.match(s.find('#registration-error').textContent, /已上传，取消重复操作/);
   // 删掉原来那个之后，同名文件可以重新加入。
   s.c.removeRegistrationUpload(s.batch()?.files[0]?.id || '');
   await uploaded(s, [file('book.pdf')]);
