@@ -4,7 +4,7 @@
       <h3 id="add-document-title">新增文献</h3>
       <button class="icon-button subtle" id="close-document-form" type="button" title="关闭">×</button>
     </div>
-    <div class="file-picker">
+    <div class="file-picker-field">
       <div class="file-picker-toolbar">
         <input id="file-input" name="file" type="file" accept=".pdf,image/*" multiple />
         <label class="file-picker-button" for="file-input">
@@ -17,22 +17,24 @@
         </label>
         <span class="file-picker-hint">将按从上到下的顺序合并</span>
       </div>
-      <ol class="upload-file-list" id="upload-file-list" aria-label="待合并文件，按从上到下的顺序排列"></ol>
-      <template id="upload-file-template">
-        <li class="file-upload-row">
-          <button class="file-upload-drag" type="button" draggable="true" title="拖动换序，也可使用上下方向键" aria-label="调整文件顺序">⠿</button>
-          <span class="file-picker-name"></span>
-          <span class="file-upload-controls">
-            <button class="file-upload-remove" type="button" title="删除文件或取消上传" aria-label="删除文件或取消上传">×</button>
-            <span class="file-upload-status" aria-live="polite">
-              <span class="file-upload-meter">
-                <progress max="100" value="0" aria-label="原件上传进度"></progress>
+      <div class="file-picker">
+        <ol class="upload-file-list" id="upload-file-list" aria-label="待合并文件，按从上到下的顺序排列"></ol>
+        <template id="upload-file-template">
+          <li class="file-upload-row">
+            <button class="file-upload-drag" type="button" draggable="true" title="拖动换序，也可使用上下方向键" aria-label="调整文件顺序">⠿</button>
+            <span class="file-picker-name"></span>
+            <span class="file-upload-controls">
+              <button class="file-upload-remove" type="button" title="删除文件或取消上传" aria-label="删除文件或取消上传">×</button>
+              <span class="file-upload-status" aria-live="polite">
+                <span class="file-upload-meter">
+                  <progress max="100" value="0" aria-label="原件上传进度"></progress>
+                </span>
+                <span class="file-upload-failed hidden">上传失败</span>
               </span>
-              <span class="file-upload-failed hidden">上传失败</span>
             </span>
-          </span>
-        </li>
-      </template>
+          </li>
+        </template>
+      </div>
     </div>
     <section class="info-field" aria-labelledby="document-info-title">
       <div class="info-field-heading">

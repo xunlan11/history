@@ -167,21 +167,31 @@ button {
 }
 
 /* 文件选择：原生控件只保留功能（不显示「未选择任何文件」原生提示），外观全部自绘。
-   只有绿色按钮是可点的 label，虚线外框不响应点击/悬停。 */
-.file-picker {
+   只有绿色按钮是可点的 label，虚线外框不响应点击/悬停，且只框住待合并文件列表。 */
+.file-picker-field {
   min-width: 0;
   position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.file-picker {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  min-height: 44px;
-  padding: 6px 8px;
+  padding: 2px 8px;
   border: 1px dashed #cdd8d2;
   border-radius: 8px;
   background: #f8fbf9;
 }
 
-.file-picker input {
+/* 没有待合并文件时不留空框。 */
+.file-picker:not(:has(.file-upload-row)) {
+  display: none;
+}
+
+.file-picker-field input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -192,8 +202,8 @@ button {
   clip-path: inset(50%);
 }
 
-.file-picker input:focus,
-.file-picker input:focus-visible {
+.file-picker-field input:focus,
+.file-picker-field input:focus-visible {
   outline: none;
 }
 
@@ -218,7 +228,7 @@ button {
 }
 
 /* 键盘聚焦到隐藏的原生控件时才给按钮画焦点环（鼠标点开不画），外框始终原样。 */
-.file-picker:has(input:focus-visible) .file-picker-button {
+.file-picker-field:has(input:focus-visible) .file-picker-button {
   box-shadow: 0 0 0 3px rgba(209, 154, 56, 0.28);
 }
 
@@ -268,21 +278,22 @@ button {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 8px 0;
+  padding: 1px 0;
   border-top: 1px solid var(--line);
 }
 
 .file-upload-row:first-child {
-  margin-top: 8px;
+  border-top: 0;
 }
 
 .file-upload-drag {
   flex: 0 0 auto;
-  padding: 3px;
+  padding: 2px 3px;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 20px;
+  font-size: 16px;
+  line-height: 1;
   cursor: grab;
 }
 
@@ -310,8 +321,8 @@ button {
   border: 0;
   background: transparent;
   color: #c43838;
-  padding: 4px;
-  font-size: 24px;
+  padding: 2px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
@@ -372,7 +383,7 @@ button {
   cursor: default;
 }
 
-.file-picker:has(#file-input:disabled) .file-picker-button {
+.file-picker-field:has(#file-input:disabled) .file-picker-button {
   opacity: .5;
   cursor: default;
 }
