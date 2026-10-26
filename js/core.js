@@ -31,7 +31,6 @@ const EMBEDDING_HEALTH_URL = endpoint("/data/api/embedding/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_SYNC_URL = endpoint("/data/api/sync");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
-const DATA_FILE_UPLOAD_URL = endpoint("/data/api/files/upload");
 const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
 const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
 const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
@@ -815,50 +814,6 @@ async function flushPendingSync() {
   return pushed;
 }
 
-// 归档原件。onProgress(0~1) 可选，用于界面上报上传进度。
-// 上传走 XHR + 重试（幂等接口），失败时抛错，由调用方（上传流水线）决定如何提示与续传。
-async function archiveDocumentSource(item, file, onProgress) {
-  if (!item?.id || !canEditDocument(item) || !file?.name) {
-    return false;
-  }
-
-  try {
-    const body = new FormData();
-    body.append("document", file, file.name);
-    body.append("documentId", item.id);
-    body.append("role", "source");
-
-    const result = await postFormDataWithProgress(DATA_FILE_UPLOAD_URL, body, {
-      onProgress,
-      retries: 2,
-    });
-    if (!result || !result.file) {
-      throw new Error("原件上传未完成：服务端未返回文件记录。");
-    }
-
-    const target = getLiveDocument(item.id) || item;
-    target.sourceFile = result.file;
-    target.filePath = result.file.path;
-    target.fileUrl = result.file.url;
-    target.fileHash = result.file.sha256;
-    target.fileMimeType = result.file.mimeType;
-    target.fileSize = result.file.size;
-    if (target.pages?.[0] && result.file.mimeType?.startsWith("image/")) {
-      target.pages[0].imageUrl = result.file.url;
-      target.pages[0].imageName = target.fileName || file.name;
-    }
-    if (result.document) Object.assign(target, normalizeDocuments([result.document])[0]);
-    target.updatedAt = new Date().toISOString();
-    syncCursor = String(result.syncCursor || syncCursor);
-    localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
-    persist();
-    renderAll();
-    return true;
-  } catch (error) {
-    throw error instanceof Error ? error : new Error("原件上传失败。");
-  }
-}
-
 async function syncFromServer(options = {}) {
   if (!syncReady || syncDirty || syncPullInFlight) {
     return false;
@@ -1247,27 +1202,6 @@ function getPageProcessedText(page) {
   return page?.punctuatedText || "";
 }
 
-function createProcessingTask(file) {
-  return {
-    id: newId(),
-    status: "提交中",
-    createdAt: new Date().toISOString(),
-    submittedAt: "",
-    finishedAt: "",
-    remoteTaskId: "",
-    totalPages: 0,
-    completedPages: 0,
-    finalizedPages: 0,
-    stageProgress: normalizeStageProgress(null, 0),
-    currentPage: 0,
-    currentPageStage: "",
-    currentPageProgress: 0,
-    sourceFileName: file.name,
-    serviceUrl: DATA_PROCESSING_URL,
-    message: "正在归档原件，随后由后端调度登记和正文",
-  };
-}
-
 function normalizeStageProgress(value, total = 0) {
   const stages = ["ocr", "variant", "punctuation", "proofreading"];
   const source = value && typeof value === "object" ? value : {};
@@ -1381,7 +1315,7 @@ function getProcessingTaskLabel(item) {
 
   // 登记阶段（后端元数据识别）也计入同一条进度显示。
   if (total === 0 && isDocumentRegistrationPending(item)) {
-    return describeDocumentUploadState(item.id) || task.status || "等待处理";
+    return describeDocumentProcessingState(item.id) || task.status || "等待处理";
   }
 
   if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {

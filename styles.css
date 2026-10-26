@@ -169,10 +169,11 @@ button {
 /* 文件选择：原生控件只保留功能（不显示「未选择任何文件」原生提示），外观全部自绘。
    只有绿色按钮是可点的 label，虚线外框不响应点击/悬停。 */
 .file-picker {
+  min-width: 0;
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 0;
   min-height: 44px;
   padding: 6px 8px;
   border: 1px dashed #cdd8d2;
@@ -232,6 +233,7 @@ button {
 }
 
 .file-picker-name {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -240,9 +242,139 @@ button {
   white-space: nowrap;
 }
 
-/* 未选择文件时不显示任何提示文本。 */
-.file-picker-name:empty {
+.file-picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+}
+
+.file-picker-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.upload-file-list {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.file-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.file-upload-row:first-child {
+  margin-top: 8px;
+}
+
+.file-upload-drag {
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: grab;
+}
+
+.file-upload-drag:active {
+  cursor: grabbing;
+}
+
+.file-upload-row.is-dragging {
+  opacity: .5;
+}
+
+.file-upload-row.is-drop-target {
+  background: #e8f1ed;
+}
+
+.file-upload-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.file-upload-remove {
+  border: 0;
+  background: transparent;
+  color: #c43838;
+  padding: 4px;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-upload-status {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 24px;
+  flex: 0 0 96px;
+  font-size: 13px;
+}
+
+.file-upload-meter {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.file-upload-meter progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #e0e9e4;
+  accent-color: var(--primary);
+}
+
+.file-upload-meter progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: #e0e9e4;
+}
+
+.file-upload-meter progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.file-upload-meter progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.file-upload-failed, .registration-error {
+  color: #c43838;
+}
+
+.registration-error:empty {
   display: none;
+}
+
+#document-form button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.file-picker:has(#file-input:disabled) .file-picker-button {
+  opacity: .5;
+  cursor: default;
 }
 
 .info-field {
@@ -1950,24 +2082,6 @@ body {
 .book-pages {
   flex: 0 0 auto;
   text-align: right;
-}
-
-/* 上传中的文献卡：显示「上传原件 42%」并禁止进入阅读页（整页跳转会中断上传） */
-.book-card.is-uploading {
-  cursor: progress;
-}
-
-.book-card.is-uploading .book-cover {
-  opacity: 0.72;
-}
-
-.book-card.is-uploading .book-pages {
-  color: var(--primary);
-}
-
-.book-card.is-upload-failed .book-pages {
-  color: var(--accent);
-  font-weight: 700;
 }
 
 /* 下载副本正在后台重建索引：文献已可用，只提示进度，不遮封面也不拦进入阅读页 */

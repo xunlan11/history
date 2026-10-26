@@ -4,7 +4,6 @@ let loadedCommit = "";
 let versionRefreshPending = false;
 
 // 有未保存的整理文本编辑 / 进行中的上传时不能强刷，否则会丢内容。
-// （上传还有 registration.js 的 beforeunload 兜底，但这里直接跳过更干净。）
 function versionRefreshBlocked() {
   if (readerEditing) {
     return true;

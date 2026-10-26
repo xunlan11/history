@@ -131,18 +131,10 @@ document.querySelector("#jump-documents")?.addEventListener("click", () => {
   setView("documents");
 });
 
-// 文件选择框自绘：只在选了文件时显示文件名（原生「未选择任何文件」提示已隐藏）。
-const documentFileInput = document.querySelector("#file-input");
-const documentFileName = document.querySelector("#file-input-name");
-
-function syncDocumentFileName() {
-  if (!documentFileInput || !documentFileName) return;
-  const file = documentFileInput.files?.[0];
-  documentFileName.textContent = file?.name || "";
-}
-
-documentFileInput?.addEventListener("change", syncDocumentFileName);
-form?.addEventListener("reset", syncDocumentFileName);
+document.querySelector("#file-input")?.addEventListener("change", (event) => {
+  startRegistrationUploads(event.target.files);
+  event.target.value = "";
+});
 
 // 每部分页数缩在「大串小并」选项里，只有选中它才可以编辑。
 const chunkSizeInput = document.querySelector("#chunk-size-input");
@@ -156,85 +148,13 @@ function syncProcessingChunkInput() {
 form?.querySelectorAll('input[name="processingMode"]').forEach((input) => {
   input.addEventListener("change", syncProcessingChunkInput);
 });
-form?.addEventListener("reset", syncProcessingChunkInput);
+form?.addEventListener("reset", () => queueMicrotask(syncProcessingChunkInput));
 syncProcessingChunkInput();
 
-form?.addEventListener("submit", async (event) => {
+form?.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!currentUser?.id) {
-    window.alert("当前未登录或登录状态已失效，请重新登录后再登记文献。");
-    return;
-  }
-  const formData = new FormData(form);
-  const file = formData.get("file");
-
-  if (!file || !file.name) {
-    return;
-  }
-
-  const firstPage = createPage(1);
-  const item = {
-    id: newId(),
-    title: textValue("title"),
-    author: textValue("author"),
-    year: textValue("year"),
-    publisher: textValue("publisher"),
-    tags: textValue("tags"),
-    visibility: "private",
-    creator: currentUser?.username ? { username: currentUser.username } : null,
-    ownerId: currentUser?.id ?? null,
-    canEdit: true,
-    registration: createRegistrationState(),
-    metadataStatus: "待自动识别",
-    coverImageDataUrl: "",
-    coverVariant: getNextDocumentCoverVariant(),
-    fileName: file.name,
-    fileType: file.type || "unknown",
-    fileSize: file.size,
-    processingTask: createProcessingTask(file),
-    processingMode: normalizeProcessingMode(formData.get("processingMode") || "chunked"),
-    processingChunkSize: clampChunkSize(formData.get("chunkSize")),
-    createdAt: new Date().toISOString(),
-    status: "待整理",
-    pages: [firstPage],
-  };
-
-  documents.unshift(item);
-  if (formSheet?.dataset.shelfFolderId) {
-    moveShelfDocument(item.id, formSheet.dataset.shelfFolderId);
-  }
-  selectedDocumentId = item.id;
-  selectedPageId = firstPage.id;
-  item.status = "提交逐页处理中";
-  persist();
-  form.reset();
-  closeDocumentForm();
-  renderAll();
-
-  // 原件归档成功后，后端自动准备登记，再按队列处理正文。
-  try {
-    await runDocumentUploadPipeline(item, file);
-  } catch (error) {
-    await flushPendingSync();
-    renderAll();
-    if (!error.registrationPaused && !error.registrationCancelled) {
-      window.alert(
-        `文献登记未完成：${error && error.message ? error.message : "网络中断"}。\n` +
-          "请稍后点击该文献继续登记。",
-      );
-    }
-    return;
-  }
-
-  // 阅读页加载时会拉取服务端快照；若此时新文献尚未同步，本地缓存会被空快照覆盖，
-  // 表现为“未选择文献”。因此跳转前必须等待推送完成。
-  await flushPendingSync();
-  if (syncDirty) {
-    window.alert("登记结果尚未同步到服务端，请稍后点击文献重试。");
-    return;
-  }
-
-  setView("reader");
+  if (!currentUser?.id) return window.alert("请先登录后再登记文献。");
+  registerSelectedUploads();
 });
 
 readerPrevPageButton?.addEventListener("click", () => {
@@ -465,16 +385,6 @@ async function initializeApplication() {
   }
   await initializeServerData();
   applyRouteSelection();
-  const selected = getSelectedDocument();
-  if (document.body.dataset.page === "reader" && canEditDocument(selected) &&
-      isDocumentRegistrationPending(selected) && !selected?.processingTask?.backendManaged) {
-    // 未归档完的直达链接也不能先进入阅览器，回文献库恢复登记。
-    setView("documents");
-    resumePendingProcessingTasks();
-    flushPendingProcessingCancels();
-    startPeriodicSync();
-    return;
-  }
   if (typeof initializeReaderProgress === "function") {
     await initializeReaderProgress();
   }
@@ -497,16 +407,9 @@ async function initializeApplication() {
 
 function resumePendingProcessingTasks() {
   documents.forEach((item) => {
-    if (item.processingTask?.backendManaged) {
-      dropPendingUpload(item.id);
-      if (isProcessingTaskPending(item)) {
-        startProcessingPolling(item);
-        refreshProcessingDocument(item, { silent: true }).finally(() => renderAll());
-      }
-      return;
-    }
-    if (canEditDocument(item) && isDocumentRegistrationPending(item)) {
-      resumeMissingProcessingTask(item).finally(() => renderAll());
+    if (isProcessingTaskPending(item)) {
+      startProcessingPolling(item);
+      refreshProcessingDocument(item, { silent: true }).finally(() => renderAll());
     }
   });
 }

@@ -399,13 +399,10 @@ function createBookCard(item, index) {
   card.dataset.shelfKey = `document:${item.id}`;
   card.dataset.documentIndex = String(index);
   card.setAttribute("aria-grabbed", "false");
-  const uploadState = getDocumentUploadState(item.id);
-  const uploadText = describeDocumentUploadState(item.id);
+  const uploadText = describeDocumentProcessingState(item.id);
   const preparationText = typeof describeDocumentPreparation === "function" ? describeDocumentPreparation(item.id) : "";
   const backendStatusPending = item.processingTask?.backendManaged && (isDocumentRegistrationPending(item) || isProcessingTaskPending(item));
   const statusText = uploadText || preparationText || (backendStatusPending ? item.status : "");
-  card.classList.toggle("is-uploading", Boolean(uploadState && uploadState.active));
-  card.classList.toggle("is-upload-failed", Boolean(uploadState && !uploadState.active && uploadState.error));
   card.classList.toggle("is-preparing", Boolean(!uploadText && preparationText));
   if (!canEditDocument(item)) {
     card.classList.add("read-only");
@@ -439,21 +436,13 @@ function createBookCard(item, index) {
       return;
     }
 
-    // 本地还在归档/上传时不许进入阅览器，整页跳转会中断上传。
-    if (isDocumentUploadActive(item.id)) {
-      showUploadToast("文献正在归档原件，上传结束后才能进入阅览器，请稍候。");
-      return;
-    }
-
     const current = getLiveDocument(item.id) || item;
-    if (canEditDocument(current) && isDocumentRegistrationPending(current)) {
-      if (current.processingTask?.backendManaged) {
-        // 原件归档后，登记（元数据识别）在后台继续，阅览器可以直接打开。
-        startProcessingPolling(current);
-      } else {
-        const completed = await resumeMissingProcessingTask(current, { interactive: true });
-        if (!completed) return;
+    if (current.processingTask?.backendManaged && isDocumentRegistrationPending(current)) {
+      if (canEditDocument(current) && current.registration?.status === "failed") {
+        if (!window.confirm("登记处理失败，是否重试失败阶段？")) return;
+        applyBackendProcessingDocument(current.id, await requestBackendProcessing(current.id, { method: "POST", suffix: "/retry" }));
       }
+      startProcessingPolling(getLiveDocument(item.id));
     }
     const ready = getLiveDocument(item.id);
     if (!ready) return;
@@ -742,6 +731,9 @@ function openDocumentForm() {
 }
 
 function closeDocumentForm() {
+  if (registrationBatch?.status === "submitting") return;
+  cancelRegistrationUpload();
+  form?.reset();
   formSheet?.classList.add("hidden");
 }
 
@@ -933,7 +925,7 @@ function renderReaderDetailActions(item, canEdit, editing) {
   }
 
   if (isDocumentRegistrationPending(item)) {
-    const text = describeDocumentUploadState(item.id) || item.status || "登记中";
+    const text = describeDocumentProcessingState(item.id) || item.status || "登记中";
     const status = document.createElement("span");
     status.className = "reader-detail-registration-status";
     status.setAttribute("role", "status");

@@ -2,7 +2,6 @@
 const PROCESSING_POLL_INTERVAL_MS = 1500;
 const processingPollTimers = new Map();
 const processingPollInFlight = new Set();
-const processingRecoveryInFlight = new Set();
 
 function isProcessingTaskPending(item) {
   const task = item?.processingTask;
@@ -17,7 +16,6 @@ function stopProcessingPolling(documentId) {
 
 function stopDocumentProcessing(documentId) {
   stopProcessingPolling(documentId);
-  processingRecoveryInFlight.delete(documentId);
 }
 
 function startProcessingPolling(item) {
@@ -76,13 +74,6 @@ async function requestBackendProcessing(documentId, options = {}) {
   return response.json();
 }
 
-async function submitBackendDocument(item) {
-  const result = await requestBackendProcessing(item.id, {
-    method: "POST", body: { mode: normalizeProcessingMode(item.processingMode), chunkSize: clampChunkSize(item.processingChunkSize) },
-  });
-  return applyBackendProcessingDocument(item.id, result);
-}
-
 async function refreshProcessingDocument(item, options = {}) {
   if (!item?.processingTask?.backendManaged || processingPollInFlight.has(item.id)) return;
   processingPollInFlight.add(item.id);
@@ -98,51 +89,6 @@ async function refreshProcessingDocument(item, options = {}) {
     if (!options.silent) showUploadToast(error.message);
   } finally {
     processingPollInFlight.delete(item.id);
-  }
-}
-
-async function resumeMissingProcessingTask(item, options = {}) {
-  if (!canEditDocument(item) || processingRecoveryInFlight.has(item.id) || isDocumentUploadActive(item.id)) return false;
-  if (item.processingTask?.backendManaged) {
-    if (options.interactive && item.registration?.status === "failed") {
-      if (!window.confirm("登记处理失败。是否重试失败阶段？已保存成果和原件会保留，处理方式不会改变。")) return false;
-      applyBackendProcessingDocument(item.id, await requestBackendProcessing(item.id, { method: "POST", suffix: "/retry" }));
-    } else {
-      await refreshProcessingDocument(item, { silent: !options.interactive });
-    }
-    const current = getLiveDocument(item.id);
-    if (current && isProcessingTaskPending(current)) startProcessingPolling(current);
-    if (isDocumentRegistrationPending(current)) {
-      if (options.interactive) {
-        showUploadToast(current?.status === "等候中" ? "原件已归档，当前等候中；无需保持浏览器打开。" : "后端正在准备登记，完成后正文按队列处理。");
-      }
-      return false;
-    }
-    return Boolean(current);
-  }
-  processingRecoveryInFlight.add(item.id);
-  try {
-    // 已归档原件可以直接交回后端，无需下载、重新执行 OCR 或创建第二个任务。
-    // 只有中断的上传需要文件。
-    if (item.fileUrl) {
-      await saveRegistrationCheckpoint(item.id);
-      const current = await submitBackendDocument(getRegistrationDocument(item.id));
-      if (current) startProcessingPolling(current);
-      return current && !isDocumentRegistrationPending(current);
-    }
-    const stashed = await readPendingUpload(item.id);
-    const file = stashed ? pendingUploadToFile(stashed) : null;
-    if (!file) {
-      updateDocumentUploadState(item.id, { active: false, error: "原件上传未完成，请重新导入原件" }, { force: true });
-      return false;
-    }
-    await runDocumentUploadPipeline(item, file);
-    return !isDocumentRegistrationPending(getLiveDocument(item.id));
-  } catch (error) {
-    if (options.interactive && !error.registrationCancelled) showUploadToast(error.message);
-    return false;
-  } finally {
-    processingRecoveryInFlight.delete(item.id);
   }
 }
 

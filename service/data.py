@@ -25,7 +25,7 @@ from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
 from service import reader_index, reader_content
-from service import retrieval
+from service import retrieval, uploads
 from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
 from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
 from service.retrieval_worker import SemanticWorker
@@ -258,6 +258,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         # 已有库也要升级处理任务表（新增大串小并链路），再校验列齐全。
         processing_scheduler.ensure_current_schema(connection)
         _require_current_schema(connection)
+        uploads.ensure_schema(connection)
         return
     connection.executescript(
         """
@@ -403,6 +404,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     retrieval.ensure_schema(connection)
     processing_scheduler.ensure_schema(connection)
     reader_index.ensure_schema(connection)
+    uploads.ensure_schema(connection)
     _require_current_schema(connection)
     connection.execute(
         "INSERT INTO app_meta(key, value) VALUES('sync_version', '0')"
@@ -1922,6 +1924,7 @@ def start_document_scheduler():
     import sys
     with database():
         pass
+    uploads.start_cleanup()
     if semantic_enabled():
         _semantic_worker = SemanticWorker(database, _embedding_client)
         _semantic_worker.start()
@@ -1932,81 +1935,11 @@ def start_document_scheduler():
 
 @app.on_event("shutdown")
 def stop_document_scheduler():
+    uploads.stop_cleanup()
     if _semantic_worker:
         _semantic_worker.stop()
     if _scheduler_worker:
         _scheduler_worker.stop()
-
-
-@app.post("/api/files/upload")
-async def upload_file(
-    document: UploadFile = File(...),
-    documentId: str = Form(...),
-    role: str = Form("source"),
-    pageId: str = Form(""),
-) -> dict[str, Any]:
-    user = current_user()
-    document_id = documentId.strip()
-    if not document_id:
-        raise HTTPException(status_code=400, detail="documentId 不能为空")
-
-    normalized_role = safe_part(role, "source")
-    content = await document.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="上传文件为空")
-
-    with database() as connection:
-        existing = connection.execute(
-            "SELECT owner_id FROM documents WHERE id = ?",
-            (document_id,),
-        ).fetchone()
-    if not existing:
-        raise HTTPException(status_code=409, detail="请先保存文献记录再上传原件")
-    if existing["owner_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="只有文献所有者可以修改文献")
-
-    mime_type = document.content_type or mimetypes.guess_type(document.filename or "")[0] or "application/octet-stream"
-    timestamp = now_iso()
-    # 在写入新的孤立资产前拒绝替换。重新上传相同内容是幂等的，但不允许修改已提交原件。
-    with database() as connection:
-        submitted = connection.execute("SELECT source_path FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone() if normalized_role == "source" else None
-    if submitted:
-        existing_path = Path(submitted["source_path"]).as_posix()
-        expected_digest = hashlib.sha256(content).hexdigest()
-        expected_path = relative_storage_path(document_id, normalized_role, expected_digest, mime_type, document.filename or "").as_posix()
-        if existing_path != expected_path:
-            raise HTTPException(status_code=409, detail="已提交的文献不能替换原件，请另行登记")
-
-    asset = write_asset_file(
-        content,
-        document_id=document_id,
-        page_id=pageId.strip(),
-        role=normalized_role,
-        mime_type=mime_type,
-        original_name=document.filename or "",
-    )
-
-    try:
-        with database() as connection:
-            with connection:
-                connection.execute("BEGIN IMMEDIATE")
-                require_owned_document(connection, document_id, user)
-                file_record = upsert_file_record(
-                    connection,
-                    document_id=document_id,
-                    page_id=pageId.strip(),
-                    role=normalized_role,
-                    asset=asset,
-                    timestamp=timestamp,
-                )
-                archived_document = None
-                if normalized_role == "source":
-                    enqueue_document(connection, document_id)
-                    archived_document = public_processing_document(connection, document_id, user)
-                cursor = bump_sync_version(connection)
-        return {"status": "ok", "file": file_record, "document": archived_document, "syncCursor": str(cursor)}
-    except sqlite3.Error as exc:
-        raise HTTPException(status_code=500, detail=f"文件记录保存失败：{exc}") from exc
 
 
 @app.post("/api/conversation-files/upload")
@@ -2630,3 +2563,6 @@ def validate_retrieval(payload: EvidenceValidationRequest) -> dict[str, Any]:
     user = current_user()
     with database() as connection:
         return retrieval.validate_evidence(connection, user, payload.evidence)
+
+
+app.include_router(uploads.router)

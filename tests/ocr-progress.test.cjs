@@ -11,7 +11,7 @@ function functionsFrom(path, first, last) {
 function context() {
   const ctx = vm.createContext({});
   vm.runInContext(functionsFrom('js/core.js', 'function normalizeOcrProgressDetail', 'function normalizeProcessingTask'), ctx);
-  vm.runInContext(functionsFrom('js/registration.js', 'const BACKEND_REGISTRATION_STAGES', 'function describeDocumentUploadState'), ctx);
+  vm.runInContext(functionsFrom('js/registration.js', 'const BACKEND_REGISTRATION_STAGES', 'function describeDocumentProcessingState'), ctx);
   vm.runInContext(functionsFrom('js/processing.js', 'function isStagePageTerminal', 'function renderStreamProgress'), ctx);
   return ctx;
 }
@@ -33,7 +33,7 @@ test('registration presents aggregated OCR percentage and actual candidate count
   const ctx = context();
   const live = ctx.normalizeRegistrationProgress({stage:'metadata_candidate',percent:50,detail:observed});
   const label = ctx.describeBackendRegistration({processingTask:{registrationProgress:live}});
-  assert.match(label, /登记中 35%/);
+  assert.match(label, /登记中 25%/);
   assert.match(label, /候选 OCR 50%/);
   assert.match(label, /候选页 2\/3/);
   assert.match(label, /8\/32 个文字区域/);
@@ -41,7 +41,7 @@ test('registration presents aggregated OCR percentage and actual candidate count
 
 test('registration without measured OCR stays at stage start', () => {
   const ctx = context();
-  assert.equal(ctx.describeBackendRegistration({processingTask:{currentPageStage:'metadata_candidate'}}),'登记中 20%');
+  assert.equal(ctx.describeBackendRegistration({processingTask:{currentPageStage:'metadata_candidate'}}),'登记中 0%');
   assert.equal(ctx.describeBackendRegistration({processingTask:{currentPageStage:'metadata'}}),'登记中 50%');
 });
 

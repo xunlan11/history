@@ -1,148 +1,302 @@
-// 文献登记：原件上传、进度显示、离开页面保护、暂存续传和后端提交。
-// 背景：整本 PDF 动辄几十 MB，上传期间只要页面被跳转或刷新，浏览器就会 abort 在途 POST，
-// nginx 记为 499 —— 结果「文献记录已建、原件与逐页任务都没提交」，阅读页只剩一个本地占位页，
-// 进度永远停在 0/1。这里保证「要么传完，要么下次接着传」：
-//   1. 上传中点开其它文献会被拦住，刷新/关页会弹浏览器确认；
-//   2. 用 XHR 上报上传进度，界面显示「上传原件 42%」；
-//   3. 原件先存进 IndexedDB，四个登记阶段完成并同步后才删除；
-//      中途失败或页面被刷新后，下一次打开任意页面会自动从暂存续传。
-// 说明：请求走 XHR 是为了拿到 upload.onprogress（fetch 拿不到上传进度），
-// 因此需要手动带上 Authorization 头（auth.js 只包装了 window.fetch）。
-
-const PENDING_UPLOAD_DB_NAME = "wenqu.pendingUploads";
-const PENDING_UPLOAD_STORE = "documents";
-const PENDING_UPLOAD_RETRY_DELAYS_MS = [1200, 3600];
-const UPLOAD_PROGRESS_PAINT_INTERVAL_MS = 120;
-// 多久完全没有上传进展就判定链路已断（大文件用，避免一个卡死的请求永远占着页面）
+// 文件只在本页上传；登记成功之前不创建文献和调度任务。
+const UPLOAD_RETRY_DELAYS_MS = [1200, 3600];
 const UPLOAD_STALL_TIMEOUT_MS = 180000;
-
-const documentUploadStates = new Map();
-
-let pendingUploadDbPromise = null;
+let registrationBatch = null;
+let draggedUploadId = "";
 
 function getStoredAuthToken() {
   const key = typeof AUTH_TOKEN_KEY === "string" ? AUTH_TOKEN_KEY : `${SITE_STORAGE_PREFIX}.authToken`;
   return localStorage.getItem(key) || "";
 }
 
-// ---- XHR 上传（带进度）----
-// options.onProgress: 0~1；options.retries: 网络类错误的重试次数（幂等接口才用）。
-// 失败时抛出的 Error 会带 status / payload（服务端 detail）/ networkError 三个附加属性。
-function postFormDataWithProgress(url, formData, options = {}) {
-  const { onProgress, retries = 0 } = options;
-  const delays = Array.isArray(options.retryDelays) ? options.retryDelays : PENDING_UPLOAD_RETRY_DELAYS_MS;
-  let attempt = 0;
+function hasActiveDocumentUpload() {
+  return Boolean(registrationBatch?.files.length);
+}
 
-  const sendOnce = () => new Promise((resolve, reject) => {
+function isCurrentUpload(state) {
+  return Boolean(registrationBatch?.files.includes(state));
+}
+
+function uploadCancelled() {
+  return new DOMException("上传已取消", "AbortError");
+}
+
+function uploadUrl(id, suffix = "") {
+  return `${endpoint("/data/api/uploads")}/${encodeURIComponent(id)}${suffix}`;
+}
+
+async function uploadRequest(url, options = {}) {
+  const response = await fetch(url, { cache: "no-store", ...options });
+  if (!response.ok) {
+    let payload;
+    try { payload = await response.json(); } catch {}
+    const detail = payload?.detail;
+    throw new Error(typeof detail === "string" ? detail : `请求失败（HTTP ${response.status}）`);
+  }
+  return response.json();
+}
+
+function sendTemporaryFile(state) {
+  return new Promise((resolve, reject) => {
+    const signal = state.controller.signal;
+    if (signal.aborted) return reject(uploadCancelled());
     const xhr = new XMLHttpRequest();
-    let watchdog = 0;
-    let stalled = false;
-    let uploadFinished = false;
+    let watchdog;
     const armWatchdog = () => {
       window.clearTimeout(watchdog);
-      watchdog = window.setTimeout(() => {
-        stalled = true;
-        xhr.abort();
-      }, uploadFinished ? (Number(options.responseTimeoutMs) || UPLOAD_STALL_TIMEOUT_MS) : UPLOAD_STALL_TIMEOUT_MS);
+      watchdog = window.setTimeout(() => xhr.abort(), UPLOAD_STALL_TIMEOUT_MS);
     };
-
-    xhr.open("POST", url);
-    // 本地登录站点（history）手动附加 Bearer Token；SSO 站点由 wenqu_session Cookie 自动携带。
-    const token = getStoredAuthToken();
-    if (token) {
-      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    }
-    // 大文件上传不设总超时，采用“无进展即中断”的看门狗。
-    xhr.timeout = 0;
-    if (xhr.upload && typeof onProgress === "function") {
-      xhr.upload.onprogress = (event) => {
-        armWatchdog();
-        if (event.lengthComputable && event.total > 0) {
-          onProgress(event.loaded / event.total);
-        }
-      };
-    }
-    if (xhr.upload) {
-      xhr.upload.onload = () => {
-        uploadFinished = true;
-        armWatchdog();
-      };
-    }
-    xhr.onload = () => {
+    const abort = () => xhr.abort();
+    const finish = (error, result) => {
       window.clearTimeout(watchdog);
-      let payload = null;
-      try {
-        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
-      } catch (error) {
-        payload = null;
+      signal.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve(result);
+    };
+    xhr.open("POST", uploadUrl(state.id, "/file"));
+    const token = getStoredAuthToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (event) => {
+      armWatchdog();
+      if (event.lengthComputable && event.total > 0 && isCurrentUpload(state)) {
+        // 字节发送结束还需等待服务端确认，确认前不显示完成。
+        state.percent = Math.min(99, Math.floor(event.loaded / event.total * 100));
+        renderRegistrationUploads();
       }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        const detail = payload && payload.detail
-          ? (typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail))
-          : "";
-        const error = new Error(detail || `上传失败（HTTP ${xhr.status}）`);
-        error.status = xhr.status;
-        error.payload = payload;
-        reject(error);
+    };
+    xhr.upload.onload = armWatchdog;
+    xhr.onload = () => {
+      let result;
+      try { result = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status < 200 || xhr.status >= 300 || result?.status !== "ready") {
+        finish(new Error(typeof result?.detail === "string" ? result.detail : `上传失败（HTTP ${xhr.status}）`));
+      } else finish(null, result);
+    };
+    xhr.onerror = () => finish(new Error("上传网络中断"));
+    xhr.onabort = () => finish(signal.aborted ? uploadCancelled() : new Error("上传长时间无进展"));
+    signal.addEventListener("abort", abort, { once: true });
+    const body = new FormData();
+    body.append("document", state.file, state.file.name);
+    armWatchdog();
+    xhr.send(body);
+  });
+}
+
+function waitForUploadRetry(delay, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(uploadCancelled());
+    const abort = () => { window.clearTimeout(timer); reject(uploadCancelled()); };
+    const timer = window.setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, delay);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function createUploadRow(state) {
+  const row = document.querySelector("#upload-file-template").content.firstElementChild.cloneNode(true);
+  row.dataset.uploadId = state.id;
+  row.querySelector(".file-picker-name").textContent = state.file.name;
+  row.querySelector(".file-picker-name").title = state.file.name;
+  row.querySelector(".file-upload-remove").addEventListener("click", () => removeRegistrationUpload(state.id));
+  const handle = row.querySelector(".file-upload-drag");
+  handle.addEventListener("dragstart", (event) => {
+    if (registrationBatch?.status === "submitting") return event.preventDefault();
+    draggedUploadId = state.id;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", state.id);
+    row.classList.add("is-dragging");
+  });
+  handle.addEventListener("dragend", () => {
+    draggedUploadId = "";
+    row.classList.remove("is-dragging");
+    document.querySelectorAll(".file-upload-row").forEach((entry) => entry.classList.remove("is-drop-target"));
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown"].includes(event.key) || registrationBatch?.status === "submitting") return;
+    event.preventDefault();
+    const files = registrationBatch.files;
+    const index = files.indexOf(state);
+    const target = files[index + (event.key === "ArrowUp" ? -1 : 1)];
+    if (target) moveRegistrationUpload(state.id, target.id, event.key === "ArrowDown");
+    handle.focus();
+  });
+  row.addEventListener("dragover", (event) => {
+    if (!draggedUploadId || registrationBatch?.status === "submitting") return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    row.classList.add("is-drop-target");
+  });
+  row.addEventListener("dragleave", () => row.classList.remove("is-drop-target"));
+  row.addEventListener("drop", (event) => {
+    if (!draggedUploadId || registrationBatch?.status === "submitting") return;
+    event.preventDefault();
+    const bounds = row.getBoundingClientRect();
+    moveRegistrationUpload(draggedUploadId, state.id, event.clientY > bounds.top + bounds.height / 2);
+    row.classList.remove("is-drop-target");
+  });
+  return row;
+}
+
+function renderRegistrationUploads() {
+  const list = document.querySelector("#upload-file-list");
+  if (!list) return;
+  const batch = registrationBatch;
+  const submitting = batch?.status === "submitting";
+  for (const state of batch?.files || []) {
+    if (!state.row) state.row = createUploadRow(state);
+    if (state.row.parentNode !== list) list.append(state.row);
+    const row = state.row;
+    const failed = state.status === "failed";
+    row.querySelector(".file-upload-meter").classList.toggle("hidden", failed);
+    row.querySelector(".file-upload-failed").classList.toggle("hidden", !failed);
+    row.querySelector(".file-upload-status").title = failed ? `${state.error}；请删除后重新上传` : "";
+    row.querySelector("progress").value = state.percent;
+    row.querySelector("progress").title = `${state.percent}%`;
+    row.querySelector(".file-upload-remove").disabled = Boolean(submitting);
+    row.querySelector(".file-upload-drag").disabled = Boolean(submitting);
+    row.querySelector(".file-upload-drag").draggable = !submitting;
+  }
+  document.querySelector("#file-input").disabled = Boolean(submitting);
+  document.querySelector("#close-document-form").disabled = Boolean(submitting);
+  document.querySelector("#register-document").disabled = !batch?.files.length || submitting || batch.files.some((state) => state.status !== "ready");
+  document.querySelector("#registration-error").textContent = batch?.error || "";
+}
+
+function moveRegistrationUpload(id, targetId, after = false) {
+  const batch = registrationBatch;
+  if (!batch || batch.status === "submitting" || id === targetId) return;
+  const source = batch.files.find((state) => state.id === id);
+  if (!source || !batch.files.some((state) => state.id === targetId)) return;
+  const files = batch.files.filter((state) => state !== source);
+  files.splice(files.findIndex((state) => state.id === targetId) + Number(after), 0, source);
+  batch.files = files;
+  batch.error = "";
+  const list = document.querySelector("#upload-file-list");
+  files.forEach((state) => list.append(state.row));
+  renderRegistrationUploads();
+}
+
+function cancelTemporaryUpload(state) {
+  state.controller.abort();
+  fetch(uploadUrl(state.id), { method: "DELETE", keepalive: true }).catch(() => {});
+  state.row?.remove();
+}
+
+function removeRegistrationUpload(id) {
+  const batch = registrationBatch;
+  if (!batch || batch.status === "submitting") return;
+  const state = batch.files.find((entry) => entry.id === id);
+  if (!state) return;
+  batch.files = batch.files.filter((entry) => entry !== state);
+  cancelTemporaryUpload(state);
+  batch.error = "";
+  if (!batch.files.length) registrationBatch = null;
+  renderRegistrationUploads();
+}
+
+function cancelRegistrationUpload() {
+  const batch = registrationBatch;
+  registrationBatch = null;
+  draggedUploadId = "";
+  if (batch) {
+    batch.controller.abort();
+    batch.files.forEach(cancelTemporaryUpload);
+  }
+  const input = document.querySelector("#file-input");
+  if (input) input.value = "";
+  renderRegistrationUploads();
+}
+
+function startRegistrationUploads(files) {
+  if (registrationBatch?.status === "submitting") return;
+  const selected = Array.from(files).filter((file) => file.name);
+  if (!selected.length) return;
+  if (!registrationBatch) registrationBatch = { id: newId(), files: [], status: "editing", controller: new AbortController(), error: "" };
+  const states = selected.map((file) => ({ id: newId(), file, controller: new AbortController(), status: "uploading", percent: 0, error: "" }));
+  registrationBatch.files.push(...states);
+  registrationBatch.error = "";
+  renderRegistrationUploads();
+  return Promise.all(states.map(uploadRegistrationFile));
+}
+
+async function uploadRegistrationFile(state) {
+  const file = state.file;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (state.controller.signal.aborted) return;
+      state.percent = 0;
+      renderRegistrationUploads();
+      const initialized = await uploadRequest(endpoint("/data/api/uploads"), {
+        method: "POST", signal: state.controller.signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: state.id, fileName: file.name, size: file.size, mimeType: file.type || "application/octet-stream" }),
+      });
+      if (initialized.status !== "ready") await sendTemporaryFile(state);
+      if (!isCurrentUpload(state)) return;
+      state.status = "ready";
+      state.percent = 100;
+      renderRegistrationUploads();
+      return;
+    } catch (error) {
+      if (state.controller.signal.aborted || !isCurrentUpload(state)) return;
+      if (attempt === 2) {
+        state.status = "failed";
+        state.error = error.message;
+        renderRegistrationUploads();
         return;
       }
-      resolve(payload);
-    };
-    xhr.onerror = () => {
-      window.clearTimeout(watchdog);
-      const error = new Error("网络中断，原件未上传完成");
-      error.networkError = true;
-      reject(error);
-    };
-    xhr.onabort = () => {
-      window.clearTimeout(watchdog);
-      const error = new Error(stalled ? "上传长时间无进展，已中断" : "上传被中断");
-      error.networkError = true;
-      reject(error);
-    };
-    xhr.ontimeout = () => {
-      window.clearTimeout(watchdog);
-      const error = new Error("上传超时");
-      error.networkError = true;
-      reject(error);
-    };
-    armWatchdog();
-    xhr.send(formData);
-  });
-
-  const runWithRetry = () => sendOnce().catch((error) => {
-    if (attempt >= retries || !error.networkError) {
-      throw error;
-    }
-    const delay = delays[Math.min(attempt, delays.length - 1)];
-    attempt += 1;
-    if (typeof onProgress === "function") {
-      onProgress(0);
-    }
-    return new Promise((resolve) => window.setTimeout(resolve, delay)).then(runWithRetry);
-  });
-
-  return runWithRetry();
-}
-
-// ---- 上传状态（按文献 id 记录，不写进 documents，避免被服务端快照覆盖）----
-function getDocumentUploadState(documentId) {
-  return documentUploadStates.get(documentId) || null;
-}
-
-function isDocumentUploadActive(documentId) {
-  const state = documentUploadStates.get(documentId);
-  return Boolean(state && state.active);
-}
-
-function hasActiveDocumentUpload() {
-  for (const state of documentUploadStates.values()) {
-    if (state.active) {
-      return true;
+      try { await waitForUploadRetry(UPLOAD_RETRY_DELAYS_MS[attempt], state.controller.signal); }
+      catch { return; }
     }
   }
-  return false;
 }
+
+function acceptRegisteredDocument(payload) {
+  const incoming = normalizeDocuments([payload.document])[0];
+  if (!incoming?.processingTask?.backendManaged) throw new Error("服务端未确认登记成功");
+  const index = documents.findIndex((item) => item.id === incoming.id);
+  if (index < 0) documents.unshift(incoming); else documents[index] = incoming;
+  if (formSheet?.dataset.shelfFolderId) moveShelfDocument(incoming.id, formSheet.dataset.shelfFolderId);
+  selectedDocumentId = incoming.id;
+  selectedPageId = incoming.pages[0]?.id || null;
+  cacheCurrentState();
+  registrationBatch = null;
+  document.querySelector("#upload-file-list").replaceChildren();
+  form.reset();
+  renderRegistrationUploads();
+  closeDocumentForm();
+  startProcessingPolling(incoming);
+  renderAll();
+}
+
+async function registerSelectedUploads() {
+  const batch = registrationBatch;
+  if (!batch?.files.length || batch.status === "submitting" || batch.files.some((state) => state.status !== "ready")) return;
+  const fields = new FormData(form);
+  const body = Object.fromEntries(["title", "author", "publisher", "year", "tags"].map((key) => [key, textValue(key)]));
+  Object.assign(body, { uploadIds: batch.files.map((state) => state.id), coverVariant: getNextDocumentCoverVariant(), processingMode: normalizeProcessingMode(fields.get("processingMode")), processingChunkSize: clampChunkSize(fields.get("chunkSize")) });
+  batch.status = "submitting";
+  batch.error = "";
+  renderRegistrationUploads();
+  try {
+    let result;
+    try {
+      result = await uploadRequest(uploadUrl(batch.id, "/register"), {
+        method: "POST", signal: batch.controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (batch.controller.signal.aborted) return;
+      const status = await uploadRequest(uploadUrl("registrations", `/${encodeURIComponent(batch.id)}`)).catch(() => null);
+      if (status?.status !== "registered") throw error;
+      result = status;
+    }
+    if (registrationBatch === batch) acceptRegisteredDocument(result);
+  } catch (error) {
+    if (registrationBatch !== batch) return;
+    batch.status = "editing";
+    batch.error = `合并登记失败：${error.message}。可调整文件后重新登记或取消。`;
+    renderRegistrationUploads();
+  }
+}
+
+window.addEventListener("pagehide", cancelRegistrationUpload);
 
 function shortenDocumentCardStatus(text) {
   const value = String(text || "").trim();
@@ -190,15 +344,15 @@ function shortenDocumentCardStatus(text) {
   }
   return percent ? `${label} ${percent}` : label;
 }
-// 登记进度只覆盖耗时阶段：上传 0→20%，候选页 OCR 20→50%，元数据识别 50→100%。
+// 登记从上传完成后开始：候选页 OCR 0→50%，元数据识别 50→100%。
 // 保存记录、落库排队很短，不单独占用百分比；没有实测值时退回各阶段起点值。
 const BACKEND_REGISTRATION_STAGES = {
-  "": { percent: 20 },
-  metadata_candidate: { percent: 20 },
+  "": { percent: 0 },
+  metadata_candidate: { percent: 0 },
   metadata: { percent: 50 },
 };
 const REGISTRATION_STAGE_RANGES = {
-  metadata_candidate: { from: 20, to: 50 },
+  metadata_candidate: { from: 0, to: 50 },
   metadata: { from: 50, to: 100 },
 };
 
@@ -220,99 +374,14 @@ function describeBackendRegistration(item) {
   return `登记中 ${stage.percent}%`;
 }
 
-function describeDocumentUploadState(documentId) {
-  const state = documentUploadStates.get(documentId);
-  if (!state) {
-    const item = getLiveDocument(documentId);
-    if (item?.processingTask?.backendManaged && item.registration?.status === "completed" && item.status === "排队中") {
-      return "排队中 100%";
-    }
-    if (isDocumentRegistrationPending(item)) {
-      if (item.processingTask?.backendManaged) {
-        return describeBackendRegistration(item);
-      }
-      return item.registration.status === "paused" ? "登记已暂停，点击继续" : "登记未完成，点击继续";
-    }
-    return "";
-  }
-  if (state.active) {
-    return `${state.stage || "上传中"} ${Math.round(Number(state.percent) || 0)}%`;
-  }
-  if (state.error) {
-    return state.permanent ? "登记失败，请重新导入" : "登记未完成，点击继续";
-  }
-  return "";
-}
-
-function updateDocumentUploadState(documentId, patch, options = {}) {
-  const previous = documentUploadStates.get(documentId) || {};
-  const next = { ...previous, ...patch };
-  documentUploadStates.set(documentId, next);
-  window.clearTimeout(next.paintTimer);
-  next.paintTimer = 0;
-
-  const now = Date.now();
-  const paintedRecently = now - (previous.lastPaintAt || 0) < UPLOAD_PROGRESS_PAINT_INTERVAL_MS;
-  if (options.force || !next.active || !paintedRecently) {
-    next.lastPaintAt = now;
-    refreshDocumentCardStatusIndicators(documentId);
-    return next;
-  }
-
-  // 被节流跳过的那次更新补一次尾随绘制，避免界面停在旧进度上。
-  next.paintTimer = window.setTimeout(() => {
-    const current = documentUploadStates.get(documentId);
-    if (!current || current !== next) {
-      return;
-    }
-    current.lastPaintAt = Date.now();
-    current.paintTimer = 0;
-    refreshDocumentCardStatusIndicators(documentId);
-  }, UPLOAD_PROGRESS_PAINT_INTERVAL_MS);
-
-  return next;
-}
-
-function beginDocumentUpload(item, file) {
-  documentUploadStates.set(item.id, {
-    active: true,
-    stage: "准备上传",
-    stageIndex: 0,
-    percent: 0,
-    fileName: file?.name || item.fileName || "",
-    fileSize: Number(file?.size) || Number(item.fileSize) || 0,
-    error: "",
-    startedAt: new Date().toISOString(),
-    lastPaintAt: 0,
-  });
-  refreshDocumentCardStatusIndicators(item.id);
-}
-
-function markDocumentUploadFinished(documentId) {
-  const state = documentUploadStates.get(documentId);
-  if (state) {
-    window.clearTimeout(state.paintTimer);
-  }
-  documentUploadStates.delete(documentId);
-  renderAll();
-}
-
-function markDocumentUploadFailed(documentId, error) {
-  const message = error && error.message ? error.message : "文献登记未完成";
-  const status = Number(error && error.status) || 0;
-  const permanent = status >= 400 && status < 500 && getLiveDocument(documentId)?.registration?.stage === "archive";
-  // 失败提示只走提交方（js/main.js 的 alert）或调用方自己的提示，这里只更新卡片状态，
-  // 避免与 alert 同时弹两个框。
-  updateDocumentUploadState(
-    documentId,
-    { active: false, percent: 0, error: message, permanent },
-    { force: true },
-  );
+function describeDocumentProcessingState(documentId) {
+  const item = getLiveDocument(documentId);
+  if (item?.processingTask?.backendManaged && item.registration?.status === "completed" && item.status === "排队中") return "排队中 100%";
+  return item?.processingTask?.backendManaged && isDocumentRegistrationPending(item) ? describeBackendRegistration(item) : "";
 }
 
 function refreshDocumentCardStatusIndicators(documentId) {
-  const state = getDocumentUploadState(documentId);
-  const uploadText = describeDocumentUploadState(documentId);
+  const uploadText = describeDocumentProcessingState(documentId);
   // 另一处来源是下载副本的后台重建进度（js/preparation.js）；上传/登记优先级更高。
   const preparationText = typeof describeDocumentPreparation === "function" ? describeDocumentPreparation(documentId) : "";
   const text = uploadText || preparationText;
@@ -321,8 +390,6 @@ function refreshDocumentCardStatusIndicators(documentId) {
     if (card.dataset.documentId !== documentId) {
       return;
     }
-    card.classList.toggle("is-uploading", Boolean(state && state.active));
-    card.classList.toggle("is-upload-failed", Boolean(state && !state.active && state.error));
     card.classList.toggle("is-preparing", Boolean(!uploadText && preparationText));
     const pages = card.querySelector(".book-pages");
     if (pages) {
@@ -365,190 +432,4 @@ function showUploadToast(message, duration = 3200) {
   showUploadToast.timer = window.setTimeout(() => {
     node.classList.add("hidden");
   }, duration);
-}
-
-// 上传未完成时拦截刷新 / 关页（浏览器只显示通用提示，无法自定义文案）。
-window.addEventListener("beforeunload", (event) => {
-  if (!hasActiveDocumentUpload()) {
-    return;
-  }
-  event.preventDefault();
-  event.returnValue = "文献正在登记，离开会中断登记。";
-  return event.returnValue;
-});
-
-// ---- IndexedDB 暂存（原件续传用）----
-function openPendingUploadDb() {
-  if (pendingUploadDbPromise) {
-    return pendingUploadDbPromise;
-  }
-
-  pendingUploadDbPromise = new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") {
-      resolve(null);
-      return;
-    }
-    try {
-      const request = indexedDB.open(PENDING_UPLOAD_DB_NAME, 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(PENDING_UPLOAD_STORE)) {
-          db.createObjectStore(PENDING_UPLOAD_STORE, { keyPath: "id" });
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-      request.onblocked = () => resolve(null);
-    } catch (error) {
-      resolve(null);
-    }
-  });
-
-  return pendingUploadDbPromise;
-}
-
-// 暂存失败（隐私模式 / 配额不足）不算致命：只是失去续传能力。
-async function stashPendingUpload(documentId, file) {
-  const db = await openPendingUploadDb();
-  if (!db) {
-    return false;
-  }
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(PENDING_UPLOAD_STORE, "readwrite");
-      tx.objectStore(PENDING_UPLOAD_STORE).put({
-        id: documentId,
-        blob: file,
-        fileName: file.name || "",
-        fileSize: Number(file.size) || 0,
-        stashedAt: new Date().toISOString(),
-      });
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => resolve(false);
-      tx.onabort = () => resolve(false);
-    } catch (error) {
-      resolve(false);
-    }
-  });
-}
-
-async function readPendingUpload(documentId) {
-  const db = await openPendingUploadDb();
-  if (!db) {
-    return null;
-  }
-  return new Promise((resolve) => {
-    try {
-      const request = db.transaction(PENDING_UPLOAD_STORE, "readonly")
-        .objectStore(PENDING_UPLOAD_STORE)
-        .get(documentId);
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => resolve(null);
-    } catch (error) {
-      resolve(null);
-    }
-  });
-}
-
-async function dropPendingUpload(documentId) {
-  const db = await openPendingUploadDb();
-  if (!db) {
-    return false;
-  }
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(PENDING_UPLOAD_STORE, "readwrite");
-      tx.objectStore(PENDING_UPLOAD_STORE).delete(documentId);
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => resolve(false);
-      tx.onabort = () => resolve(false);
-    } catch (error) {
-      resolve(false);
-    }
-  });
-}
-
-function pendingUploadToFile(record) {
-  if (!record || !record.blob) {
-    return null;
-  }
-  const name = record.fileName || "document";
-  const type = record.blob.type || "application/octet-stream";
-  return new File([record.blob], name, { type });
-}
-
-// ---- 文献登记流程 ----
-// 浏览器只负责归档和提交。元数据、正文 OCR/LLM 均由后端推进。
-async function runDocumentUploadPipeline(item, file) {
-  if (!canEditDocument(item)) throw new Error("当前用户没有该文献的编辑权限，请重新登录后重试。");
-  if (!file?.name) throw new Error("没有可上传的原件文件。");
-  const documentId = item.id;
-  beginDocumentUpload(item, file);
-  try {
-    await stashPendingUpload(documentId, file);
-    setUploadStage(documentId, "保存文献记录", 0);
-    // 必须先有带所有者的真实记录，归档原件成功即由后端原子入队。
-    await saveRegistrationCheckpoint(documentId);
-    if (!getRegistrationDocument(documentId).fileUrl) {
-      await archiveDocumentSource(getRegistrationDocument(documentId), file, (fraction) => {
-        setUploadStage(documentId, "上传原件", fraction);
-      });
-    }
-    setUploadStage(documentId, "登记中", 0);
-    await submitBackendDocument(getRegistrationDocument(documentId));
-    await dropPendingUpload(documentId);
-    markDocumentUploadFinished(documentId);
-    startProcessingPolling(getRegistrationDocument(documentId));
-    renderAll();
-    return true;
-  } catch (error) {
-    const current = getLiveDocument(documentId);
-    if (current && !error.registrationCancelled) {
-      // 若归档已成功，后端已在运行；客户端断线不能把任务改成失败。
-      if (!current.processingTask?.backendManaged) {
-        current.registration = current.registration || createRegistrationState();
-        current.registration.status = "failed";
-        current.registration.error = error?.message || "上传未完成";
-        current.status = "登记未完成";
-        persist();
-      }
-      markDocumentUploadFailed(documentId, error);
-      renderAll();
-    } else {
-      markDocumentUploadFinished(documentId);
-    }
-    throw error;
-  }
-}
-
-function getRegistrationDocument(documentId) {
-  const item = getLiveDocument(documentId);
-  if (!item || !canEditDocument(item)) {
-    const error = new Error("文献已删除或编辑权限已失效，登记已停止。");
-    error.registrationCancelled = true;
-    throw error;
-  }
-  return item;
-}
-
-async function saveRegistrationCheckpoint(documentId) {
-  getRegistrationDocument(documentId).updatedAt = new Date().toISOString();
-  persist();
-  await flushPendingSync();
-  if (syncDirty) throw new Error("文献记录尚未同步到服务端，请稍后继续上传。");
-  getRegistrationDocument(documentId);
-}
-
-function setUploadStage(documentId, stage, fraction) {
-  const progress = Math.min(1, Math.max(0, Number(fraction) || 0));
-  let percent;
-  if (stage === "保存文献记录") {
-    // 保存只占一瞬间，不给它分配区间，避免进度先跳到 5% 再重新走。
-    percent = 0;
-  } else if (stage === "上传原件") {
-    percent = progress * 20;
-  } else {
-    percent = 20;
-  }
-  updateDocumentUploadState(documentId, { active: true, stage, percent });
 }
