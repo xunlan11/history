@@ -34,7 +34,7 @@ function setup() {
       setTimeout: (fn, delay) => setTimeout(fn, delay < 10000 ? 0 : delay), clearTimeout,
       addEventListener: (name, fn) => listeners.set(name, fn),
     },
-    document: { querySelector: find, querySelectorAll: () => [], body: {} },
+    document: { querySelector: find, querySelectorAll: () => [], body: element() },
     endpoint: (path) => path, nextId: 0, newId: () => `upload-${++context.nextId}`,
     form: { reset() {} }, formSheet: { dataset: {} }, documents: [],
     normalizeDocuments: (items) => items, cacheCurrentState() {},
@@ -120,6 +120,40 @@ test('one file exhausting three attempts does not interrupt another completed fi
   s.c.removeRegistrationUpload(bad.id);
   assert.equal(s.find('#register-document').disabled, false);
   assert.equal(s.batch().files[0], good);
+  s.c.cancelRegistrationUpload();
+});
+
+test('same file name added again in one registration is skipped with a prompt', async () => {
+  const s = setup();
+  await uploaded(s, [file('one.pdf'), file('two.pdf')]);
+  const existing = Array.from(s.batch().files, (entry) => entry.id);
+  const before = s.requests.length;
+  const pending = s.c.startRegistrationUploads([file('one.pdf'), file('three.pdf')]);
+  await tick();
+  // 重复的 one.pdf 不再上传，只给 three.pdf 建请求。
+  assert.equal(s.requests.length, before + 1);
+  s.requests[before].complete();
+  await pending;
+  assert.deepEqual(Array.from(s.batch().files, (entry) => entry.file.name), ['one.pdf', 'two.pdf', 'three.pdf']);
+  assert.deepEqual(Array.from(s.batch().files.slice(0, 2), (entry) => entry.id), existing);
+  assert.equal(s.find('#upload-file-list').children.length, 3);
+  assert.match(s.find('#registration-error').textContent, /「one\.pdf」.*已取消重复的上传/);
+  assert.equal(s.find('#register-document').disabled, false);
+  s.c.cancelRegistrationUpload();
+});
+
+test('a selection of only duplicates uploads nothing and the name can be re-added after removal', async () => {
+  const s = setup();
+  await uploaded(s, [file('Book.pdf')]);
+  const before = s.requests.length;
+  await s.c.startRegistrationUploads([file(' book.PDF '), file('BOOK.pdf')]);
+  assert.equal(s.requests.length, before);
+  assert.equal(s.batch().files.length, 1);
+  assert.match(s.find('#registration-error').textContent, /已在本次登记的待合并列表中/);
+  // 删掉原来那个之后，同名文件可以重新加入。
+  s.c.removeRegistrationUpload(s.batch()?.files[0]?.id || '');
+  await uploaded(s, [file('book.pdf')]);
+  assert.deepEqual(Array.from(s.batch().files, (entry) => entry.file.name), ['book.pdf']);
   s.c.cancelRegistrationUpload();
 });
 

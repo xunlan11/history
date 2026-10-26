@@ -205,16 +205,41 @@ function cancelRegistrationUpload() {
   renderRegistrationUploads();
 }
 
+// 判重只看文件名：忽略首尾空格和大小写。
+function uploadNameKey(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function duplicateUploadMessage(names) {
+  const list = names.map((name) => `「${name}」`).join("");
+  return `${list}已在本次登记的待合并列表中，已取消重复的上传`;
+}
+
 function startRegistrationUploads(files) {
   if (registrationBatch?.status === "submitting") return;
   const selected = Array.from(files).filter((file) => file.name);
   if (!selected.length) return;
   if (!registrationBatch) registrationBatch = { id: newId(), files: [], status: "editing", controller: new AbortController(), error: "" };
-  const states = selected.map((file) => ({ id: newId(), file, controller: new AbortController(), status: "uploading", percent: 0, error: "" }));
-  registrationBatch.files.push(...states);
-  registrationBatch.error = "";
+  const batch = registrationBatch;
+  // 同一次登记内只按文件名判重：后选的同名文件不上传，前面的文件不受影响。
+  const taken = new Set(batch.files.map((state) => uploadNameKey(state.file.name)));
+  const accepted = [];
+  const skipped = [];
+  for (const file of selected) {
+    const key = uploadNameKey(file.name);
+    if (taken.has(key)) {
+      skipped.push(file.name);
+      continue;
+    }
+    taken.add(key);
+    accepted.push(file);
+  }
+  const states = accepted.map((file) => ({ id: newId(), file, controller: new AbortController(), status: "uploading", percent: 0, error: "" }));
+  batch.files.push(...states);
+  batch.error = skipped.length ? duplicateUploadMessage(skipped) : "";
+  if (skipped.length) showUploadToast(batch.error, 6000);
   renderRegistrationUploads();
-  return Promise.all(states.map(uploadRegistrationFile));
+  return states.length ? Promise.all(states.map(uploadRegistrationFile)) : undefined;
 }
 
 async function uploadRegistrationFile(state) {
