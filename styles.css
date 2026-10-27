@@ -4697,7 +4697,10 @@ body {
 .reader-visual-caption:empty { display: none; }
 .reader-visual-unavailable { color: #786f60; }
 .reader-visual.is-active, .reader-visual-caption.is-active { outline: 2px solid #a57525; outline-offset: 2px; }
-.reader-visual.is-selected, .reader-visual-caption.is-selected { box-shadow: 0 0 0 2px #b18c48; }
+/* 图表内的题注属于正文文字：悬停/选中与正文句子一样用底色高亮，不画矩形描边框。 */
+.reader-visual-caption.is-active, .reader-visual-caption:focus-visible { outline: none; background: #f5e3a6; border-radius: 3px; }
+.reader-visual.is-selected { box-shadow: 0 0 0 2px #b18c48; }
+.reader-visual-caption.is-selected { outline: 2px solid #986811; }
 .reader-image-frame { position: relative; }
 .reader-visual-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 .reader-visual-region { fill: transparent; stroke: transparent; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: all; cursor: pointer; }

@@ -252,7 +252,7 @@ if (require.main === module) {
     assert.equal(env.c.renderReaderVisualOverlay(env.page, env.content), false);
     assert.equal(env.c.readerVisualRegions({ polygon: [[-1, 0], [2, 0], [2, 2]] }, 100, 200), null);
   });
-  test('hover never scrolls; clicking a figure opens the large view; caption click selects', () => {
+  test('caption hover highlights and scrolls the original; figure hover does not scroll', () => {
     const env = setup(); addImage(env); const scrolls = [], sentences = [];
     env.c.scrollReaderRegionIntoView = (node, container) => scrolls.push([node, container]);
     env.c.setReaderLinkActive = (id) => sentences.push(id);
@@ -262,9 +262,16 @@ if (require.main === module) {
     assert.ok(env.document.querySelector('.reader-visual-dialog'));
     env.document.querySelector('.reader-visual-dialog-close').click();
     assert.equal(env.document.querySelector('.reader-visual-dialog'), null);
-    caption.dispatch('pointerover'); assert.equal(scrolls.length, 0); assert.equal(caption.classList.contains('is-active'), true);
+    // 图表本体的悬停仍不滚动（沿用原行为）。
+    figure.querySelector('img').dispatch('pointerover'); assert.equal(scrolls.length, 0);
+    // 题注属于“图表内的非图表文字”：悬停时像正文句子一样把原文区域滚入视野并高亮。
+    caption.dispatch('pointerover');
+    const hoverRegion = env.readerOriginalPreview.querySelector(`[data-reader-caption-id="${caption.dataset.readerCaptionId}"]`);
+    assert.equal(scrolls.length, 1); assert.equal(scrolls[0][0], hoverRegion); assert.equal(scrolls[0][1], env.readerOriginalPreview);
+    assert.equal(caption.classList.contains('is-active'), true);
+    assert.equal(hoverRegion.classList.contains('is-active'), true);
     caption.dispatch('pointerout', { relatedTarget: null }); assert.equal(figure.classList.contains('is-active'), false);
-    caption.click(); assert.equal(scrolls.length, 2); assert.equal(sentences.at(-1), null);
+    caption.click(); assert.equal(scrolls.length, 3); assert.equal(sentences.at(-1), null);
     const region = env.readerOriginalPreview.querySelector('[data-reader-caption-id]');
     assert.equal(region.classList.contains('is-selected'), true);
     env.c.bindReaderVisualEvents(env.readerText);

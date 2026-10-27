@@ -408,8 +408,10 @@ function setReaderVisualActive(id, options = {}) {
     scrollReaderRegionIntoView(node, container);
   };
   if (!options.hover && options.scrollImage && readerPanelState.originalCollapsed) toggleReaderPanel("original");
-  if (!options.hover && options.scrollText) scroll(readerText);
-  if (!options.hover && options.scrollImage) scroll(readerOriginalPreview);
+  // 悬停默认不滚动（避免图表整体悬停时抖动）；图表文字传 hoverScroll 时才跟随正文句子滚动原文。
+  const scrollNow = !options.hover || options.hoverScroll === true;
+  if (scrollNow && options.scrollText) scroll(readerText);
+  if (scrollNow && options.scrollImage) scroll(readerOriginalPreview);
 }
 
 // 大图默认按屏幕自适应（装得下就铺满，不无限放大低分辨率小图）；滚轮可继续缩放。
@@ -476,21 +478,26 @@ function openReaderVisualLarge(id) {
 function bindReaderVisualEvents(container) {
   if (!container || readerVisualBoundContainers.has(container)) return;
   readerVisualBoundContainers.add(container);
-  // 图表内的“注：”属于正文（带 data-sentence-id），不参与图表悬停/点击放大，交给句子联动。
-  const inNote = (node) => Boolean(node?.closest?.(".reader-visual-note"));
+  // 图表内带正文偏移的文字（如“注：”，含其外层 figcaption）由句子悬停/选中负责，
+  // 其余图表文字（题注）走这里的定位；两者样式一致，不再按“注 / 题注”分开处理。
+  const bodyLinked = (node) => Boolean(node?.closest?.("[data-reader-text-start]"));
   const target = (event) => {
-    if (inNote(event.target)) return null;
+    if (bodyLinked(event.target)) return null;
     const node = event.target?.closest?.("[data-reader-visual-id]");
     return node && container.contains(node) && !(typeof readerEditing !== "undefined" && readerEditing) ? node : null;
   };
   const relatedVisual = (event) => {
     const node = event.relatedTarget?.closest?.("[data-reader-visual-id]");
-    return node && !inNote(event.relatedTarget) && container.contains(node) ? node : null;
+    return node && !bodyLinked(event.relatedTarget) && container.contains(node) ? node : null;
   };
   const hover = (event) => {
     const node = target(event);
-    if (node) setReaderVisualActive(node.dataset.readerVisualId, { hover: true, captionId: node.dataset.readerCaptionId });
-    else if (event.target?.closest?.("[data-sentence-id]")) clearReaderVisualHover();
+    if (node) {
+      // 图表内的文字：与正文一样把原文对应文字滚入视野并高亮（图片本体悬停仍只描边、不滚动）。
+      const text = Boolean(node.dataset.readerCaptionId);
+      setReaderVisualActive(node.dataset.readerVisualId, { hover: true, captionId: node.dataset.readerCaptionId,
+        scrollImage: text, hoverScroll: text });
+    } else if (bodyLinked(event.target)) clearReaderVisualHover();
   };
   const leave = (event) => {
     if (!target(event)) return;
