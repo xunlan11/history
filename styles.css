@@ -4693,7 +4693,7 @@ body {
 .reader-visual > img { display: block; max-width: 100%; height: auto; margin: auto; }
 .reader-visual.is-zoomable { cursor: zoom-in; }
 .reader-visual-caption { margin: .6rem 0; white-space: pre-wrap; line-height: 1.6; color: var(--muted-color, #675f53); cursor: auto; }
-.reader-visual-note { margin: .6rem 0; white-space: pre-wrap; line-height: 1.6; color: var(--muted-color, #675f53); font-size: .92em; }
+.reader-visual-note { margin: .6rem 0; white-space: pre-wrap; line-height: 1.6; color: var(--muted-color, #675f53); font-size: .92em; cursor: auto; }
 .reader-visual-caption:empty { display: none; }
 .reader-visual-unavailable { color: #786f60; }
 .reader-visual.is-active, .reader-visual-caption.is-active { outline: 2px solid #a57525; outline-offset: 2px; }

@@ -334,6 +334,37 @@ if (require.main === module) {
     const noteNodes = nodes.filter(({ node }) => note.contains(node));
     assert.deepEqual(plain(noteNodes.map(({ start, end }) => [start, end])), [[6, 11]]);
   });
+  test('figure notes hover like body sentences instead of the zoomable figure', () => {
+    const env = setup();
+    const text = 'A😀B\n\n注：示例。\n\nC';
+    env.page.text = text;
+    const content = { version: 1, sourceRevision: 7, displayedText: text, textHash: digest(text), imageHash: env.page.imageHash,
+      items: [
+        { type: 'text', start: 0, end: 6 },
+        { type: 'visual', visualId: 'v1' },
+        { type: 'note', start: 6, end: 11, visualId: 'v1' },
+        { type: 'text', start: 11, end: text.length },
+      ],
+      visuals: { v1: { id: 'v1', kind: 'figure', renderMode: 'image', url: '/visual.png',
+        captions: [{ id: 'c1', text: '图1 标题', position: 'after' }] } }, warnings: [] };
+    const index = { sourceRevision: 7, displayedText: text, sentences: [
+      { id: 's1', start: 0, end: 6, text: 'A😀B\n\n' },
+      { id: 's2', start: 6, end: 11, text: '注：示例。' },
+      { id: 's3', start: 11, end: text.length, text: '\n\nC' }] };
+    assert.equal(env.c.renderReaderContent(env.page, content, index), true);
+    const visuals = [];
+    env.c.setReaderVisualActive = (id, options) => visuals.push([id, options]);
+    const note = env.readerText.querySelector('.reader-visual-note');
+    // 注释属于正文：悬停不应进入图表悬停态（否则会清掉句子高亮），点击也不应打开大图。
+    note.dispatch('pointerover');
+    assert.deepEqual(plain(visuals), []);
+    note.click();
+    assert.equal(env.document.querySelector('dialog'), null);
+    // 图表本体仍保持原有悬停行为。
+    env.readerText.querySelector('.reader-visual img').dispatch('pointerover');
+    assert.equal(visuals.length, 1);
+    assert.equal(visuals[0][0], 'v1');
+  });
   test('large view fits the viewport and caps upscaling of tiny images', () => {
     const { c } = setup();
     const viewport = { width: 1600, height: 900 };

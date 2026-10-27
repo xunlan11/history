@@ -476,9 +476,16 @@ function openReaderVisualLarge(id) {
 function bindReaderVisualEvents(container) {
   if (!container || readerVisualBoundContainers.has(container)) return;
   readerVisualBoundContainers.add(container);
+  // 图表内的“注：”属于正文（带 data-sentence-id），不参与图表悬停/点击放大，交给句子联动。
+  const inNote = (node) => Boolean(node?.closest?.(".reader-visual-note"));
   const target = (event) => {
+    if (inNote(event.target)) return null;
     const node = event.target?.closest?.("[data-reader-visual-id]");
     return node && container.contains(node) && !(typeof readerEditing !== "undefined" && readerEditing) ? node : null;
+  };
+  const relatedVisual = (event) => {
+    const node = event.relatedTarget?.closest?.("[data-reader-visual-id]");
+    return node && !inNote(event.relatedTarget) && container.contains(node) ? node : null;
   };
   const hover = (event) => {
     const node = target(event);
@@ -487,8 +494,8 @@ function bindReaderVisualEvents(container) {
   };
   const leave = (event) => {
     if (!target(event)) return;
-    const related = event.relatedTarget?.closest?.("[data-reader-visual-id]");
-    if (related && container.contains(related)) {
+    const related = relatedVisual(event);
+    if (related) {
       setReaderVisualActive(related.dataset.readerVisualId, { hover: true, captionId: related.dataset.readerCaptionId });
     } else {
       readerVisualState.hovered = null;
