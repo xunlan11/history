@@ -143,8 +143,14 @@ function createReaderVisual(visual) {
   figure.dataset.readerVisualId = visual.id;
   figure.tabIndex = 0;
   figure.setAttribute("aria-label", readerVisualKindLabel(visual.kind));
+  // 题注文字包一层行内 span：悬停/选中底色才能像正文句子那样逐行高亮，而不是整个块一个矩形。
+  const captionText = (text) => {
+    const node = readerVisualElement("figcaption", "reader-visual-caption");
+    if (text) node.append(readerVisualElement("span", "reader-visual-caption-text", text));
+    return node;
+  };
   const captions = (visual.captionCoverage === "included" ? [] : (visual.captions || []).filter((caption) => !caption.inImage)).map((caption) => {
-    const node = readerVisualElement("figcaption", "reader-visual-caption", caption.text);
+    const node = captionText(caption.text);
     node.dataset.readerVisualId = visual.id;
     node.dataset.readerCaptionId = caption.id;
     node.dataset.readerAuxiliary = "true";
@@ -154,7 +160,7 @@ function createReaderVisual(visual) {
   for (const { node, caption } of captions) if (caption.position === "before") figure.append(node);
   if (visual.kind === "caption") {
     if (!captions.length && (visual.title || visual.text)) {
-      figure.append(readerVisualAuxiliary(readerVisualElement("figcaption", "reader-visual-caption", visual.title || visual.text)));
+      figure.append(readerVisualAuxiliary(captionText(visual.title || visual.text)));
     }
     figure.append(readerVisualAuxiliary(readerVisualElement("p", "reader-visual-placement-status", "标题归属待核对")));
   } else {

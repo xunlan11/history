@@ -310,6 +310,8 @@ if (require.main === module) {
     const figure = env.readerText.querySelector('.reader-visual');
     assert.equal(figure.querySelector('.reader-visual-note').textContent, '注：示例');
     assert.equal(figure.querySelector('.reader-visual-caption').textContent, '图1 标题');
+    // 题注文字必须在行内 span 里，悬停底色才能逐行高亮（块级会把整段涂成一个矩形）。
+    assert.equal(figure.querySelector('.reader-visual-caption .reader-visual-caption-text').textContent, '图1 标题');
     assert.equal(figure.children[figure.children.length - 1].className.includes('reader-visual-caption'), true);
     assert.equal(env.readerText.querySelectorAll('.reader-visual-note').length, 1);
     assert.equal(env.readerText.textContent.includes('注：示例'), true);
