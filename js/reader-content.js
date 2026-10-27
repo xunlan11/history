@@ -123,6 +123,12 @@ function readerVisualElement(tag, className, text) {
   return node;
 }
 
+// 图表内的题注、状态行等文字不属于正文区间；只有紧跟图表的“注：”仍按 data-reader-text-start 计入正文。
+function readerVisualAuxiliary(node) {
+  node.dataset.readerAuxiliary = "true";
+  return node;
+}
+
 function readerVisualSafeUrl(value) {
   if (typeof value !== "string" || !value.trim()) return "";
   try {
@@ -134,7 +140,6 @@ function readerVisualSafeUrl(value) {
 
 function createReaderVisual(visual) {
   const figure = readerVisualElement("figure", "reader-visual");
-  figure.dataset.readerAuxiliary = "true";
   figure.dataset.readerVisualId = visual.id;
   figure.tabIndex = 0;
   figure.setAttribute("aria-label", readerVisualKindLabel(visual.kind));
@@ -148,8 +153,10 @@ function createReaderVisual(visual) {
   });
   for (const { node, caption } of captions) if (caption.position === "before") figure.append(node);
   if (visual.kind === "caption") {
-    if (!captions.length && (visual.title || visual.text)) figure.append(readerVisualElement("figcaption", "reader-visual-caption", visual.title || visual.text));
-    figure.append(readerVisualElement("p", "reader-visual-placement-status", "标题归属待核对"));
+    if (!captions.length && (visual.title || visual.text)) {
+      figure.append(readerVisualAuxiliary(readerVisualElement("figcaption", "reader-visual-caption", visual.title || visual.text)));
+    }
+    figure.append(readerVisualAuxiliary(readerVisualElement("p", "reader-visual-placement-status", "标题归属待核对")));
   } else {
     const url = readerVisualSafeUrl(visual.url);
     if (url) {
@@ -160,13 +167,13 @@ function createReaderVisual(visual) {
       if (visual.width > 0) image.width = visual.width;
       if (visual.height > 0) image.height = visual.height;
       image.addEventListener("error", () => {
-        image.replaceWith(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用"));
+        image.replaceWith(readerVisualAuxiliary(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用")));
       }, { once: true });
       figure.classList.add("is-zoomable");
       figure.append(image);
     } else if (visual.kind !== "caption") {
-      figure.append(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用"));
-      const locate = readerVisualElement("button", "reader-visual-locate", "查看原页");
+      figure.append(readerVisualAuxiliary(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用")));
+      const locate = readerVisualAuxiliary(readerVisualElement("button", "reader-visual-locate", "查看原页"));
       locate.type = "button";
       locate.addEventListener("click", () => setReaderVisualActive(visual.id, { scrollImage: true, scrollText: true }));
       figure.append(locate);
@@ -201,6 +208,23 @@ function splitSentenceEdges(text) {
   return { leading, body: rest.slice(0, rest.length - trailing.length), trailing };
 }
 
+function appendReaderTextSlices(container, text, entry, index) {
+  const slices = index ? index.sentences.filter((sentence) => sentence.end > entry.start && sentence.start < entry.end) : [entry];
+  for (const slice of slices) {
+    const start = Math.max(entry.start, slice.start), end = Math.min(entry.end, slice.end);
+    const { leading, body, trailing } = splitSentenceEdges(text.slice(start, end));
+    if (leading) container.append(leading);
+    if (body) {
+      const span = readerVisualElement("span", index ? "reader-sentence" : "reader-content-text", body);
+      span.dataset.readerTextStart = String(start + leading.length);
+      span.dataset.readerTextEnd = String(end - trailing.length);
+      if (index) { span.dataset.sentenceId = slice.id; span.tabIndex = 0; }
+      container.append(span);
+    }
+    if (trailing) container.append(trailing);
+  }
+}
+
 function renderReaderContent(page, content, readerIndex = null) {
   if ((typeof readerEditing !== "undefined" && readerEditing) || !isReaderContentValid(content, page) ||
       typeof readerText === "undefined" || !readerText) return false;
@@ -212,43 +236,31 @@ function renderReaderContent(page, content, readerIndex = null) {
       const figure = createReaderVisual(content.visuals[entry.visualId]);
       figures.set(entry.visualId, figure);
       if (["unplaced", "approximate"].includes(entry.placement)) {
-        figure.append(readerVisualElement("p", "reader-visual-placement-status",
-          entry.placement === "unplaced" ? "位置待核对，请对照原页。" : "位置近似，请对照原页。"));
+        figure.append(readerVisualAuxiliary(readerVisualElement("p", "reader-visual-placement-status",
+          entry.placement === "unplaced" ? "位置待核对，请对照原页。" : "位置近似，请对照原页。")));
       }
       fragment.append(figure);
       continue;
     }
     if (entry.type === "note") {
-      // 紧跟图表后的“注：”在内容层被标成图表注释：仍占正文区间（校验/检索不变），但不按段落渲染。
+      // 紧跟图表后的“注：”在内容层被标成图表注释：仍占正文区间，句子切分与高亮和普通正文一致。
       const figure = figures.get(entry.visualId);
       const raw = content.displayedText.slice(entry.start, entry.end);
-      const value = raw.trim();
-      if (figure && value) {
-        const note = readerVisualElement("figcaption", "reader-visual-note", value);
-        note.dataset.readerAuxiliary = "true";
-        note.dataset.readerTextStart = String(entry.start + raw.length - raw.trimStart().length);
-        note.dataset.readerTextEnd = String(entry.end - (raw.length - raw.trimEnd().length));
+      const start = entry.start + raw.length - raw.trimStart().length;
+      const end = entry.end - (raw.length - raw.trimEnd().length);
+      if (figure && end > start) {
+        const note = readerVisualElement("figcaption", "reader-visual-note");
+        note.dataset.readerTextStart = String(start);
+        note.dataset.readerTextEnd = String(end);
+        appendReaderTextSlices(note, content.displayedText, { ...entry, start, end }, index);
         const firstCaption = figure.querySelector(".reader-visual-caption");
         if (firstCaption) figure.insertBefore(note, firstCaption); else figure.append(note);
-      } else if (value) {
-        fragment.append(document.createTextNode(value));
+      } else if (end > start) {
+        appendReaderTextSlices(fragment, content.displayedText, { ...entry, start, end }, index);
       }
       continue;
     }
-    const slices = index ? index.sentences.filter((sentence) => sentence.end > entry.start && sentence.start < entry.end) : [entry];
-    for (const slice of slices) {
-      const start = Math.max(entry.start, slice.start), end = Math.min(entry.end, slice.end);
-      const { leading, body, trailing } = splitSentenceEdges(content.displayedText.slice(start, end));
-      if (leading) fragment.append(leading);
-      if (body) {
-        const span = readerVisualElement("span", index ? "reader-sentence" : "reader-content-text", body);
-        span.dataset.readerTextStart = String(start + leading.length);
-        span.dataset.readerTextEnd = String(end - trailing.length);
-        if (index) { span.dataset.sentenceId = slice.id; span.tabIndex = 0; }
-        fragment.append(span);
-      }
-      if (trailing) fragment.append(trailing);
-    }
+    appendReaderTextSlices(fragment, content.displayedText, entry, index);
   }
   for (const message of content.warnings || []) {
     const warning = readerVisualElement("p", "reader-visual-placement-status", message);
@@ -424,8 +436,7 @@ function openReaderVisualLarge(id) {
   close.type = "button";
   close.addEventListener("click", () => { if (dialog.open) dialog.close(); else dialog.remove(); });
   const copy = figure.cloneNode(true);
-  const hint = readerVisualElement("p", "reader-visual-dialog-hint", "滚轮缩放 · Esc 关闭");
-  dialog.append(close, copy, hint);
+  dialog.append(close, copy);
   const largeImage = copy.querySelector("img");
   const applyScale = (scale) => {
     const natural = Number(largeImage?.naturalWidth) || 0;
