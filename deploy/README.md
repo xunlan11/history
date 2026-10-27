@@ -1,102 +1,185 @@
-# 部署与迁移执行手册
+# history / literature 部署手册（面向执行代理）
 
-本文件是部署大模型的执行入口。目标是在新主机恢复历史站 `/history`、文学站 `/literature` 和远程模型服务，并用实际请求验证。命令示例面向 Debian/Ubuntu Linux，使用 Bash；其他发行版替换包管理步骤。每段标明执行主机。先读完对应分支，再执行命令，遇到失败先解决再进入下一步。
+> **读者**：执行部署、迁移或排错的自动化代理；不假设人类会逐段阅读。
+> **用法**：读 §0 → §1 → §2，按 §2 选任务，再顺序执行对应步骤。步骤内的「校验」必须执行，不能跳过。
+> **边界**：本文只描述**目标状态与可复现操作**。线上实际提交、发布目录、进程状态一律现场读取（§1.0），不得从本文推断。
+> **维护规则**：只追加"事实"和"操作"，写在对应章节；一次性交接、某次实测结果写进 §1.4 或附录；不要再往文末追加带日期的小节。
 
-执行主机每个新 shell 先启用失败即停，下面各块共享该主机 shell 的变量；占位符必须先替换，互斥分支只选一条：
+## 0. 约定
+
+| 项 | 约定 |
+| --- | --- |
+| 角色术语 | **数据端** = 本仓库所在服务器（存 SQLite/文件、拆页、任务编排）；**模型端** = 跑 PaddleX + Ollama 的数据处理服务器。代码里的 `UPSTREAM`、`OCR_UPSTREAM_*` 都指模型端。不要再使用"本机/本站/上游/服务端"等旧称，历史文档里的"服务端"= 模型端。 |
+| 分支标记 | `[M]` 仅迁移现有站点；`[F]` 仅全新安装；`[M\|F]` 两者都做；`[U]` 仅更新代码 |
+| 步骤格式 | 每步开头一行：`主机 · 前置 · 产物`。命令块内默认同一 shell，变量跨块有效 |
+| 占位符 | 尖括号 `<...>` 必须先替换成实测值；未替换等于未执行 |
+| 失败即停 | 每个新 shell 先执行 `set -euo pipefail` |
+| 权限 | 数据端：`sudo systemctl`（system 管理器，unit 在 `/etc/systemd/system/`）。模型端：`systemctl --user`（unit 在 `~/.config/systemd/user/`，需 `loginctl enable-linger`） |
+| 禁止 | ① 用 `nginx -T` 代替 reload 后的响应头验证；② 手工往 `.deploy/current` 里写文件；③ 用多个 uvicorn worker 跑 OCR/进度；④ 清库、删 `.deploy/releases`、切公网入口前不备份 |
+
+## 1. 事实（单一真值表）
+
+### 1.0 现状快照（每次任务先执行，用于判断"要不要重启/要不要发布"）
 
 ```bash
-set -euo pipefail
+cd /home/ubuntu/Codefield/history
+git rev-parse HEAD
+readlink .deploy/current; cat .deploy/current/version.json
+sudo -n systemctl is-active history-data literature history-ocr literature-ocr history-llm history-version
+ss -lntp 2>/dev/null | grep -E ':(8665|18665|8765|18765|8865|8965|18080|11435|11436)\b'
+curl -s http://127.0.0.1:8665/health
 ```
 
-代码工作区只整理代码和执行离线检查；下面的安装、备份、服务启动及真实推理命令仅在目标部署主机执行。交付时记录实际完成项和缺失项，不能把本文的示例或健康检查当成已完成的生产验收。
+### 1.1 拓扑与端口
 
-## 1. 先选择部署路径并填写交接记录
+| 执行端 | 服务（unit 名） | 监听 | 仓库模板 | 说明 |
+| --- | --- | --- | --- | --- |
+| 数据端 | `history-data` | `127.0.0.1:8665` | `deploy/data/history-data.service` | 历史站 Data API（SQLite + 调度器 + 语义索引） |
+| 数据端 | `history-ocr` | `127.0.0.1:8765` | `deploy/data/history-ocr.service` | 历史站 OCR 编排（不加载模型） |
+| 数据端 | `history-llm` | `127.0.0.1:8865` | `deploy/data/history-llm.service` | 两站共享生成 API |
+| 数据端 | `history-version` | `127.0.0.1:8965` | 仓库无模板，见附录 A | 发布服务：把仓库 HEAD 发布到 `.deploy/current` |
+| 数据端 | `literature` | `127.0.0.1:18665` | `deploy/data/literature.service` | 文学站 Data API（独立库） |
+| 数据端 | `literature-ocr` | `127.0.0.1:18765` | `deploy/data/literature-ocr.service` | 文学站 OCR 编排（独立存储） |
+| 模型端 | `history-ocr` | `127.0.0.1:8080` | `deploy/service/history-ocr.service` | PaddleX PP-StructureV3，CPU |
+| 模型端 | `history-llm` | `127.0.0.1:11434` | `deploy/service/history-llm.service` | Ollama 生成（默认 Spark，Qwen 备选） |
+| 模型端 | `history-embedding` | `127.0.0.1:11436` | `deploy/service/history-embedding.service` | Ollama 嵌入，固定 CPU |
+| 模型端 | `history-tunnel` | 数据端 `18080`→`8080`、`11435`→`11434` | `deploy/service/history-tunnel.service` | 反向 SSH 隧道 |
+| 模型端 | `history-embedding-tunnel` | 数据端 `11436`→`11436` | `deploy/service/history-embedding-tunnel.service` | 独立嵌入隧道 |
 
-| 本次任务 | 执行顺序 |
-| --- | --- |
-| 迁移现有站点 | 源端盘点及停写备份 → 新模型端恢复 → 连通两端 → 新数据端恢复及配置 → 发布前端/代理 → 验收 → 切换入口 |
-| 全新安装 | 盘点目标参数 → 准备模型及依赖 → 连通两端 → 新数据端空库初始化 → 发布前端/代理 → 验收 |
-| 仅更新代码 | 备份现有数据及当前发布 → 同步指定提交及依赖 → 更新 unit/配置 → 重启数据端 → 发布同一提交的前端 → 验收；模型未变时复用模型端 |
+- 同名 `history-ocr` / `history-llm` 在两端都有，**执行命令前必须确认当前主机**。
+- 两站共用一份代码（`history/`）与一个发布目录 `history/.deploy/current`；DB、files、ocr-storage 各自独立。
+- 线路：nginx `/history/api/{data,ocr,llm,version}/` → 8665/8765/8865/8965；`/literature/api/{data,ocr,llm,version}/` → 18665/18765/8865/8965（`proxy_pass` 结尾 `/` 剥离前缀）。
 
-执行前从任务上下文、源机和现有配置中确定下表；不要把旧 IP 或假定的密码填到新环境。只有无法从已授权环境取得的必要信息才需要补充。只有一端权限时完成该端，交付另一端的具体待办。
+### 1.2 文件与落盘位置
 
-| 必须确定的输入 | 本文示例/要求 |
-| --- | --- |
-| 代码来源和提交 | 仓库地址、可检出的 commit；迁移时记录源端 `git rev-parse HEAD` 和未提交改动 |
-| 两端登录方式 | 数据端、模型端的 SSH 地址、运行账号、sudo 权限；两端可以是同一台主机 |
-| 数据端目录 | 默认 `/home/ubuntu/Codefield/history`，文学站独立数据为 `/home/ubuntu/Codefield/literature` |
-| 模型端目录 | 运行账号的 `~/history-service`、`~/.paddlex`；记录 CPU 架构、GPU 驱动及可用 RAM/磁盘 |
-| 连接方式 | 双机默认模型端向数据端反向 SSH；可选可信内网直连；同机使用本机直连 |
-| 公网入口 | 域名、TLS、现有 Nginx 配置、上传大小、DNS/负载均衡切换方式 |
-| 站点范围 | 默认两站；只部署历史站时省略 literature、literature-ocr 和 SSO 步骤 |
-| 文学站登录依赖 | 问渠 SSO 的 PostgreSQL、`/login` 及账号相关路由、Cookie 域、`DATABASE_URL`、`SERVICE_TOKEN_SECRET` |
-| 源端环境 | 实际 systemd 管理器、unit/drop-in、Python/PaddleX/PaddlePaddle/Ollama 版本、生成/嵌入模型 digest |
-| 数据迁移材料 | 两站 SQLite/文件、OCR 状态、环境配置、模型缓存；必须确认有无现存数据，不能默认“已清空” |
-
-迁移优先保留源端用户和绝对目录。部分持久化任务记录绝对路径；更换目录时，需保留对应旧路径的受控软链接或完成单独验证的路径调整，再恢复任务，不能只改 unit 的工作目录。
-
-## 2. 拓扑、服务管理器和路径
-
-| 执行端 | 服务 | 本机监听 | 仓库文件 |
-| --- | --- | --- | --- |
-| 数据端 | 历史站 Data API | `127.0.0.1:8665` | `data/history-data.service` |
-| 数据端 | 历史站 OCR 编排 API | `127.0.0.1:8765` | `data/history-ocr.service` |
-| 数据端 | 两站共享 LLM API | `127.0.0.1:8865` | `data/history-llm.service` |
-| 数据端 | 文学站 Data API | `127.0.0.1:18665` | `data/literature.service` |
-| 数据端 | 文学站 OCR 编排 API | `127.0.0.1:18765` | `data/literature-ocr.service` |
-| 模型端 | PaddleX PP-StructureV3，CPU | `127.0.0.1:8080` | `service/history-ocr.service` |
-| 模型端 | Ollama 生成，默认 Spark Q4_K_M / 16K，Qwen 备选 | `127.0.0.1:11434` | `service/history-llm.service` |
-| 模型端 | Ollama 嵌入，固定 CPU | `127.0.0.1:11436` | `service/history-embedding.service` |
-| 模型端 | OCR/生成反向隧道 | 数据端 `18080`→模型端 `8080`、数据端 `11435`→模型端 `11434` | `service/history-tunnel.service` |
-| 模型端 | 独立嵌入反向隧道 | 数据端 `11436`→模型端 `11436` | `service/history-embedding-tunnel.service` |
-
-**新安装统一约定：数据端使用 system 服务，模型端使用 user 服务。** 数据端 unit 带 `User=ubuntu` 和 `WantedBy=multi-user.target`，安装到 `/etc/systemd/system/`，用 `sudo systemctl`；模型端 unit 使用 `%h` 和 `default.target`，安装到运行账号的 `~/.config/systemd/user/`，用 `systemctl --user`。
-
-源端旧部署可能使用 user 服务：先分别检查 `sudo systemctl` 和 `systemctl --user` 的 `show/cat/status`，后续停止、备份和重启必须针对实际管理器。目标已有旧 user 实例时，切换前停用它，不能在两个管理器中同时启动相同端口。两端都有 `history-ocr` 和 `history-llm`，执行命令前确认当前主机。
-
-需要迁移的持久化内容：
-
-| 内容 | 默认位置 | 迁移说明 |
+| 路径 | 内容 | 在 Git 里 |
 | --- | --- | --- |
-| 历史站 SQLite、文件和备份 | `history/storage/` | 含 `app.db`、可能存在的 WAL/SHM、`files/`，在仓库目录内且被 Git 忽略 |
-| 历史站 OCR 状态与产物 | `history/ocr-storage/` | 包括后台 OCR 任务状态 |
-| 文学站全部本地数据 | `literature/` | 含 `app.db`、`files/`、`ocr-storage/`，与历史站隔离 |
-| 数据端配置 | `/etc/history-semantic.env`、`/etc/literature-semantic.env`、`/etc/history-generation.env`、`/etc/wenqu-sso.env`，以及实际 drop-in | 最后一份是文学站必需依赖；凭据通过受控渠道迁移，不写入 Git 或交付回答 |
-| 模型程序、权重和配置 | `~/history-service/`、`~/.paddlex/` | 保留两个 Ollama 模型目录及 digest；OCR 虚拟环境在目标机重建 |
-| 基础设施 | Nginx/TLS、SSO PostgreSQL、SSH key/authorized_keys、sshd 限制 | 不包含在应用 SQLite 备份中，需单独迁移或复用 |
+| `/home/ubuntu/Codefield/history` | 代码仓库（两站共用） | 是 |
+| `history/storage/`（`app.db`、`files/`、`backups/`） | 历史站数据 | 否（忽略） |
+| `history/ocr-storage/` | 历史站 OCR 任务状态与产物 | 否 |
+| `/home/ubuntu/Codefield/literature/`（`app.db`、`files/`、`ocr-storage/`） | 文学站全部本地数据 | 否（Codefield 非 Git 仓库） |
+| `history/.deploy/releases/<12位>`、`.deploy/current` | 前端发布目录（软链接） | 否 |
+| `~/.local/bin/uv` | uv（systemd 用绝对路径） | 否 |
+| `/etc/history-generation.env` | 生成 API 配置（优先于 unit 与代码默认值） | 否 |
+| `/etc/history-semantic.env`、`/etc/literature-semantic.env` | 两站语义检索配置 | 否 |
+| `/etc/wenqu-sso.env` | 问渠 SSO：`DATABASE_URL`、`SERVICE_TOKEN_SECRET`（600，文学站必需） | 否 |
+| 模型端 `~/history-service/` | `ollama/`、`models/`、`models-embedding/`、`venv-ocr/`、`service/`、`PP-StructureV3-cpu.yaml`、`logs/` | 否 |
 
-Git 仓库不是数据备份；不搬运 `.venv/`。静态发布的 `.deploy/` 可以从相同提交重建。
+- 前端发布目录 = `git archive HEAD` 的整棵树；nginx 只 alias 它并对外提供 `html/`、`js/`、`styles.css`，不把仓库根当 Web 根。
+- Git 不是数据备份；`.venv/` 不搬运；`.deploy/` 可由同一提交重建。
 
-## 3. 源端盘点、停写与传输（迁移分支）
+### 1.3 环境变量
 
-### 3.1 记录版本和自定义配置
+数据端（system unit；括号内为代码默认值）：
 
-在源数据端记录代码提交、未提交文件、各 unit 的实际路径/管理器、数据目录、健康接口中的 schema 和数量。将必要的未提交代码纳入交接，不能只传一个无法包含这些改动的 commit。
+| 变量 | 作用 | 生产值 |
+| --- | --- | --- |
+| `DATA_DB_PATH` / `DATA_STORAGE_DIR` / `DATA_FILE_STORAGE_DIR` / `DATA_PUBLIC_BASE_URL` | Data API 数据路径与对外基址 | 历史站走默认（`storage/`、`/history/api/data`）；文学站显式指向 `~/Codefield/literature{,/files}`、`/literature/api/data` |
+| `AUTH_MODE`（`local`） | `local`=本地账号 + Bearer；`sso`=问渠 Cookie | `history-data=local`，`literature=sso` |
+| `PROCESSING_OCR_URL` / `PROCESSING_LLM_URL`（8765 / 8865） | 调度器调用本机编排服务 | 文学站必须是 18765 / 8865（**不设会误连历史站 OCR**） |
+| `PROCESSING_SCHEDULER_ENABLED`（true）、`PROCESSING_HTTP_TIMEOUT_SECONDS`（1000）、`PROCESSING_RETRY_SECONDS`（10）、`PROCESSING_PREVIOUS_PAGE_TAIL_CHARS`（300） | 后台调度 | 默认 |
+| `PROCESSING_STAGE_WORKERS`（4）/ `PROCESSING_STAGE_LANES`（1） | 四阶段线程池 / 每阶段并发页数 | 默认 |
+| `OCR_PUBLIC_BASE_URL` | OCR 结果文件对外基址 | `/history/api/ocr`、`/literature/api/ocr` |
+| `OCR_STORAGE_DIR` | OCR 存储目录 | 文学站 `~/Codefield/literature/ocr-storage` |
+| `OCR_UPSTREAM_URL`（空） | 模型端地址；**空 = 未部署**，识别接口回 503 `ocr_upstream_not_configured` | `http://127.0.0.1:18080`（隧道） |
+| `OCR_UPSTREAM_TIMEOUT`（180）、`OCR_UPSTREAM_HEALTH_TIMEOUT`（5）、`OCR_UPSTREAM_HEALTH_PATH`（`/health`）、`OCR_UPSTREAM_TOKEN`、`OCR_UPSTREAM_MODEL`（`PP-StructureV3`） | 模型端调用 | `TIMEOUT=300` |
+| `OCR_ASSET_ORIGINS`（空） | 允许关联的外部裁图来源 | 未设 |
+| `LLM_PROVIDER`（ollama）、`LLM_MODEL`（`spark-x2.6:4b-q4_k_m`）、`LLM_API_BASE`（`http://127.0.0.1:11435/v1`）、`LLM_TIMEOUT_SECONDS`（180） | 生成服务 | 见 §7.2 |
+| `LLM_CONTEXT_TOKENS` / `LLM_TEXT_CONTEXT_TOKENS`（16384）、`LLM_OUTPUT_TOKENS`（1024）、`LLM_TEMPLATE_MARGIN_TOKENS`（256）、`LLM_TEXT_CHUNK_CHARS`（6000）、`LLM_REPEAT_PENALTY`（1.1）、`LLM_OLLAMA_THINK`（0）、`LLM_TOKENIZER_PATH`（空）、`LLM_API_KEY`（空） | 预算与采样 | 见 §7.2 |
+| `SEMANTIC_SEARCH_ENABLED`（false）、`EMBEDDING_API_BASE`（`http://127.0.0.1:11436`）、`EMBEDDING_MODEL`（`qwen3-embedding:0.6b-q8_0`）、`EMBEDDING_TIMEOUT_SECONDS`（60）、`EMBEDDING_BATCH_SIZE`（8）、`SEMANTIC_SCAN_INTERVAL_SECONDS`（30）、`SEMANTIC_MIN_COSINE`（0.45）、`EMBEDDING_DOCUMENT_PREFIX`（空）、`EMBEDDING_QUERY_PREFIX`（未定义=用代码默认查询指令） | 语义检索 | 见 §7.3 |
+| `VERSION_REPO_DIR` / `VERSION_RELEASES_DIR` / `VERSION_CURRENT_LINK` / `VERSION_HEALTH_PATH` | 发布服务 | 默认 |
 
-在源模型端记录以下输出，并把依赖清单保存在迁移材料中：
+模型端（user unit）：`OLLAMA_HOST`、`OLLAMA_MODELS`、`OLLAMA_KEEP_ALIVE=-1`、`OLLAMA_MAX_LOADED_MODELS=1`、`OLLAMA_NUM_PARALLEL=1`、`OLLAMA_CONTEXT_LENGTH`（生成 16384 / 嵌入 4096）、嵌入实例的 `CUDA_VISIBLE_DEVICES=-1` 等、OCR 的 `PADDLE_PDX_MODEL_SOURCE=bos`、`OMP_NUM_THREADS=8`。
 
-```bash
-uname -m
-"$HOME/history-service/ollama/bin/ollama" --version
-"$HOME/history-service/venv-ocr/bin/python" --version
-"$HOME/history-service/venv-ocr/bin/python" -m pip freeze > "$HOME/ocr-requirements.txt"
-curl --fail --silent --show-error http://127.0.0.1:11434/api/tags
-curl --fail --silent --show-error http://127.0.0.1:11436/api/tags
-```
+### 1.4 模型
 
-保存两个实例的模型名称、digest、量化和当前 unit/drop-in。检查依赖清单中的本地文件路径或私有源是否也需要交接。所有 `/etc/*env` 的内容和 SSH 私钥只保存在受限迁移材料中，交付记录仅注明已迁移与路径。
+| 用途 | 标签 | 约束 |
+| --- | --- | --- |
+| 生成（默认） | `spark-x2.6:4b-q4_k_m` | Q4_K_M，`num_ctx=16384`；来源 `XHToken/Spark-X2.6-4B-GGUF`，revision `83b47fda018fd14f51aa63341f78266f628af5a5`，文件 `Spark-X2.6-4B-Q4_K_M.gguf`（3543441312 B，SHA-256 `91cb2811aebb47ac916aa619d27d4cdd7f4143106b7917accb8ead4cd7f5cbd9`） |
+| 生成（备选，保留） | `qwen3:8b` | 手动切换，无自动失败回退；本机 16K 为 CPU/GPU 混合加载 |
+| 嵌入 | `qwen3-embedding:0.6b-q8_0` | 必须精确标签、Q8_0、1024 维、CPU 实例、`truncate=false`；不能用生成模型代替 |
+| OCR | PaddleX PP-StructureV3（模型端 `:8080`） | CPU；YAML `deploy/service/PP-StructureV3-cpu.yaml` |
 
-### 3.2 停写并备份数据
+本机（RTX 3060 Laptop 6GB / Ollama 0.35.1）实测基线，仅作参照，不代表业务效果验收：
 
-在源数据端先把公网入口切入维护模式，阻止新写入，然后停止两个 Data API、两个 OCR 编排及共享 LLM API。下面按 system 服务示例；旧端若是 user 服务，改用实际管理器：
+| 模型 | 上下文 | 分配 | 显存峰值 | 热生成 |
+| --- | --- | --- | --- | --- |
+| Qwen3-8B Q4_K_M | 16384 | 41% CPU / 59% GPU | 4743 MiB | 21.15 tok/s |
+| Spark-X2.6-4B Q4_K_M | 4096 | 100% GPU | 3527 MiB | 64.62 tok/s |
+| Spark-X2.6-4B Q4_K_M | 16384 | 100% GPU | 3970 MiB | 64.32 tok/s |
+
+### 1.5 数据与 schema
+
+- `service/data.py` 的 `SCHEMA_VERSION = 9`。空库首次启动自动建表；**已有库必须已是完整 schema 9**，不符直接 RuntimeError，旧迁移分支已删除。
+- 表结构自愈：`processing_jobs`（放宽 mode、补 `chunk_size`）、`pending_uploads`/`upload_registrations`、`page_reader_indexes`、`semantic_*` 由对应模块 `ensure_schema()` 用 `CREATE ... IF NOT EXISTS` 建，无需手工迁移。
+- 两站库独立；`users`/`conversations`/`roles`/`semantic_models`/`app_meta` 不随文献数据清理删除。
+
+### 1.6 重启矩阵（改了什么 → 重启什么）
+
+| 变更 | 需重启 |
+| --- | --- |
+| `service/{data,scheduler,uploads,reader_index,reader_content,retrieval,retrieval_worker,retrieval_types,embedding,variant,match,extract,task_progress}.py` | `history-data`、`literature` |
+| `service/{llm,evidence}.py` | `history-llm` |
+| `service/{ocr,ocr_upstream}.py`（另含 `reader_content`、`variant`、`task_progress`） | `history-ocr`、`literature-ocr` |
+| `service/version.py` | `history-version` |
+| `html/`、`js/`、`styles.css` | 不重启；走发布（§8.1） |
+| `pyproject.toml` / `uv.lock` | `uv sync` 后重启**全部** `uv run` 服务 |
+| `deploy/data/*.service`、`/etc/*.env` | 复制/编辑 + `daemon-reload` + 重启对应服务（**先同步 unit 再重启**） |
+| 模型端 `service/ocr_model*.py`、`PP-StructureV3-cpu.yaml`、`deploy/service/history-ocr.service` | `systemctl --user restart history-ocr` |
+| 模型端隧道 unit | `systemctl --user restart history-tunnel`（或 `history-embedding-tunnel`） |
+
+判断"要不要重启"的标准动作：`git diff --name-only <上次重启提交>..HEAD -- service/`，再对照本表；并用 `systemctl show -p ActiveEnterTimestamp <unit>` 与提交时间比对。
+
+### 1.7 依赖与版本约束
+
+- Python ≥ 3.10，`uv.lock` 为准；部署只用 `uv sync --frozen --no-dev`，不执行 `uv lock --upgrade`。`uv run` 是 systemd 的启动方式，`pyproject.toml` 与 `uv.lock` 必须一致，否则重启时会重新解析。
+- 数据端不需要 paddlepaddle/paddleocr/paddlex（已从依赖移除），识别能力全部在模型端。
+- 模型端 OCR 环境独立（`venv-ocr`），PaddleX 当前验证版本 **3.7.2**；升级前需检查内部管线接口并重跑识别与进度验证。
+
+## 2. 任务路由
+
+| 任务 | 步骤序列 |
+| --- | --- |
+| **T1 仅更新代码**（最常见） | §1.0 快照 → §4.2 同步依赖（锁文件变了才做）→ §5.3（模型端文件有变才做）→ §7.x 配置有变才做 → §7.7 按 §1.6 重启 → §8.1 发布前端 → §9 验收 |
+| **T2 迁移现有站点** | §3 盘点/停写/备份 → §4 [M] → §5 [M] → §6 → §7 → §8 → §9 → §10.2 记录回滚点 → 切入口 |
+| **T3 全新安装** | §3.1 参数盘点 → §4 [F] → §5 [F] → §6 → §7 → §8 → §9 |
+| **T4 换生成模型** | §1.4 权重准备（§5.2）→ §7.2 数据端配置 → 重启 `history-llm` → §9.3 真实调用 |
+| **T5 只有一端权限** | 完成本端全部步骤，另一端的待办按 §10.3 逐条列出；**不得**宣称已端到端可用 |
+
+## 3. 采集、停写与备份 `[M|F]`
+
+### 3.1 必填参数 `[M|F]`
+
+数据端 · 前置：无 · 产物：本节表格填满
+
+| 输入 | 要求 |
+| --- | --- |
+| 代码来源与提交 | 仓库地址 + 可检出 commit；迁移时记录源端 `git rev-parse HEAD` 与未提交改动 |
+| 两端登录 | 数据端/模型端 SSH 地址、运行账号、sudo 权限（可同机） |
+| 目录 | 数据端默认 `/home/ubuntu/Codefield/history` + `.../literature`；模型端 `~/history-service`、`~/.paddlex` |
+| 连接方式 | 默认反向 SSH 隧道；可选可信内网直连；同机 loopback |
+| 公网入口 | 域名、TLS、现有 Nginx（本机为 `~/Codefield/root/nginx/`）、上传大小上限 |
+| 站点范围 | 默认两站；只部署历史站时省略 literature / literature-ocr / SSO |
+| 文学站依赖 | 问渠 SSO：PostgreSQL、`/login`、Cookie 域、`DATABASE_URL`、`SERVICE_TOKEN_SECRET` |
+| 源端环境 | 实际 systemd 管理器、unit/drop-in、Python/PaddleX/Ollama 版本、模型 digest |
+| 迁移材料 | 两站 SQLite/文件、OCR 状态、环境配置、模型缓存；必须确认有无现存数据 |
+
+迁移优先保留源端用户与绝对目录（部分任务记录绝对路径）；若换目录，需保留旧路径软链接或单独验证路径调整。
+
+### 3.2 源端盘点 `[M]`
+
+源数据端 · 前置：§3.1 · 产物：版本/unit/数据快照清单
+
+- 记录：代码提交、未提交文件、各 unit 实际路径与管理器、数据目录、`/health` 里的 schema 与计数。
+- 记录模型端输出：`uname -m`、`ollama --version`、`venv-ocr/bin/python --version`、`pip freeze > ~/ocr-requirements.txt`、`curl :11434/api/tags`、`curl :11436/api/tags`。
+- `/etc/*env` 与 SSH 私钥只存受限材料，交付记录只写"已迁移 + 路径"。
+
+### 3.3 停写并打包 `[M]`
+
+源数据端 · 前置：§3.2 · 产物：`site-data.tar.gz` + `.sha256`
 
 ```bash
 sudo systemctl stop history-data.service literature.service history-ocr.service literature-ocr.service history-llm.service
-```
-
-确认上述服务均已停止，后台写入进程退出；不要只停止浏览器。按默认布局打包整个持久化目录，包含残留 WAL/SHM，且不删除源文件：
-
-```bash
 umask 077
 bundle_dir="$HOME/history-migration/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$bundle_dir"
@@ -104,23 +187,29 @@ tar -C /home/ubuntu/Codefield -czf "$bundle_dir/site-data.tar.gz" history/storag
 sha256sum "$bundle_dir/site-data.tar.gz" > "$bundle_dir/site-data.tar.gz.sha256"
 ```
 
-只部署一站或源端采用自定义目录时，按盘点结果调整 tar 路径；目录缺失须确认原因，不能忽略 tar 失败。源端保持停写直到新端切换完成。
+源端保持停写直到新端切换完成。只部署一站或目录自定义时按盘点调整 tar 路径；目录缺失必须查原因，不能忽略 tar 失败。
 
-模型端优先复制现有资产，避免重下权重。停止模型端三个模型服务后制作一致的资产副本；如果该机仍服务其他应用，先安排停机窗口或使用可验证的一致快照。示例：
+模型端资产（同机仍服务其他应用时先安排停机窗口或可验证快照）：
 
 ```bash
 systemctl --user stop history-ocr.service history-llm.service history-embedding.service
-umask 077
-mkdir -p "$HOME/history-migration"
-tar --exclude='history-service/venv-ocr' --exclude='history-service/logs' -C "$HOME" -czf "$HOME/history-migration/model-assets.tar.gz" history-service .paddlex
+umask 077; mkdir -p "$HOME/history-migration"
+tar --exclude='history-service/venv-ocr' --exclude='history-service/logs' \
+    -C "$HOME" -czf "$HOME/history-migration/model-assets.tar.gz" history-service .paddlex
 sha256sum "$HOME/history-migration/model-assets.tar.gz" > "$HOME/history-migration/model-assets.tar.gz.sha256"
 ```
 
-通过已确认的 SSH/受控传输通道，将站点包送至新数据端、模型包和 `ocr-requirements.txt` 送至新模型端；另行迁移环境文件、Nginx/TLS、SSH 授权及 SSO 依赖。两端校验 SHA-256；校验清单引用旧绝对路径时，在目标目录用记录的摘要校验包文件。仅切换数据端时可复用原模型端，跳过模型包搬运。
+### 3.4 传输与校验 `[M]`
 
-## 4. 准备目标数据端：代码、依赖与数据
+前置：§3.3 · 产物：两端收到包且 SHA-256 一致
 
-本文命令默认数据运行账号为 `ubuntu`，在该账号的登录 shell 执行，并具备 sudo。修改变量时同步后续目录；迁移现有任务优先保留源路径。
+站点包 → 新数据端；模型包 + `ocr-requirements.txt` → 新模型端；另需单独迁移 `/etc/*env`、Nginx/TLS、SSH 授权、SSO 依赖。只切数据端时可复用原模型端，跳过模型包。
+
+## 4. 准备数据端 `[M|F]`
+
+### 4.1 系统与代码 `[M|F]`
+
+数据端 · 前置：§3（迁移） · 产物：`$DATA_REPO` 在指定提交、`.venv` 就绪
 
 ```bash
 export DATA_USER=ubuntu
@@ -133,21 +222,23 @@ sudo apt-get update
 sudo apt-get install -y git curl ca-certificates rsync tar openssh-client nginx
 ```
 
-把交接指定的仓库检出到 `$DATA_REPO`，切到指定 commit，确认工作区改动与交接记录一致。目标尚无仓库时执行：
-
 ```bash
+# 目标无仓库时
 export REPO_URL='<已确认的仓库地址>'
 export DEPLOY_COMMIT='<交接指定的commit>'
-mkdir -p "$DATA_ROOT"
-test ! -e "$DATA_REPO"
+mkdir -p "$DATA_ROOT"; test ! -e "$DATA_REPO"
 git clone "$REPO_URL" "$DATA_REPO"
 git -C "$DATA_REPO" checkout --detach "$DEPLOY_COMMIT"
 ```
 
-已有工作区时先核对 `git status --short` 并保存必要修改，再同步目标提交，不能直接 reset 丢弃未提交内容。新机没有 uv 时安装到数据运行账号；已有 uv 可跳过安装。然后安装锁定依赖：
+已有工作区：先核对 `git status --short` 并保存必要修改，再同步；不能 reset 丢未提交内容。
+
+### 4.2 依赖 `[M|F|U]`
+
+前置：§4.1 · 产物：`$UV_BIN` 与 `.venv`（锁文件一致）
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh   # 已有 uv 可跳过
 export PATH="$HOME/.local/bin:$PATH"
 cd "$DATA_REPO"
 uv sync --frozen --no-dev
@@ -155,74 +246,80 @@ export UV_BIN="$(command -v uv)"
 git rev-parse HEAD
 ```
 
-使用 Python ≥3.10 且满足 `uv.lock` 的目标平台；部署不执行 `uv lock --upgrade`。API 使用项目虚拟环境，模型端 OCR 依赖单独安装。
+### 4.3 数据目录 `[M|F]`
 
-迁移分支：在服务尚未启动、目标持久化目录为空时解包，示例假设已把包放在 `$HOME/history-migration/site-data.tar.gz`：
+前置：§4.2 · 产物：`storage/`、`ocr-storage/`、`literature/` 就位
+
+`[M]` 目标必须为空目录，包放在 `$HOME/history-migration/site-data.tar.gz`：
 
 ```bash
-test ! -e "$DATA_REPO/storage"
-test ! -e "$DATA_REPO/ocr-storage"
-test ! -e "$LITERATURE_ROOT"
+test ! -e "$DATA_REPO/storage"; test ! -e "$DATA_REPO/ocr-storage"; test ! -e "$LITERATURE_ROOT"
 mkdir -p "$DATA_ROOT"
 tar -C "$DATA_ROOT" -xzf "$HOME/history-migration/site-data.tar.gz"
 sudo chown -R "$DATA_USER:$(id -gn "$DATA_USER")" "$DATA_REPO/storage" "$DATA_REPO/ocr-storage" "$LITERATURE_ROOT"
 ```
 
-若目标已有数据，先保存其备份并恢复到独立位置，不能直接覆盖。全新安装分支只创建目录：
+`[F]`：
 
 ```bash
-mkdir -p "$DATA_REPO/storage" "$DATA_REPO/ocr-storage" "$LITERATURE_ROOT/files" "$LITERATURE_ROOT/ocr-storage"
+mkdir -p "$DATA_REPO/storage" "$DATA_REPO/ocr-storage" \
+         "$LITERATURE_ROOT/files" "$LITERATURE_ROOT/ocr-storage"
 ```
 
-当前代码仅支持 **schema 9**：空库首次启动自动初始化；已有库必须已是完整 schema 9。源 schema 8 或未知结构须单独处理并保留原件，不能靠删库完成迁移。下面只读检查恢复的库；新安装不存在的库会跳过：
+目标已有数据时先另存备份、恢复到独立位置，不能直接覆盖。
+
+### 4.4 schema 校验 `[M|F]`
+
+前置：§4.3 · 产物：两库均为完整 schema 9、integrity ok、未完成任务源文件存在
 
 ```bash
 cd "$DATA_REPO"
+export DATA_REPO LITERATURE_ROOT
 uv run --frozen --no-dev python - <<'PY'
-import os
-import sqlite3
+import os, sqlite3
 from pathlib import Path
-for path in (Path(os.environ['DATA_REPO']) / 'storage/app.db', Path(os.environ['LITERATURE_ROOT']) / 'app.db'):
+for path in (Path(os.environ['DATA_REPO'])/'storage/app.db', Path(os.environ['LITERATURE_ROOT'])/'app.db'):
     if not path.exists():
-        print(path, 'new database')
-        continue
-    with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
-        version = db.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
-        assert version and int(version[0]) == 9, (path, version)
+        print(path, 'new database'); continue
+    with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True) as db:
+        v = db.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
+        assert v and int(v[0]) == 9, (path, v)
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok', path
-        for (source,) in db.execute("SELECT source_path FROM processing_jobs WHERE status NOT IN ('completed','failed','cancelled')"):
-            assert Path(source).is_file(), f'Missing task source: {source}'
+        for (src,) in db.execute("SELECT source_path FROM processing_jobs WHERE status NOT IN ('completed','failed','cancelled')"):
+            assert Path(src).is_file(), f'Missing task source: {src}'
     print(path, 'schema 9, integrity ok, pending task sources present')
 PY
 ```
 
-## 5. 准备目标模型端
+schema 8 或未知结构必须单独处理并保留原件，**不能靠删库完成迁移**。
 
-### 5.1 程序、OCR 环境和资产位置
+## 5. 准备模型端 `[M|F]`
 
-在模型运行账号登录 shell 执行。模型端只需要本节列出的资产，不要求部署应用后端。模型包已放到 `$HOME/history-migration/model-assets.tar.gz` 时，迁移分支在空目标恢复：
+### 5.1 资产、OCR 环境与 unit `[M|F]`
+
+模型端 · 前置：§3.4（迁移） · 产物：`~/history-service/*`、`~/.paddlex`、三个模型 user unit 已 enabled
+
+迁移（目标必须为空）：
 
 ```bash
-test ! -e "$HOME/history-service"
-test ! -e "$HOME/.paddlex"
+test ! -e "$HOME/history-service"; test ! -e "$HOME/.paddlex"
 tar -C "$HOME" -xzf "$HOME/history-migration/model-assets.tar.gz"
 ```
 
-若已经有可用实例先盘点并合并，不能覆盖另一个项目的模型目录。全新安装分支跳过解包，创建 `~/history-service` 后按下面步骤安装。架构或驱动变化时重装匹配平台的程序和依赖，保留模型权重。
-
-所需目录和程序：
+目录约定：
 
 ```text
 ~/history-service/ollama/bin/ollama
-~/history-service/models/                 # 生成实例的 manifests/blobs
-~/history-service/models-embedding/       # 嵌入实例的 manifests/blobs
+~/history-service/models/                 # 生成实例 manifests/blobs（Spark + Qwen）
+~/history-service/models-embedding/       # 嵌入实例 manifests/blobs
 ~/history-service/venv-ocr/bin/paddlex
 ~/history-service/PP-StructureV3-cpu.yaml
+~/history-service/service/                # ocr_model.py、ocr_model_progress.py
 ~/history-service/logs/
-~/.paddlex/                              # OCR 模型缓存
+~/.paddlex/                               # OCR 模型缓存
 ```
 
-OCR 环境迁移时，用源端 Python 主次版本重建 `venv-ocr`，按 `ocr-requirements.txt` 安装；不要复制旧虚拟环境。全新安装时先根据 PaddleX 对应发行版锁定 Python、PaddlePaddle CPU、PaddleX 版本，记录到交接清单。以下安装变量须填写实际版本（迁移取源端值），先确认目标已安装对应 Python 及其 venv 支持；系统默认 Python 不匹配时先安装对应版本，不能把占位符直接执行：
+`[F]` 或架构/驱动变化时重建 OCR 环境（不复制旧 venv）：
 
 ```bash
 export OCR_PYTHON=python3.11
@@ -233,109 +330,62 @@ sudo apt-get install -y python3-venv libgl1 libglib2.0-0 libgomp1
 mkdir -p "$HOME/history-service"
 "$OCR_PYTHON" -m venv "$HOME/history-service/venv-ocr"
 "$HOME/history-service/venv-ocr/bin/python" -m pip install --upgrade pip
-# 迁移环境：优先使用源端完整清单；缺少 CPU wheel 时使用对应发行版的官方索引。
+# 迁移：优先用源端完整清单
 "$HOME/history-service/venv-ocr/bin/python" -m pip install -r "$HOME/ocr-requirements.txt"
-# 全新安装时，以上一行替换为以下两行：
-# "$HOME/history-service/venv-ocr/bin/python" -m pip install "paddlepaddle==$PADDLE_VERSION" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-# "$HOME/history-service/venv-ocr/bin/python" -m pip install "paddlex[ocr,serving]==$PADDLEX_VERSION"
+# 全新安装：改用下面两行
+# ... pip install "paddlepaddle==$PADDLE_VERSION" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+# ... pip install "paddlex[ocr,serving]==$PADDLEX_VERSION"
 ```
 
-模型端缺少 Ollama 程序时，优先恢复同架构、已验证版本的完整发行目录（包括动态库）。全新安装可按官方 Linux 安装说明下载匹配架构的发行包，解压到 `~/history-service/ollama/`；例如 x86_64 的 `.tar.zst` 发行包包含 `bin/`、`lib/`，需要 `zstd`：
+Ollama 程序（`[F]` 或缺失时）：
 
 ```bash
-export OLLAMA_VERSION='<已确认的发行标签，例如 vX.Y.Z>'
+export OLLAMA_VERSION='<已确认的发行标签>'
 sudo apt-get install -y curl ca-certificates zstd
 mkdir -p "$HOME/history-service/ollama"
-curl --fail --location --retry 3 "https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst" -o /tmp/history-ollama.tar.zst
+curl --fail --location --retry 3 \
+  "https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst" \
+  -o /tmp/history-ollama.tar.zst
 tar --zstd -xf /tmp/history-ollama.tar.zst -C "$HOME/history-service/ollama"
 "$HOME/history-service/ollama/bin/ollama" --version
 ```
 
-发行版资产名/格式以选定版本官方页面为准；ARM64 不使用 amd64 包。迁移已备份的 Ollama 目录时跳过下载。
+直连 GitHub 不通时走镜像前缀 `https://gh-proxy.com/`。ARM64 不能用 amd64 包。
 
-从仓库把下列文件通过受控传输送到模型端同名位置：
+从仓库送到模型端同名位置：
 
 | 仓库来源 | 模型端目标 |
 | --- | --- |
-| `deploy/service/PP-StructureV3-cpu.yaml` | `~/history-service/PP-StructureV3-cpu.yaml`（直接放根目录，unit 运行时读取） |
-| `deploy/service/*.service` | 暂存到 `~/history-service/deploy/service/`，共五个 unit |
-| `service/ocr_model.py`、`service/ocr_model_progress.py` | `~/history-service/service/`（两个文件均需同步） |
-
-在模型端安装三个模型 unit，隧道稍后配置：
+| `deploy/service/PP-StructureV3-cpu.yaml` | `~/history-service/PP-StructureV3-cpu.yaml` |
+| `deploy/service/*.service`（5 个） | `~/history-service/deploy/service/`（暂存） |
+| `service/ocr_model.py`、`service/ocr_model_progress.py` | `~/history-service/service/`（两个都要） |
 
 ```bash
-mkdir -p "$HOME/history-service/logs" "$HOME/history-service/models" "$HOME/history-service/models-embedding" "$HOME/.config/systemd/user"
-install -m 0644 "$HOME/history-service/deploy/service/history-ocr.service" "$HOME/.config/systemd/user/"
-install -m 0644 "$HOME/history-service/deploy/service/history-llm.service" "$HOME/.config/systemd/user/"
-install -m 0644 "$HOME/history-service/deploy/service/history-embedding.service" "$HOME/.config/systemd/user/"
+mkdir -p "$HOME/history-service/logs" "$HOME/history-service/models" \
+         "$HOME/history-service/models-embedding" "$HOME/.config/systemd/user"
+install -m 0644 "$HOME/history-service/deploy/service/history-{ocr,llm,embedding}.service" "$HOME/.config/systemd/user/"
 sudo loginctl enable-linger "$(id -un)"
 systemctl --user daemon-reload
 systemctl --user enable --now history-ocr.service history-llm.service history-embedding.service
 ```
 
-OCR 保留文档预处理、版面与区域检测和文字识别；表格结构重建、公式识别、印章识别、图表转表格固定关闭，YAML 不再包含这些模型的配置。版面检测仍可标出表格、公式、印章和图表区域；表格及图表使用区域图片，供数据端保存、显示和正文过滤。
+YAML 策略：保留文档预处理、版面/区域检测、文字识别；**固定关闭**表格结构重建、公式识别、印章识别、图表转表格。表格与图表区域仍需被版面检出，但输出区域图片供数据端保存。CPU OCR 首次启动会下载缺失模型；迁移已有 `~/.paddlex` 可减少下载。生成实例可用 GPU，嵌入实例屏蔽 CUDA/Vulkan/ROCm 并保持 4096 上下文；`OLLAMA_KEEP_ALIVE=-1` 首次推理后常驻。
 
-CPU OCR 首次启动可能下载 YAML 所需模型；迁移已有 `~/.paddlex` 可减少下载。检查日志直到加载完成。OCR `--device cpu`；嵌入 unit 屏蔽 CUDA/Vulkan/ROCm；生成 unit 不限制为 CPU。嵌入与生成各最多加载一个模型、并行数为 1；生成默认上下文为 16384，嵌入保持 4096，`OLLAMA_KEEP_ALIVE=-1` 在首次推理后保持驻留。预留总 RAM 时计入 OCR、生成 CPU 分担和嵌入同时运行，不能用下载体积代替运行占用。
+### 5.2 模型准备与自检 `[M|F|T4]`
 
-### 5.2 准备生成、嵌入模型并真实推理
+前置：§5.1 · 产物：两个实例可真实推理，digest/维数符合 §1.4
 
-优先复用源端模型缓存，确保模型标签和 digest 一致。只有目标缺模型或明确计划更新时执行对应 `pull`；已有同名模型时不要无条件拉取，远端标签变化会改变内容。全新安装先按下节“Spark 权重校验与 Qwen 备选”下载并注册 Spark，再分别使用两个实例准备备选和嵌入模型：
+已有缓存时不要无条件 `pull`（远端标签变化会改内容）：
 
 ```bash
-# Qwen 为备选；已有缓存时跳过 pull，不删除原模型。
-OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" pull qwen3:8b
+OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" pull qwen3:8b            # 仅缺时
 OLLAMA_HOST=127.0.0.1:11436 "$HOME/history-service/ollama/bin/ollama" pull qwen3-embedding:0.6b-q8_0
 OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" show spark-x2.6:4b-q4_k_m
 OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" show qwen3:8b
 OLLAMA_HOST=127.0.0.1:11436 "$HOME/history-service/ollama/bin/ollama" show qwen3-embedding:0.6b-q8_0
 ```
 
-嵌入必须是精确标签 `qwen3-embedding:0.6b-q8_0`、Q8_0、1024 维；不能用生成模型代替。默认生成使用 `spark-x2.6:4b-q4_k_m`、16K 上下文；`qwen3:8b` 留作手动备选，两个生成权重均保留在生成目录。嵌入目录只保留嵌入模型。CPU 嵌入不得加载到生成实例。
-
-模型端执行下面脚本。它先做一次真实生成，再验证嵌入的 digest、量化及查询/正文两条有限非零向量；`truncate=false` 禁止静默截断：
-
-```bash
-python3 - <<'PY'
-import json
-import math
-import urllib.request
-
-def request(base, route, payload=None):
-    body = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(base + route, data=body, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=600) as response:
-        return json.load(response)
-
-generation = request('http://127.0.0.1:11434', '/api/chat', {
-    'model': 'spark-x2.6:4b-q4_k_m', 'messages': [{'role': 'user', 'content': '请回答：部署测试通过'}],
-    'think': False, 'stream': False, 'options': {'num_ctx': 16384, 'num_predict': 64},
-})
-assert generation.get('message', {}).get('content', '').strip(), generation
-base = 'http://127.0.0.1:11436'
-model = 'qwen3-embedding:0.6b-q8_0'
-tag = next(m for m in request(base, '/api/tags')['models'] if model in (m.get('name'), m.get('model')))
-assert tag.get('digest'), tag
-show = request(base, '/api/show', {'model': model})
-assert show['details']['quantization_level'] == 'Q8_0', show['details']
-query = 'Instruct: Given a question about historical documents, retrieve relevant passages that answer the question\nQuery: 军费从哪里筹措？'
-vectors = request(base, '/api/embed', {'model': model, 'input': [query, '筹集饷银，以供军需。'], 'truncate': False})['embeddings']
-assert len(vectors) == 2
-for vector in vectors:
-    assert len(vector) == 1024 and all(math.isfinite(x) for x in vector)
-    assert math.hypot(*vector) > 0
-print(json.dumps({'generation': 'ok', 'embedding': model, 'digest': tag['digest'], 'dimensions': 1024}, ensure_ascii=False))
-for port in (11434, 11436):
-    print(port, json.dumps(request(f'http://127.0.0.1:{port}', '/api/ps'), ensure_ascii=False))
-PY
-```
-
-检查嵌入 `/api/ps` 的 `size_vram=0`，生成实例驻留 `spark-x2.6:4b-q4_k_m`、上下文 16384，且 `ollama list` 仍能看到备选 `qwen3:8b`。记录冷/热耗时和 RAM/VRAM 峰值；GPU 存在时确认生成能利用 GPU，不能为节省排错时间把所有模型改为 CPU。
-
-### Spark 权重校验与 Qwen 备选
-
-默认生成模型使用官方 `XHToken/Spark-X2.6-4B-GGUF` 的 Q4_K_M，注册为 `spark-x2.6:4b-q4_k_m`，Modelfile 默认上下文为 16384。不使用 `SparkLLM/Spark-X2.6-4B` 默认标签（它是 BF16），也不删除 `qwen3:8b`。
-
-在模型运行账号执行以下命令。权重固定到官方 revision 并校验 SHA-256；已有正确文件会跳过下载，注册用的临时 Modelfile 在命令结束后删除：
+Spark 权重校验与注册（固定 revision + SHA-256，校验失败停止，不导入坏权重）：
 
 ```bash
 (
@@ -350,115 +400,110 @@ if [[ ! -f "$spark_file" ]] || ! printf '%s  %s\n' "$spark_sha" "$spark_file" | 
     --output "$spark_file"
 fi
 printf '%s  %s\n' "$spark_sha" "$spark_file" | sha256sum --check
-spark_modelfile="$(mktemp "$spark_dir/Modelfile.XXXXXX")"
-trap 'rm -f "$spark_modelfile"' EXIT
+spark_modelfile="$(mktemp "$spark_dir/Modelfile.XXXXXX")"; trap 'rm -f "$spark_modelfile"' EXIT
 printf 'FROM ./Spark-X2.6-4B-Q4_K_M.gguf\nPARAMETER num_ctx 16384\n' > "$spark_modelfile"
 OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" create spark-x2.6:4b-q4_k_m --file "$spark_modelfile"
 )
 ```
 
-若直连失败且模型端已有代理，在上面的 `curl` 前添加 `HTTPS_PROXY=http://127.0.0.1:7897`，地址按实际配置填写。文件校验失败时停止，不导入错误权重；损坏文件须先移走再重试。GGUF 会另外导入生成实例的 `models/blobs/`，预留两份磁盘空间。
+直连失败且模型端有代理时，在 `curl` 前加 `HTTPS_PROXY=http://127.0.0.1:7897`（按实际）。GGUF 会另存一份 blob，预留两份磁盘。不要用 `SparkLLM/Spark-X2.6-4B` 的默认标签（那是 BF16），不要删除 `qwen3:8b`。
 
-| 项目 | 固定值 |
-| --- | --- |
-| 官方权重 | `Spark-X2.6-4B-Q4_K_M.gguf` |
-| 文件大小 | `3543441312` 字节（约 3.30 GiB） |
-| 文件 SHA-256 | `91cb2811aebb47ac916aa619d27d4cdd7f4143106b7917accb8ead4cd7f5cbd9` |
-| 本地模型标签 | `spark-x2.6:4b-q4_k_m` |
-| 本次导入识别 | Ollama 0.35.1：`4.4B`、`Q4_K_M`（2026-10-26） |
-| 备选生成模型 | `qwen3:8b`，继续保留，按需手动切换 |
-| 默认上下文 | `16384`（16K），生成 unit、Modelfile 和数据端配置一致 |
-
-上述命令只下载、校验和注册；不运行推理，不卸载已驻留模型，不修改数据端默认选择。`ollama list` 应同时显示 Qwen 和 Spark；`ollama show spark-x2.6:4b-q4_k_m` 应显示 4B 级参数量和 Q4_K_M。下载成功不等于完整 GPU、业务输出或性能验收通过；首次使用前按“生成模型切换与对比”执行验证。
-
-2026-10-26 本机实测（RTX 3060 Laptop 6GB、Ollama 0.35.1）：
-
-| 模型 | 上下文容量 | Ollama 分配 | 整卡显存采样峰值 | 热生成平均速度 |
-| --- | --- | --- | --- | --- |
-| Qwen3-8B Q4_K_M | 16384 | 41% CPU / 59% GPU | 4743 MiB | 21.15 tokens/s |
-| Spark-X2.6-4B Q4_K_M | 4096 | 100% GPU | 3527 MiB | 64.62 tokens/s |
-| Spark-X2.6-4B Q4_K_M | 16384 | 100% GPU | 3970 MiB | 64.32 tokens/s |
-
-相同中文提示词、关闭思考、相同采样设置，预热后各测两次256-token输出。输入约1.1K tokens，并未用满16K；热请求可复用提示缓存。显存约每0.5秒采样，包含桌面开销，可能漏掉瞬时峰值。Spark加载日志确认37/37层与KV缓存在GPU，仍有CPU侧模型映射和辅助缓冲区。首次4K预热总耗时24.63秒，其中加载12.88秒，首轮生成仅8.53 tokens/s；后续热运行才达到表中速度。此结果验证本机4K/16K配置下的GPU分配和热生成速度，不代表更长输入、真实业务质量或端到端性能验收。这次对比测试结束时恢复了Qwen驻留；随后的Spark默认切换见“数据端切换交接”。模型端原始记录：`~/history-service/benchmarks/spark-gpu-20261026-132300/`。
-
-### OCR 实时进度更新
-
-模型 unit 使用 `venv-ocr/bin/python -m service.ocr_model` 启动，固定 CPU 推理，保留 PaddleX 官方 `/layout-parsing` 请求/响应格式和串行推理线程。启动器观察实际推理阶段与文字区域产出，并固定图表图片策略：覆盖旧请求中的重建开关，将视觉块关联到 PaddleX 原生裁图；不修改 PaddleX 安装包。当前已用 PaddleX **3.7.2** 验证；升级 PaddleX 前需检查内部管线接口并重新执行识别与进度验证，缺少必要采集点时启动器会明确报错。
-
-模型端从已确认的新代码目录同步以下文件，然后更新本用户的 OCR unit（工作目录仍为 `~/history-service`）：
+真实推理 + 嵌入契约自检（模型端执行；`ready` 与维数都要断言）：
 
 ```bash
-# MODEL_REPO 是包含本次改动的仓库副本；跨机器时先传送相同文件。
-export MODEL_REPO="$HOME/history"
+python3 - <<'PY'
+import json, math, urllib.request
+def req(base, route, payload=None):
+    body = None if payload is None else json.dumps(payload).encode()
+    r = urllib.request.Request(base+route, data=body, headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(r, timeout=600) as resp:
+        return json.load(resp)
+gen = req('http://127.0.0.1:11434','/api/chat', {'model':'spark-x2.6:4b-q4_k_m',
+      'messages':[{'role':'user','content':'请回答：部署测试通过'}],
+      'think':False,'stream':False,'options':{'num_ctx':16384,'num_predict':64}})
+assert gen.get('message',{}).get('content','').strip(), gen
+base, model = 'http://127.0.0.1:11436', 'qwen3-embedding:0.6b-q8_0'
+tag = next(m for m in req(base,'/api/tags')['models'] if model in (m.get('name'), m.get('model')))
+assert tag.get('digest'), tag
+assert req(base,'/api/show',{'model':model})['details']['quantization_level'] == 'Q8_0'
+query = 'Instruct: Given a question about historical documents, retrieve relevant passages that answer the question\nQuery: 军费从哪里筹措？'
+vecs = req(base,'/api/embed',{'model':model,'input':[query,'筹集饷银，以供军需。'],'truncate':False})['embeddings']
+assert len(vecs) == 2
+for v in vecs:
+    assert len(v) == 1024 and all(math.isfinite(x) for x in v) and math.hypot(*v) > 0
+print(json.dumps({'generation':'ok','embedding':model,'digest':tag['digest'],'dimensions':1024}, ensure_ascii=False))
+for p in (11434, 11436):
+    print(p, json.dumps(req(f'http://127.0.0.1:{p}','/api/ps'), ensure_ascii=False))
+PY
+```
+
+判定：嵌入实例 `size_vram=0`；生成实例驻留目标模型且 `CONTEXT=16384`；`ollama list` 仍能看到备选 Qwen。记录冷/热耗时与 RAM/VRAM 峰值。
+
+### 5.3 OCR 启动器与实时进度 `[M|F|U]`
+
+前置：§5.1 · 产物：模型端 `service.ocr_model` 与 YAML 同步、`/health` 通过
+
+模型 unit 用 `venv-ocr/bin/python -m service.ocr_model` 启动，保留 PaddleX 官方 `/layout-parsing` 契约与串行推理，单工作进程（进度表在进程内存，多 worker 会分裂）。
+
+```bash
+export MODEL_REPO="$HOME/history"   # 跨机器时先传送相同文件
 mkdir -p "$HOME/history-service/service"
 install -m 0644 "$MODEL_REPO/service/ocr_model.py" "$MODEL_REPO/service/ocr_model_progress.py" "$HOME/history-service/service/"
 install -m 0644 "$MODEL_REPO/deploy/service/history-ocr.service" "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
 systemctl --user restart history-ocr.service
+# 首次启动要等模型加载完成再查
 curl --fail http://127.0.0.1:8080/health
 ```
 
-模型仍在加载时等待就绪再检查。不要只更新 unit 而遗漏两个 Python 文件。原有反向隧道继续转发同一个端口，无需增加端口或重启 LLM。
+进度链路（全链路单一事实来源）：模型端 `X-OCR-Progress-Key` 头 + `GET /layout-parsing/progress/{key}` → 数据端 `/ocr/progress/{progressKey}` → 调度器 `/api/documents/{id}/processing` → 前端 `stagePages.ocr` / `registrationProgress`。返回 `percent/stage/completed/total/unit/status/completedSteps/totalSteps/basis/updatedAt`；100% 只在成功响应后出现；旧模型端回 404/405 时仅停用该次轮询，识别照常执行，不生成虚假百分比。
 
-数据端同步本次代码与前端后，重启实际部署的 Data/OCR API（历史站与文学站都需要）：
-
-```bash
-sudo systemctl restart history-data.service history-ocr.service literature.service literature-ocr.service
-```
-
-真实进度链路是：模型端 `X-OCR-Progress-Key` 请求头 + `GET /layout-parsing/progress/{key}` → OCR API `/ocr/progress/{progressKey}` → 调度器 `/api/documents/{id}/processing` → 正文 `stagePages.ocr` / 登记 `registrationProgress`。`POST /ocr` 与 `/ocr/metadata-candidate` 均接受表单 `progressKey`。每次调度尝试和每次模型调用使用独立键，失败或取消后的旧查询不能覆盖新任务。
-
-模型进度返回 `percent`、`stage`、`completed`、`total`、`unit`、`status`、`completedSteps`、`totalSteps`、`basis`、`updatedAt`。`basis=pipeline_steps` 表示配置步骤的完成比例，文字识别步骤按实际产出的文字区域数细分，其他步骤只在实际完成后推进；不预测耗时。100% 在成功响应后才产生。候选文字识别再按“已完成候选页 + 当前页完成比例”汇总；文字层提取直接计入已完成页。上传/候选 OCR/元数据识别仍沿用 0–20 / 20–50 / 50–100 的登记阶段显示区间，这个总比例是工作流比例，悬停可查看候选 OCR 本身的进度与计数。
-
-旧模型端返回进度接口 404/405 时，仅停用该次调用的模型进度轮询，识别请求照常执行，界面不会生成虚假的页内百分比。真实进度也只保留在当前服务进程内存中；重启后新调度尝试重新采集。OCR API 和模型启动器均使用单工作进程，不能用多个 Uvicorn worker 分割进度表。
-
-## 6. 连通模型端与数据端
+## 6. 连通两端
 
 ### 6.1 默认：反向 SSH 隧道
 
-模型端以专用 key `~/.ssh/cloud-tunnel` 连接数据端专用 SSH 账号。迁移时可受控迁移原 key 或生成新 key，并在数据端更新相应公钥授权。首次连接前，通过可信渠道确认目标 SSH host key 并写入模型账号 `known_hosts`；unit 使用 `StrictHostKeyChecking=yes`，不能靠关闭校验解决失败。
+模型端 · 前置：§5.1 · 产物：数据端 3 个端口可达
 
-数据端 SSH 配置需要允许远程转发，并在适用的 key `permitlisten`、`sshd PermitListen`/`AllowTcpForwarding` 规则中允许三个地址：`127.0.0.1:18080`、`127.0.0.1:11435`、`127.0.0.1:11436`。保留原有限制。转发只绑定 loopback，无需开放这些公网端口。修改 sshd 配置后先 `sudo sshd -t`，保留当前会话并验证新登录，再按系统实际服务名 reload。
-
-在模型端填写新数据端 SSH 地址，替换两个已交付隧道 unit 中的旧目的地址；先不要原样启用仓库里的旧 IP：
+- 专用 key `~/.ssh/cloud-tunnel`，账号 `tunneluser`；目标 host key 走可信渠道写入 `known_hosts`（unit 用 `StrictHostKeyChecking=yes`）。
+- 数据端 sshd 需允许 `127.0.0.1:18080`、`127.0.0.1:11435`、`127.0.0.1:11436`（`AllowTcpForwarding` / `PermitListen` / key 的 `permitlisten`），改完先 `sshd -t`，保留当前会话再 reload。转发只绑 loopback。
+- 端口选 18080/11435 而非 8080/11434：数据端本地已被占用/留作回退。
 
 ```bash
 export TUNNEL_DEST='<专用SSH账号>@<新数据端SSH主机>'
 for name in history-tunnel history-embedding-tunnel; do
-  sed "s|tunneluser@192.144.141.60|$TUNNEL_DEST|g" "$HOME/history-service/deploy/service/$name.service" > "$HOME/.config/systemd/user/$name.service"
+  sed "s|tunneluser@192.144.141.60|$TUNNEL_DEST|g" \
+      "$HOME/history-service/deploy/service/$name.service" > "$HOME/.config/systemd/user/$name.service"
 done
 chmod 600 "$HOME/.ssh/cloud-tunnel"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i "$HOME/.ssh/cloud-tunnel" "$TUNNEL_DEST" true
 systemctl --user daemon-reload
-systemctl --user enable --now history-tunnel.service
-systemctl --user enable --now history-embedding-tunnel.service
+systemctl --user enable --now history-tunnel.service history-embedding-tunnel.service
 ```
 
-若专用 key 禁止远程命令，上一条 `ssh ... true` 不适用；改为在前台执行 unit 中对应的 `ssh -NT ... -R ...`，用数据端请求验证转发后退出前台实例，再启动 unit。嵌入隧道独立启用，避免新端口未获授权时影响 OCR/生成隧道。
+key 禁止远程命令时，去掉 `ssh ... true`，改为前台跑 unit 里的 `ssh -NT ... -R ...`，用数据端请求验证后退出，再启动 unit。
 
-在数据端确认三条链路：
+数据端确认：
 
 ```bash
-curl --fail --silent --show-error http://127.0.0.1:18080/health
-curl --fail --silent --show-error http://127.0.0.1:11435/api/tags
-curl --fail --silent --show-error http://127.0.0.1:11436/api/tags
+curl -sSf http://127.0.0.1:18080/health
+curl -sSf http://127.0.0.1:11435/api/tags
+curl -sSf http://127.0.0.1:11436/api/tags
 ```
 
-生成/嵌入的模型标签和 digest 必须与模型端一致。失败时依次检查模型服务、SSH 授权、两条隧道日志和数据端端口占用。
+标签/digest 必须与模型端一致。失败依次查：模型服务 → SSH 授权 → 隧道日志 → 数据端端口占用。
 
-### 6.2 可选：可信内网或同机直连
+### 6.2 可选：内网直连或同机
 
-使用数据端可达的模型端实际内网地址，分别连接 `8080`、`11434`、`11436`。三个模型 unit 默认只监听 `127.0.0.1`，直连必须同时通过 drop-in 修改模型服务的监听地址，并限制防火墙仅允许数据端访问；只改客户端 URL 不会生效。该分支不启用反向隧道，数据端的上游配置按下一节覆盖。
+- 直连：填模型端真实内网地址，连 `8080`、`11434`、`11436`。三个模型 unit 默认只监听 `127.0.0.1`，必须同时改监听（`OLLAMA_HOST` 用 drop-in 覆盖；OCR 需 override `ExecStart` 的 `--host`）**并**在防火墙只放行数据端。只改客户端 URL 不生效。此路径未在生产验证过，须在目标机实测。
+- 同机：不启隧道、不改监听，直接 `OCR_UPSTREAM_URL=http://127.0.0.1:8080`、`LLM_API_BASE=http://127.0.0.1:11434/v1`、`EMBEDDING_API_BASE=http://127.0.0.1:11436`（避免与嵌入实例争 11436）。
 
-两端在同一台主机时，不启用 SSH 隧道，也不修改模型的 loopback 监听。数据端直接使用 `OCR_UPSTREAM_URL=http://127.0.0.1:8080`、`LLM_API_BASE=http://127.0.0.1:11434/v1`、`EMBEDDING_API_BASE=http://127.0.0.1:11436`，避免嵌入隧道与模型本身争用 `11436`。
+## 7. 配置数据端并启动
 
-## 7. 配置数据端并启动 API
+新 shell 先重设 §4.1 的变量。源端自定义 drop-in 先审查再合并，避免把旧路径/旧模型端地址带回来。
 
-在第 4 节的数据运行账号 shell 中执行；新开 shell 时先重新设置 `DATA_USER`、`DATA_HOME`、`DATA_ROOT`、`DATA_REPO`、`LITERATURE_ROOT`、`UV_BIN`。源端自定义 drop-in 先审查，再合并到目标，避免把旧路径/上游地址照搬回来。
+### 7.1 安装 system unit 与认证模式
 
-### 7.1 安装 system unit，准备登录依赖
-
-将模板中的账号、home、仓库和文学站目录替换成实际值，安装到 system 管理器，并给启动命令加 `--frozen --no-dev`，沿用锁文件且不自动装开发依赖。`sed` 参数中的路径应是不含 `|` 等替换元字符的常规绝对路径；特殊路径改为逐项编辑并核对。
+数据端 · 前置：§4.4 · 产物：5 个 unit 在 `/etc/systemd/system/`
 
 ```bash
 cd "$DATA_REPO"
@@ -474,13 +519,15 @@ done
 sudo systemctl daemon-reload
 ```
 
-历史站 `AUTH_MODE=local`，使用本地账号和 Bearer Token；重启后内存会话失效，需要重新登录。文学站 `AUTH_MODE=sso`，unit 必须读到 `/etc/wenqu-sso.env`，其中包含真实 `DATABASE_URL` 和 `SERVICE_TOKEN_SECRET`。从源部署安全恢复该文件并限制为 root 和运行账号所属组可读；确认 SSO PostgreSQL、统一 `/login`、Cookie 域和账号路由已经在新入口可用。仅迁移 SQLite 不会迁移统一账号系统。没有 SSO 依赖时可先交付历史站，文学站标记未完成，不能擅自改成另一套认证。
+- `history-data` 用 `AUTH_MODE=local`（Bearer，重启后内存会话失效需重新登录）；`literature` 用 `AUTH_MODE=sso`，必须读到 `/etc/wenqu-sso.env`（root + 运行组可读），且 SSO PostgreSQL、统一 `/login`、Cookie 域在新入口可用。仅迁移 SQLite **不会**迁移统一账号系统。
+- 顺序硬约束：`/etc` 里的 unit 必须先同步再 `restart`。代码默认值是 `local`，只重启不同步 unit 会把文学站也变成 local（SSO 失效）。
+- 没有 SSO 依赖时可先交付历史站，文学站标记未完成，**不得**擅自改认证方式。
 
 ### 7.2 生成 API 配置
 
-`/etc/history-generation.env` 是数据端系统级 `history-llm.service` 实际加载的配置，优先于 unit 中的默认值。默认选择 Spark Q4_K_M / 16K，Qwen 为手动备选；只有一个 `LLM_MODEL` 生效。
+数据端 · 前置：§7.1 · 产物：`/etc/history-generation.env`（优先于 unit 与代码默认值）
 
-首次创建时在数据端执行以下命令；已有文件跳过创建并逐项合并，保留认证和其它设置：
+首次创建（已有文件跳过并逐项合并，保留认证与其他设置）：
 
 ```bash
 sudo test ! -e /etc/history-generation.env &&
@@ -503,84 +550,43 @@ LLM_TOKENIZER_PATH=
 ENV
 ```
 
-`LLM_API_BASE` 包含 `/v1`，提供模型列表和兼容接口；代码在 `LLM_PROVIDER=ollama` 时从该根地址调用原生 `/api/chat`。同机或内网部署按第 6 节替换该地址。若配置 tokenizer，切换生成模型时同步更换 `LLM_TOKENIZER_PATH`；未配置则采用保守预算。
+要点：
 
-`LLM_CONTEXT_TOKENS=16384` 是默认问答预算，模型 unit 和 Spark Modelfile 的默认上下文也均为 16384。整页标点、校对仍由 `LLM_TEXT_CONTEXT_TOKENS=16384` 单独控制，实际请求可能随输入和输出预算增大，最高 40960；默认 16K 不会覆盖请求中显式设置的 `num_ctx`。超过16K或更长真实输入的完整GPU与性能仍须另行验证。
+- `LLM_API_BASE` 含 `/v1`（列模型用），`LLM_PROVIDER=ollama` 时实际调用原生 `/api/chat`。隧道分支保持 `127.0.0.1:11435/v1`。
+- 只有一条 `LLM_MODEL` 生效；模型端 `history-llm`（Ollama）与数据端 `history-llm`（生成 API）同名不同机。
+- 切换生成模型必须同步 `LLM_TOKENIZER_PATH`：**不能沿用 Qwen tokenizer**，留空则用保守预算。
+- `LLM_CONTEXT_TOKENS` 是问答默认预算（unit 与 Spark Modelfile 也 16384）；整页标点/校对由 `LLM_TEXT_CONTEXT_TOKENS` 独立控制，实际请求最高可到 40960。
 
-### 数据端切换交接
-
-目标：默认 `spark-x2.6:4b-q4_k_m`、16K 上下文、关闭思考；`qwen3:8b` 保留为手动备选，不做自动失败回退。
-
-1. **模型端已准备**：本机两个权重均保留；生成 Ollama 和 Spark Modelfile 默认上下文改为 16384，Spark 已用该默认值执行原生 JSON 输出和本机标点调用，确认 `100% GPU`。OCR、CPU 嵌入及独立隧道保持原配置。对比基线与限制见第 5.2 节。
-2. **数据端待执行**：本次无法用隧道专用账号登录数据端修改配置，因此不宣称远端业务已切换。数据端若继续请求 `qwen3:8b`，模型端仍会按请求重新加载 Qwen；仅预加载 Spark 不会覆盖客户端指定的模型。请将本次仓库改动同步到数据端；其中 `service/llm.py`、`service/evidence.py` 更新代码缺省值，配置内容见上节。已有 `/etc/history-generation.env` 优先于代码和 unit，必须按下面内容合并，不能仅更新仓库。
-
-在**数据端**等正在执行的生成任务结束，先备份，再编辑现有配置，保留原 `LLM_API_BASE`、认证、超时和其它设置：
-
-```bash
-sudo cp -a /etc/history-generation.env "/etc/history-generation.env.before-spark-$(date +%Y%m%d-%H%M%S)"
-sudoedit /etc/history-generation.env
-```
-
-确认以下键只有一条生效值：
-
-```ini
-LLM_PROVIDER=ollama
-LLM_MODEL=spark-x2.6:4b-q4_k_m
-LLM_CONTEXT_TOKENS=16384
-LLM_TEXT_CONTEXT_TOKENS=16384
-LLM_OLLAMA_THINK=0
-LLM_TOKENIZER_PATH=
-```
-
-`LLM_TOKENIZER_PATH=` 留空时使用保守预算，不能沿用 Qwen 的 tokenizer；若已有经过验证的 Spark tokenizer，可填其实际路径。反向隧道部署的 `LLM_API_BASE` 继续为 `http://127.0.0.1:11435/v1`；内网/同机部署保留原来可用的地址。没有环境文件时，按上一节命令首次创建。
-
-仅重启**数据端系统级生成 API**，随后检查健康信息：
+改完重启并验证：
 
 ```bash
 sudo systemctl restart history-llm.service
-curl --fail --silent --show-error http://127.0.0.1:8865/health | python3 -c '
-import json, sys
-result = json.load(sys.stdin)
-assert result.get("ready") is True and result.get("model") == "spark-x2.6:4b-q4_k_m", result
-print("Spark generation API ready")
-'
-```
-
-再执行一次短标点请求；这一步会真实调用模型，但不会保存到业务文献：
-
-```bash
-curl --fail --silent --show-error --max-time 180 http://127.0.0.1:8865/llm/punctuate \
+curl -sSf http://127.0.0.1:8865/health | python3 -c '
+import json,sys; r=json.load(sys.stdin)
+assert r.get("ready") is True and r.get("model")=="spark-x2.6:4b-q4_k_m", r
+print("generation ready")'
+curl -sSf --max-time 180 http://127.0.0.1:8865/llm/punctuate \
   -H 'Content-Type: application/json' \
   -d '{"sourceText":"军需各款应分别登记每月核对收入支出保存原始凭据以备查核凡已收款项与待收款项均应注明不得混列经手人员应逐项签认以便日后复核"}' | python3 -c '
-import json, sys
-result = json.load(sys.stdin)
-assert result.get("ready") is True and result.get("model") == "spark-x2.6:4b-q4_k_m", result
-assert result.get("punctuatedText", "").strip(), result
-print(result["punctuatedText"])
-'
+import json,sys; r=json.load(sys.stdin)
+assert r.get("punctuatedText","").strip(), r
+print(r["punctuatedText"])'
 ```
 
-数据端交付回执须包含：健康接口的 `model`/`ready`、短标点结果，以及一页真实文献的标点/校对结果。模型端用 `OLLAMA_HOST=127.0.0.1:11434 "$HOME/history-service/ollama/bin/ollama" ps` 确认仍为 Spark、`CONTEXT=16384`、`100% GPU`；若长页自动扩展上下文，以该次实际分配为准。健康检查通过不等于真实文献或浏览器链路验收通过。
+切回备选：`LLM_MODEL=qwen3:8b`（上下文仍 16384，tokenizer 留空或换匹配文件）→ 重启同一服务 → 健康接口 `model` 变 `qwen3:8b` → 再跑一次真实请求。两个权重都保留，无需重下。
 
-**切回备选 Qwen**：数据端把 `LLM_MODEL` 改成 `qwen3:8b`，上下文仍为 16384，tokenizer 留空或使用匹配的 Qwen 文件，再重启同一个 `history-llm.service`；随后用健康接口确认 `model=qwen3:8b`，并执行一次真实请求。两个模型文件都保留，无需重新下载；Qwen 在本机16K配置下仍会使用 CPU/GPU 混合加载。
+对比两个模型时固定：OCR/嵌入、输入原文、提示词、上下文与输出上限、思考开关、采样、重复惩罚；各自预热后记录首次加载、热推理、tokens/s、RAM/VRAM、CPU/GPU 分配；不要并发交替请求（加载耗时混入结果）。
 
-### 生成模型切换与对比
+### 7.3 语义检索
 
-默认 Spark、备选 Qwen 的选择入口均为数据端 `/etc/history-generation.env`；模型端 `history-llm.service` 运行 Ollama，数据端同名服务运行生成 API，注意主机和 system/user 管理器的区别。`OLLAMA_MAX_LOADED_MODELS=1` 和 `OLLAMA_NUM_PARALLEL=1` 使两个模型轮流加载。
+数据端 · 前置：§7.2 · 产物：两站 `/etc/*-semantic.env`
 
-对比时固定 OCR/嵌入、输入原文、提示词、上下文与输出上限、思考开关、采样和重复惩罚。每个模型先预热，分别记录首次加载耗时、热推理耗时、生成 tokens/s、RAM/VRAM 峰值及 CPU/GPU 分配；标点、校对、问答输出分别保存，检查改字、漏字、引用和 JSON 合法性。避免并发交替请求两个模型，以免加载耗时混入性能结果。默认切换不代表这些业务效果测试已经全部完成。
-
-### Semantic retrieval
-
-这是数据端第 7 步的一部分。两站分别读取 `/etc/history-semantic.env` 和 `/etc/literature-semantic.env`；仓库 unit 默认关闭语义检索，以下配置在模型检查通过后启用。两站可共享模型服务，SQLite、任务和向量仍独立。
-
-以下命令完整包含配置内容，直接创建实际配置文件。已有文件跳过创建，随后必须核对合并；只部署一站时删去另一站的路径：
+两站可共享模型服务，SQLite/任务/向量各自独立。仓库 unit 默认 `SEMANTIC_SEARCH_ENABLED=false`，模型检查通过后在此启用：
 
 ```bash
 for config_path in /etc/history-semantic.env /etc/literature-semantic.env; do
   if sudo test -e "$config_path"; then
-    printf '配置已存在，请核对并合并：%s\n' "$config_path"
-    continue
+    printf '配置已存在，请核对并合并：%s\n' "$config_path"; continue
   fi
   sudo install -m 0640 -o root -g "$(id -gn "$DATA_USER")" /dev/null "$config_path" || exit 1
   sudo tee "$config_path" >/dev/null <<'ENV'
@@ -595,233 +601,265 @@ EMBEDDING_DOCUMENT_PREFIX=
 # 保持 EMBEDDING_QUERY_PREFIX 未定义；空值会禁用代码默认的查询指令。
 # EMBEDDING_API_KEY=...
 ENV
-  if [ "$?" -ne 0 ]; then
-    exit 1
-  fi
 done
 ```
 
-`EMBEDDING_API_BASE` 是 Ollama 根地址。默认查询指令为 `Instruct: Given a question about historical documents, retrieve relevant passages that answer the question`，随后真实换行，再接 `Query: 用户问题`；正文不加前缀。不要将旧配置里的空 `EMBEDDING_QUERY_PREFIX=` 原样带入。digest、维数、前缀或分段版本改变后旧向量不参与新召回，后台会重新生成；恢复相同模型及配置可复用向量。`SEMANTIC_MIN_COSINE` 是候选过滤下限，不是答案可信度。该模型对中文有约 0.2~0.35 的基线相似度，设为 0 等于不设门槛：任何输入（含寒暄、乱码）都能凑满候选并被当成材料，模型随之据无关材料作答。2026-10-15 实测（《宫中档光绪朝奏折》）：真实提问 0.61~0.79，无关输入 0.21~0.35，故取 0.45；语料或问题风格差异大时应重测后再调。降低该值会放宽召回，提高则更严格。
+- `EMBEDDING_API_BASE` 是 Ollama 根地址。默认查询指令 `Instruct: Given a question about historical documents, retrieve relevant passages that answer the question` + 真实换行 + `Query: 用户问题`；正文不加前缀。
+- `SEMANTIC_MIN_COSINE` 是候选下限，不是可信度：该模型中文基线相似度约 0.2~0.35，设 0 等于不设门槛（寒暄/乱码也会被当材料）。实测真实提问 0.61~0.79、无关输入 0.21~0.35，故取 0.45；语料风格变化大时重测再调。
+- digest/维数/前缀/分段版本变化后旧向量不参与召回，后台自动重建；恢复相同模型与配置可复用。
 
-### 7.3 直连覆盖与启动
+### 7.4 模型端地址覆盖（直连分支）
 
-反向隧道分支沿用上面的默认地址。内网直连分支把生成配置的 `LLM_API_BASE` 改为 `http://模型内网地址:11434/v1`，两站嵌入配置改为 `http://模型内网地址:11436`；再为两个 OCR 编排 unit 添加如下 drop-in，填写真实内网地址：
+反向隧道分支保持默认 `OCR_UPSTREAM_URL=http://127.0.0.1:18080`。直连/同机时给两个 OCR unit 加 drop-in（`/etc/systemd/system/{history-ocr,literature-ocr}.service.d/upstream.conf`）：
 
 ```ini
 [Service]
-Environment=OCR_UPSTREAM_URL=http://模型内网地址:8080
+Environment=OCR_UPSTREAM_URL=http://127.0.0.1:8080
 ```
 
-位置分别是 `/etc/systemd/system/history-ocr.service.d/upstream.conf`、`/etc/systemd/system/literature-ocr.service.d/upstream.conf`。同机直连使用第 6.2 节的 loopback 地址，同样覆盖两个 OCR unit；反向隧道分支保持 `OCR_UPSTREAM_URL=http://127.0.0.1:18080`。OCR 使用 PaddleX `/layout-parsing`，健康路径默认 `/health`；遇到版本差异先核对实际 API，不能将不可用的上游伪装为就绪。
+内网直连换成模型端内网地址。模型端不可用时不能伪装成就绪：`/health` 的 `upstream.reachable` / `ready` 必须如实反映。
 
-整页方向分类与校正、文档去畸变按请求模式固定：`formal` 开启，`quick` 和 `reader` 关闭，不由 `OCR_UPSTREAM_GEOMETRY_FIX` 控制。当前正文识别调用 `reader`，保持坐标对应保存的原图；需要纠偏的 `formal` 请求返回处理后坐标，图表使用明确关联的上游裁图，不能按这些坐标裁输入原页。
+### 7.5 OCR 请求策略（代码固定，勿改配置绕过）
 
-所有请求固定关闭 `useTableRecognition`、`useChartRecognition`、`useWiredTableCellsTransToHtml` 和 `useWirelessTableCellsTransToHtml`，并启用 `returnMarkdownImages`。新识别的表格与图表统一使用图片链路：版面定位 → 关联区域裁图 → 保存图片资产 → 原位显示及放大；不再生成单元格模型或 HTML 表格。保留图表题注、阅读顺序和正文过滤。历史数据如需图表图片，重新识别对应页面即可。
+- 方向分类/去畸变按请求模式固定：`formal` 开，`quick`/`reader` 关；不由环境变量控制。
+- 正文识别用 `reader` 模式：`geometry_fix=False`、`coordinateSpace="input"`，bbox 与原图逐像素对应，可直接本地裁图。
+- 所有请求固定关闭 `useTableRecognition`、`useChartRecognition`、`useWiredTableCellsTransToHtml`、`useWirelessTableCellsTransToHtml`，启用 `returnMarkdownImages`。
+- 表格/图表统一走图片链路：版面定位 → 关联模型端裁图 → 保存 `page-visual` 资产 → 原位显示/放大；不再生成单元格模型或 HTML 表格。公式、印章识别继续关闭。
+- 改 YAML 或启动器后必须同步两端并重启（模型端 `systemctl --user restart history-ocr`，数据端 `systemctl restart history-ocr literature-ocr`）；仅更新模型端不会加载数据端代码。
+- 前端每页只存 `page.ocr` 轻量摘要（confidence/engine/width/height/blockCount/blockTypes/hasMarkdown/upstream/warnings/recognizedAt），版面块与行坐标留在 OCR 任务记录里。
 
-公式识别、印章识别继续关闭。模型端 YAML 停止初始化表格结构和单元格模型，启动器同时覆盖旧数据端传入的重建开关；同步 YAML 和启动代码后重启模型端 OCR：
+### 7.6 处理链路（调度器）
 
-```bash
-# 在模型端仓库根目录执行；只重启 OCR 模型服务。
-install -m 0644 deploy/service/PP-StructureV3-cpu.yaml "$HOME/history-service/PP-StructureV3-cpu.yaml"
-install -m 0644 service/ocr_model.py service/ocr_model_progress.py "$HOME/history-service/service/"
-systemctl --user restart history-ocr.service
-curl --fail http://127.0.0.1:8080/health
-```
+- `PROCESSING_OCR_URL` 指本机 OCR 编排（历史 8765 / 文学 18765），`PROCESSING_LLM_URL` 指共享 8865；**不能**填模型端端口。
+- 默认模式 `chunked`（大串小并）：按"每部分页数"切块（默认 3，上限 10），块间串行，块内四阶段（OCR→简繁→标点→校对）错位推进；`PROCESSING_STAGE_WORKERS≥4` 才能四阶段同时推进，`PROCESSING_STAGE_LANES>1` 才出现同阶段并行多页。
+- `serial`/`parallel` 仍可选；`processing_jobs` 表在连接时自动升级（放宽 mode、补 `chunk_size`）。
+- 任务与进度全部后端持久化，不需要常驻 CLI worker；关闭浏览器任务继续；重启 Data API 复用已完成阶段。
 
-等待模型加载完成再检查健康接口。数据端需同时更新 `service/ocr_upstream.py` 和 `service/reader_content.py`，后者固定新图表图片显示并正确解码 `/9j/` 开头的 JPEG Base64（避免误当作 URL）。随后重启实际运行的 OCR API；按本部署模板是 `sudo systemctl restart history-ocr.service literature-ocr.service`，只部署一个站点时只重启对应服务。该增量无需数据库迁移、前端改动或 LLM/嵌入重启。仅更新模型端不会加载数据端代码。已有模型缓存可保留，停用后不会因缓存存在而自动加载。
+### 7.7 启动顺序
 
-Data API 的 `PROCESSING_OCR_URL` 指向本机 OCR 编排（历史站 `8765`，文学站 `18765`），`PROCESSING_LLM_URL` 指向共享编排 `8865`；这两个地址不能改成模型服务的端口。后台调度默认启用，HTTP 超时默认 1000 秒，需容纳上游调用。上传、登记和正文任务由后端持久化，不需要额外常驻 CLI worker。
-
-大串小并（`chunked`）是登记默认处理方式：文献按“每部分页数”（默认 3，上限 10）切块，块间串行，块内仍走并行链路（文字识别、简繁、标点、校对四阶段错位推进，每个阶段同时只处理一页）。并发由两个环境变量控制，换大设备时按需调整，不必改代码：`PROCESSING_STAGE_WORKERS`（调度线程池大小，默认 4，需 ≥ 4 才能让四阶段同时推进）与 `PROCESSING_STAGE_LANES`（每个阶段同时处理几页，默认 1；调大才会出现同一阶段并行多页）。`processing_jobs` 表会在服务连接数据库时自动升级以支持该链路（放宽 `mode` 约束并补 `chunk_size` 列），旧库无需手工迁移。
-
-确认没有旧 user 实例占用端口、数据检查通过、SSO 和模型链路已就绪，然后启动。恢复已有队列后服务会自动续跑，不能提前启动再搬数据：
+前置：端口无旧 user 实例占用、§4.4 通过、SSO 与模型链路就绪。**先就绪再启动，不能先起服务再搬数据。**
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now history-ocr.service history-llm.service
+sudo systemctl enable --now history-ocr.service history-llm.service history-version.service
 sudo systemctl enable --now history-data.service
 sudo systemctl enable --now literature-ocr.service literature.service
-sudo systemctl is-active history-data.service history-ocr.service history-llm.service literature.service literature-ocr.service
+sudo systemctl is-active history-data.service history-ocr.service history-llm.service \
+      literature.service literature-ocr.service history-version.service
 sudo journalctl -u history-data.service -u literature.service -n 100 --no-pager
 ```
 
-只启用历史站时省略文学站两个 unit。启动失败先检查日志，不要另开 `uvicorn` 绕开 systemd。
+只部署历史站时省略文学站两个 unit；不部署发布服务（附录 A）时省略 `history-version.service`，改走 §8.2。启动失败看日志修，不要另开 uvicorn 绕开 systemd。
 
-## 8. 发布静态前端和配置入口代理
+## 8. 前端发布与代理
 
-数据 API、LLM API、前端必须来自同一提交。前端是静态 HTML/CSS/JS，生产发布不需要 npm 构建。必须保留 `/history/html/...` 和 `/literature/html/...` 的站点前缀；前端按 URL 第一段决定站点、登录方式及缓存隔离。
+### 8.1 发布模型（生产现行）
 
-迁移时先恢复原有域名/TLS、SSO 路由及代理设置。源端若有 `service.version` 发布服务，保留其 unit、`VERSION_CURRENT_LINK` 和受控路由，使用其既有发布流程；不要同时维护两套互相覆盖的发布链接。仓库没有提供 version 服务 unit，本节给出不依赖它的静态发布方式，版本按钮在此方式下标记“待配置”。
+**代码源 = 服务器本地 Git 仓库**：开发者在他处 push 到远端不等于上线。流程固定为：
 
-### 8.1 发布静态资产
+1. 服务器 `git -C ~/Codefield/history pull`（线上不变，可随时回退）。
+2. 触发发布：网页「更新」按钮，或 `curl -X POST http://127.0.0.1:8965/update`。
+3. `history-version` 执行 `git archive HEAD` → `.deploy/releases/<12位>` → `os.replace` 软链接 `.deploy/current`；两站同时生效（共用同一发布目录）。
 
-在数据端执行，确认前端文件来自指定提交和已交接的修改。以下仅导出可公开的静态资产，不把代码、数据库或配置目录作为 Web 根目录：
+```bash
+curl -s http://127.0.0.1:8965/version      # 看 updateAvailable / currentCommit / sourceCommit
+curl -s -X POST http://127.0.0.1:8965/update
+readlink .deploy/current                   # 应切到 releases/<12位>
+cat .deploy/current/version.json           # commit 必须等于 git rev-parse HEAD
+```
+
+约束与坑：
+
+- `version.json` 必须在发布目录里。手工 `git archive` 建的 release 必须补写 `version.json`（`{"commit": "<完整哈希>"}`），否则 `deployed_commit()` 回退到 HEAD 并误判"已是最新"，更新被跳过。
+- `CURRENT_LINK` 不能 `.resolve()`（会跟随软链接导致 `switch_current_link` 误判失败）；代码已按此实现，勿改回。
+- 未提交的本地改动不会进发布；`git archive HEAD` 只打 HEAD。
+- 只改 `service/*.py` 时重启服务即可，不必发布；只改前端时不重启服务，必须发布。
+- 旧 releases 可清理，**至少保留 `current` + 最近 2 个**（回滚用）。
+
+### 8.2 无 version 服务时的静态发布 `[F]`
+
+`history-version` 的 unit 不在仓库里（附录 A）。不部署它时，用同一套目录结构手工发布（版本接口按 §8.3 末尾降级为静态响应，前端不会有「更新」按钮）：
 
 ```bash
 cd "$DATA_REPO"
 release_id="$(git rev-parse --short=12 HEAD)-$(date +%Y%m%d%H%M%S)"
-static_release="/srv/history/releases/$release_id"
-sudo install -d -m 0755 "$static_release"
-sudo cp -R html js styles.css "$static_release/"
-sudo chmod -R a+rX "$static_release"
-# 先记录 readlink /srv/history/current 的旧目标，供回滚使用。
-sudo ln -s "$static_release" /srv/history/current.next
-sudo mv -Tf /srv/history/current.next /srv/history/current
+mkdir -p ".deploy/releases/$release_id"
+git archive HEAD | tar -x -C ".deploy/releases/$release_id"
+printf '{"commit":"%s"}\n' "$(git rev-parse HEAD)" > ".deploy/releases/$release_id/version.json"
+chmod -R a+rX ".deploy/releases/$release_id"
+ln -sfn "$PWD/.deploy/releases/$release_id" .deploy/current.next
+mv -Tf .deploy/current.next .deploy/current
 ```
 
-`/srv/history/current` 应不存在或为发布软链接；若是实际目录，先核对并迁移现有内容。`current.next` 已存在时先检查是否有并发发布，不能覆盖另一个执行者的操作。
+发布内容必须来自同一提交、只含可公开资产（整棵树即可，nginx 只 alias 出去）；不要把 `storage/`、`ocr-storage/` 暴露成 Web 根。
 
-### 8.2 Nginx 路由
+### 8.3 Nginx
 
-将下面片段合并到实际域名的 `server {}` 中，并保留现有 TLS、`/login` 和其他问渠服务路由。上传大小示例为 256 MB，按实际文献规模调整；上游超时应覆盖 OCR/LLM 长请求。`proxy_pass` 的结尾 `/` 用于去掉匹配的站点 API 前缀：例如 `/history/api/data/api/bootstrap` 转为后端 `/api/bootstrap`，不是 `/bootstrap`。
+生产由 `~/Codefield/root` 统一管理：`root/nginx/root.conf`（HTTP→HTTPS + SSL + `include conf.d/*.conf`），片段 `root/nginx/conf.d/{history,literature}.conf`。改仓库片段后：
 
-```nginx
-client_max_body_size 256m;
-proxy_read_timeout 1200s;
-proxy_send_timeout 1200s;
-proxy_set_header Host $host;
-proxy_set_header X-Real-IP $remote_addr;
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-proxy_set_header X-Forwarded-Proto $scheme;
-proxy_set_header Cookie $http_cookie;
-proxy_set_header Authorization $http_authorization;
-
-location = /history { return 302 /history/html/index.html; }
-location = /history/ { return 302 /history/html/index.html; }
-location = /literature { return 302 /literature/html/index.html; }
-location = /literature/ { return 302 /literature/html/index.html; }
-
-location ^~ /history/api/data/ { proxy_pass http://127.0.0.1:8665/; }
-location ^~ /history/api/ocr/ { proxy_pass http://127.0.0.1:8765/; }
-location ^~ /history/api/llm/ { proxy_pass http://127.0.0.1:8865/; }
-location ^~ /literature/api/data/ { proxy_pass http://127.0.0.1:18665/; }
-location ^~ /literature/api/ocr/ { proxy_pass http://127.0.0.1:18765/; }
-location ^~ /literature/api/llm/ { proxy_pass http://127.0.0.1:8865/; }
-
-# 仅用于尚未部署 version API 的静态发布方式；源端已有版本服务则保留其原路由。
-location = /history/api/version/version {
-    default_type application/json;
-    return 200 '{"configured":false,"updateAvailable":false,"message":"由部署流程发布静态资产"}';
-}
-location = /literature/api/version/version {
-    default_type application/json;
-    return 200 '{"configured":false,"updateAvailable":false,"message":"由部署流程发布静态资产"}';
-}
-location ^~ /history/api/ { return 404; }
-location ^~ /literature/api/ { return 404; }
-location /history/ { alias /srv/history/current/; }
-location /literature/ { alias /srv/history/current/; }
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+curl -skI --resolve www.wenqu.art:443:127.0.0.1 https://www.wenqu.art/history/styles.css | grep -i cache-control
 ```
 
-确认没有旧 location 冲突，执行 `sudo nginx -t` 成功后 `sudo systemctl reload nginx`。数据 API、OCR/LLM 编排和模型端口均保留内网/loopback，通过正式 HTTPS 入口访问站点。
+必须满足：
 
-## 9. 验收通过后再切换入口
+- 旧入口 `= /history`、`= /history/`、`= /history/index.html` → `301 /history/html/`（`/literature` 同理）。多页结构下页面内是 `../js/`、`../styles.css` 相对路径，`/history/` 不再回退 index。
+- 静态：`location /history/ { alias <repo>/.deploy/current/; index index.html; add_header Cache-Control "no-cache, must-revalidate" always; }`。**必须有该头**：否则 CSS/JS 会被启发式缓存，版本刷新后出现"半新半旧"。
+- API：`/history/api/{data,ocr,llm,version}/` → 8665/8765/8865/8965，`/literature/api/{data,ocr,llm,version}/` → 18665/18765/8865/8965；`proxy_pass` 结尾 `/` 负责剥离前缀（`/history/api/data/api/bootstrap` → `/api/bootstrap`）。
+- `client_max_body_size 256m`（按文献规模调）、`proxy_read_timeout 1200s`、HTTP/1.1 升级头（WebSocket 由其它子站使用；history 无 WS）。
+- 无 version 服务时（§8.2），用两个精确 location 让前端不显示更新按钮：`location = /history/api/version/version { default_type application/json; return 200 '{"configured":false,"updateAvailable":false}'; }`（`/literature` 同理）。
 
-### 9.1 API、schema 和链路
+`nginx -T` 只是重新解析文件，**不代表运行中的配置已更新**。判断是否 reload 过：比对 conf mtime 与 `ps -o lstart -p <worker pid>`。
 
-在数据端执行，必须检查 JSON 字段，HTTP 200 本身不代表上游就绪：
+### 8.4 发布后自动刷新（前端机制，改动前先读）
+
+- 每个页面先加载 `js/core.js`/`js/service.js`；每 30s 轮询 `/history/api/version/version`（文学站为 `/literature/api/version/version`），`currentCommit` 变化 → 写 localStorage 广播 `wenqu.platform.reload` → 各标签页 `reloadWithFreshAssets()`（先 `fetch(...,{cache:"reload"})` 预刷新同源 CSS/JS，再 `location.reload()`，等价 Ctrl+F5）。
+- `readerEditing` / 上传进行中会挂起刷新，等到下次轮询或页面转后台；`share.html` 不参与轮询。
+- 因此：**出问题先确认是"没发布"、"没 reload nginx"、还是"只 reload 了主文档"**。
+
+## 9. 验收
+
+### 9.1 健康与 schema
 
 ```bash
 python3 - <<'PY'
-import json
-import urllib.request
+import json, urllib.request
 for port in (8665, 18665, 8765, 18765, 8865):
-    with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=30) as response:
-        data = json.load(response)
-    assert data.get('status') == 'ok', (port, data)
+    with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=30) as r:
+        d = json.load(r)
+    assert d.get('status') == 'ok', (port, d)
     if port in (8665, 18665):
-        assert data.get('schemaVersion') == 9, (port, data)
-        print(port, {k: data.get(k) for k in ('database', 'documents', 'pages', 'fileRecords', 'schemaVersion')})
+        assert d.get('schemaVersion') == 9, (port, d)
+        print(port, {k: d.get(k) for k in ('database','documents','pages','fileRecords','schemaVersion')})
     else:
-        assert data.get('ready') is True, (port, data)
+        assert d.get('ready') is True, (port, d)
         print(port, 'ready')
 for port in (8665, 18665):
-    with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/embedding/health', timeout=90) as response:
-        data = json.load(response)
-    assert data.get('ready') is True, (port, data)
-    print(port, 'embedding health ready')
+    with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/embedding/health', timeout=90) as r:
+        assert json.load(r).get('ready') is True, port
+    print(port, 'embedding ready')
 PY
 ```
 
-只部署一站时移除未启用端口。迁移场景中，先用恢复库与源端停写快照核对数据库路径、文献/页/文件数量；启动后若恢复队列产生新记录，单独说明增量。再执行两站文件完整性检查（读取既有库，不是恢复/导入）：
+只部署一站时删掉未启用端口。HTTP 200 不代表模型端就绪，必须断言字段。
+
+### 9.2 数据完整性（读取既有库，不是导入）
 
 ```bash
 cd "$DATA_REPO"
-env DATA_DB_PATH="$DATA_REPO/storage/app.db" DATA_STORAGE_DIR="$DATA_REPO/storage" DATA_FILE_STORAGE_DIR="$DATA_REPO/storage/files" "$UV_BIN" run --frozen --no-dev python scripts/storage.py check
-env DATA_DB_PATH="$LITERATURE_ROOT/app.db" DATA_STORAGE_DIR="$LITERATURE_ROOT" DATA_FILE_STORAGE_DIR="$LITERATURE_ROOT/files" "$UV_BIN" run --frozen --no-dev python scripts/storage.py check
+env DATA_DB_PATH="$DATA_REPO/storage/app.db" DATA_STORAGE_DIR="$DATA_REPO/storage" \
+    DATA_FILE_STORAGE_DIR="$DATA_REPO/storage/files" "$UV_BIN" run --frozen --no-dev python scripts/storage.py check
+env DATA_DB_PATH="$LITERATURE_ROOT/app.db" DATA_STORAGE_DIR="$LITERATURE_ROOT" \
+    DATA_FILE_STORAGE_DIR="$LITERATURE_ROOT/files" "$UV_BIN" run --frozen --no-dev python scripts/storage.py check
 ```
 
-### 9.2 真实模型和应用调用
+迁移场景先与源端停写快照核对文献/页/文件数；启动后产生的增量单独说明。
 
-第 5.2 节已在模型端做过真实生成/嵌入；在数据端还需经实际连接验证，不能只查 `/api/tags`。反向隧道部署可复用第 5.2 节脚本，把生成地址 `11434` 改为数据端 `11435`，嵌入地址仍为 `11436`；直连部署替换两个 base 为真实内网地址。核对 digest 与源端及模型端一致。
-
-选择一张已授权、包含清晰文字的测试页，在数据端验证 OCR 编排和生成编排。`OCR_TEST_IMAGE` 必须指向真实文件：
+### 9.3 真实模型链路（数据端，经实际连接）
 
 ```bash
-export OCR_TEST_IMAGE='<测试页的绝对路径>'
-curl --fail --silent --show-error --max-time 600 -F "image=@$OCR_TEST_IMAGE" -F pageNumber=1 http://127.0.0.1:8765/ocr
-curl --fail --silent --show-error --max-time 700 -H 'Content-Type: application/json' --data '{"text":"测试文献《军需录》，民国二年成书。","source":"ocr"}' http://127.0.0.1:8865/llm/extract-metadata
+export OCR_TEST_IMAGE='<测试页绝对路径>'
+curl -sSf --max-time 600 -F "image=@$OCR_TEST_IMAGE" -F pageNumber=1 http://127.0.0.1:8765/ocr
+curl -sSf --max-time 700 -H 'Content-Type: application/json' \
+  -d '{"text":"测试文献《军需录》，民国二年成书。","source":"ocr"}' \
+  http://127.0.0.1:8865/llm/extract-metadata
 ```
 
-两项都要求 JSON 中 `ready=true`，OCR 有实际识别文本，生成有符合输入的结果；模型调用失败时部分接口仍返回 HTTP 200，须检查 `ready`、`errorKind` 和 `warnings`。
+参数坑：`/ocr` 表单字段是 `image`（不是 `file`）；LLM 无 `/llm` 根路由，用 `/llm/chat`、`/llm/punctuate`、`/llm/extract-metadata`，请求体字段是 `prompt`/`text`/`sourceText` 而非 `message`。失败时部分接口仍回 200，必须看 `ready`、`errorKind`、`warnings`。
 
-### 9.3 公网入口、登录和恢复行为
+### 9.4 公网入口、登录与功能
 
-切 DNS/负载均衡前用临时域名、hosts 或 `curl --resolve` 访问新入口，保留正式 Host/TLS 语义。至少完成：
+切 DNS/负载均衡前用 `curl --resolve` 或临时域名访问新入口（保留正式 Host/TLS）。**验证线上必须走 HTTPS**：`curl http://127.0.0.1/... -H 'Host: www.wenqu.art'` 只会拿到 301。
 
 | 验收项 | 通过条件 |
 | --- | --- |
-| 两站前端 | `/history/html/index.html`、`/literature/html/index.html`、JS/CSS/partials 均成功加载，API 前缀正确 |
-| 历史站登录 | 已有本地账号登录，文献/附件/原图可访问，重登后数据一致；新站用正常注册流程建立账号 |
-| 文学站登录 | 未登录跳转统一 `/login`，登录后 Cookie 能被后端解析，账户权限保持源端语义 |
-| 语义检索 | 授权文献完成向量索引后，使用与原文不同措辞仍能召回对应段落；私有/删除内容不越权 |
-| 问答、编年和引用 | 各模式能生成基于文献的结果，引用打开正确页及文本层，原图定位可用 |
-| 上传与后台任务 | 登记/正文任务在关闭浏览器后继续，排队顺序正确，重启 Data API 后复用已完成阶段 |
-| 站点隔离 | 两站数据库、文件、OCR 状态及会话行为各自正确，共享生成服务可用 |
-| 故障恢复 | OCR/生成/嵌入断开时状态准确；恢复后等待任务续跑，语义故障时字面检索仍可用 |
-| 开机恢复 | 数据端 system units 已 enable；模型端 user units 已 enable 且 linger 生效；新登录后服务仍在 |
+| 两站前端 | `/history/html/index.html`、`/literature/html/index.html` 及 js/css/partials 均 200，API 前缀正确 |
+| 历史站登录 | 本地账号可登录，文献/附件/原图可访问；重启后需重登属预期 |
+| 文学站登录 | 未登录跳 `/login`，Cookie 被后端解析；`/literature/api/data/api/auth/login` 返回 410（sso 模式禁本地登录） |
+| 语义检索 | 换措辞仍能召回原文；私有/已删内容不越权 |
+| 问答/编年/引用 | 各模式产出基于文献，引用可打开正确页与文本层 |
+| 上传与后台任务 | 关浏览器后继续，顺序正确，重启 Data API 复用已完成阶段 |
+| 站点隔离 | 两站库/文件/OCR 状态/会话各自正确，共享生成服务可用 |
+| 故障恢复 | 断开 OCR/生成/嵌入时状态准确；恢复后任务续跑；语义故障时字面检索可用 |
+| 开机自启 | 数据端 system unit 已 enable；模型端 user unit 已 enable 且 linger 生效 |
 
-迁移前后的样本文件哈希、记录数和实际访问应相符；空库连通不等于数据迁移成功。真实召回率、p95、内存与并发负载需在目标主机测量，离线测试不能代替。
+真实召回率、p95、内存与并发必须现场测，离线测试不能代替。
 
-全部必需检查通过后切换正式入口，确认旧机不会继续接收写入，观察新端日志和队列，再决定旧机保留时间。没有完成的 SSO、真实文献验证、性能或重启测试必须明确列为待办。
+## 10. 运维
 
-## 10. 索引维护、回滚和交付记录
+### 10.1 语义索引
 
-### 10.1 后台索引运行与停用
-
-语义索引由 Data API 内的后台 worker 自动扫描和生成，随对应 Data API 启停，不需要额外启动索引进程。排错时先检查对应站点的配置、Data API 日志、嵌入模型连通性和真实检索结果。不要通过清空数据库处理普通索引故障。
-
-将目标站点环境配置中的 `SEMANTIC_SEARCH_ENABLED` 设为 `false`，并重启对应 Data API，即可停用语义查询和后台索引；字面检索仍可用。重新启用前先确认模型和配置正确。
+由 Data API 内嵌 worker 随服务启停，无需额外进程。排错顺序：站点配置 → Data API 日志 → 嵌入连通性 → 真实检索结果。停用：把对应 env 的 `SEMANTIC_SEARCH_ENABLED=false` 并重启该 Data API（字面检索仍可用）。不要用清库解决索引故障。
 
 ### 10.2 回滚
 
-尚未切入口且新端未产生业务写入时，可停新端并把入口保留在原端，再恢复原端服务。切换后已有新写入时，先停写并备份新端，明确数据合并/恢复方案，不能直接把入口指回旧库。
+- 前端：把 `.deploy/current` 指回上一个 `releases/<12位>`（`ln -sfn`），无需重启服务。
+- 后端：恢复相互匹配的提交 + 依赖 + 配置后重启；schema 9 的数据不能交给不兼容的旧代码。
+- 数据：先停写并备份，再谈合并/恢复；`scripts/storage.py restore ARCHIVE --yes` 前必须停对应 Data/OCR 服务，避免旧 WAL/SHM 混入。
+- 不要为了处理普通启动错误去删库或删模型缓存。
 
-代码回滚需同时恢复相互匹配的后端提交、依赖、配置和静态发布；schema 9 数据不能交给不兼容的旧代码。静态发布回滚到预先记录的 `/srv/history/current` 旧目标。不要删除当前库或模型缓存以处理普通启动错误。
+### 10.3 交付记录（必须）
 
-应用完整 ZIP 备份包含 SQLite 和文件资产，但不包含 `ocr-storage`、SSO 数据库或机器配置。若使用 `scripts/storage.py restore ARCHIVE --yes`，先停止相关站点 Data/OCR 服务，备份目标并确保没有旧 WAL/SHM 随旧库混入，单独恢复 OCR 状态，按当前 schema 校验后再启动。JSON 导出不是后台任务的完整迁移备份。
+两端主机与运行账号、代码 commit、管理器与 enabled 状态、目录、连接方式、模型标签/digest/量化/维数、依赖版本、源/目标数据量与 storage check 结果、OCR/生成/嵌入的真实调用结果、登录与浏览器验收、资源测量、入口切换与回滚位置、未完成事项。**不输出**密码、DSN、Token、Cookie、私钥。
 
-### 10.3 必须返回的交付记录
+## 11. 排错
 
-交付信息采用简短表格/清单，记录实际观测值：两端主机和运行账号、代码 commit、system/user 管理器和启用状态、目录、连接路径、模型标签/digest/量化/维数、环境依赖版本、源/目标数据数量及文件检查、OCR/生成/嵌入真实调用、登录和浏览器验收、资源测量、入口切换及回滚位置、未完成事项。不要输出密码、完整数据库 DSN、Token、Cookie 或私钥。
-
-## 11. 常见阻塞和依据
-
-| 现象 | 优先检查 |
+| 现象 | 处理 |
 | --- | --- |
-| `Address already in use` | 同名服务是否同时跑在 system/user 管理器，或有人手动启动了另一份进程 |
-| 文学站启动失败 | `/etc/wenqu-sso.env` 是否存在、可读；PostgreSQL 与统一登录是否实际可用 |
-| OCR 启动失败 | `~/history-service/PP-StructureV3-cpu.yaml` 是否在 unit 指定位置；OCR 环境版本、模型缓存和系统动态库 |
-| 上游不可达 | 模型进程 → loopback 监听 → SSH host key/key 授权 → 隧道日志 → 数据端转发端口；直连检查监听/防火墙 |
-| 模型列表正常但推理失败 | 真实请求、Ollama 版本、剩余内存、模型 digest/量化、`/api/ps`；嵌入接口必须支持 `/api/embed` 和 `truncate=false` |
-| 首页嵌入“已连接”但无语义结果 | 健康检查只看配置和模型列表；检查索引状态、语义开关、查询前缀、真实 embed 及文献权限 |
-| 前端 404/登录循环 | `/history`、`/literature` 前缀，Nginx 去前缀规则，静态文件相对路径，Cookie 域/SSO 路由 |
-| schema 报错 | 备份是否为完整 schema 9；只读检查原库，保留原件并停止不兼容升级 |
+| `Address already in use` | 同名服务同时跑在 system 与 user 管理器，或有人手起了第二份进程 |
+| `systemctl stop` 后 `is-active` 显示 `failed` | 正常：uvicorn 收 SIGTERM 退 143，unit 无 `SuccessExitStatus=143`。功能无影响 |
+| 前端已更新但接口 404 | 只发布前端没重启后端（`service/*.py` 必须重启）；先看 nginx access.log 状态码 |
+| 页面"半新半旧" | nginx 没 reload 或缺少 `Cache-Control: no-cache`；reload 后用 `curl -I` 验证响应头 |
+| 点「更新」无反应 / updateAvailable 一直是 false | 发布目录缺 `version.json`，或 `CURRENT_LINK` 被 `.resolve()` |
+| 文学站登录 410 / 无法登录 | 预期：sso 模式禁本地登录；要本地登录说明连错了站点或 `AUTH_MODE` 配错 |
+| 历史站也被要求 SSO | unit 未同步 `AUTH_MODE=local` 就重启（先 cp unit 再 restart） |
+| OCR 全部失败 | `/health` 看 `upstream.reachable`；`OCR_UPSTREAM_URL` 空 → 503 `ocr_upstream_not_configured` |
+| 隧道端口 LISTEN 但 curl 超时 | 僵尸会话占端口：`sudo -n ss -lntp` 找出监听 18080 / 11435 的 pid（属 `sshd: tunneluser`）→ `sudo -n kill <pid>`，约 6s 自动重连。**勿杀 VS Code 的 ubuntu 会话**，也不要用 ubuntu 账号的 `systemctl --user` 判断隧道死活 |
+| LLM ready=false | 隧道 → 模型端 `ollama ps` → digest/上下文 → 数据端 `LLM_API_BASE`/`LLM_MODEL` |
+| 嵌入"已连接"但无语义结果 | 健康检查只看配置与模型列表；查索引状态、开关、查询前缀、真实 embed、权限 |
+| schema 报错 | 备份是否完整 schema 9；只读检查原库、保留原件，不做不兼容升级 |
+| `uv run` 启动很慢/联网 | `pyproject.toml` 与 `uv.lock` 不一致；`uv sync --frozen --no-dev` 后重启 |
+| 公网 curl 卡数秒 | 本机走公网绕行；验证优先用 `127.0.0.1` 或 `--resolve` |
 
-安装命令和模型信息以官方对应发行版为准。以下是补充依据，执行所需的项目路径、配置和顺序均已写在本文中：
+## 12. 依据
 
-- uv 项目与锁文件：`https://docs.astral.sh/uv/guides/projects/`
-- PaddleX 安装及 PP-StructureV3：`https://paddlepaddle.github.io/PaddleX/3.0/en/installation/installation.html`、`https://paddlepaddle.github.io/PaddleX/3.0/en/pipeline_usage/tutorials/ocr_pipelines/PP-StructureV3.html`
-- Ollama Linux 安装：`https://docs.ollama.com/linux`
-- 嵌入精确标签：`https://ollama.com/library/qwen3-embedding:0.6b-q8_0`
-- Nginx URI 转发：`https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass`
+- uv 项目与锁文件：<https://docs.astral.sh/uv/guides/projects/>
+- PaddleX 安装与 PP-StructureV3：<https://paddlepaddle.github.io/PaddleX/3.0/en/installation/installation.html>、<https://paddlepaddle.github.io/PaddleX/3.0/en/pipeline_usage/tutorials/ocr_pipelines/PP-StructureV3.html>
+- Ollama Linux：<https://docs.ollama.com/linux>
+- 嵌入精确标签：<https://ollama.com/library/qwen3-embedding:0.6b-q8_0>
+- Nginx `proxy_pass` URI 规则：<https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass>
+- 安装命令与模型信息以官方对应发行版为准。
+
+## 附录 A：`history-version` unit（生产现状，仓库未提供模板）
+
+安装到 `/etc/systemd/system/history-version.service`，`enable --now`；`VERSION_*` 全部走默认值（仓库目录 `~/Codefield/history`、发布目录 `.deploy/releases`、链接 `.deploy/current`）即可：
+
+```ini
+[Unit]
+Description=History Version API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Codefield/history
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run python -m uvicorn service.version:app --host 127.0.0.1 --port 8965
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## 附录 B：历史命名与残留
+
+| 旧名 | 现值 |
+| --- | --- |
+| `literature-data.service` / `~/Codefield/literature-data/` | `literature.service` / `~/Codefield/literature/` |
+| `js/config.js` 站点识别 | `js/core.js`（`SITE_ID` 取 URL 首段） |
+| `service/wenqu_sso/`（包） | `service/wenqu_sso.py`（单文件，与 `SSO/lib/python/wenqu_sso/session.py` 同源，改一处要同步） |
+| `OCR_UPSTREAM_STYLE` / native 契约 / `/ocr/cover-candidate` | 已删除（只保留 PaddleX `/layout-parsing`；封面自动识别改为手工上传） |
+| `service/table_content.py` / `renderMode=structured` | 已删除（表格与图表统一走图片链路） |
+| `.deploy/releases` 内旧发布里的 `literature-data.service` | 历史快照，勿动 |

@@ -2771,42 +2771,19 @@ body {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px 28px;
+  gap: 10px 40px;
   min-width: 0;
   color: #69716a;
   font-size: 14px;
   white-space: nowrap;
 }
 
-/* 标签与状态同一行；已连接时模型名对齐到状态下方，未连接保持单行。 */
+/* 四个状态项都只占一行：标签 + 状态；所用模型只在悬停 title 里出现。 */
 .service-item {
-  display: inline-grid;
-  grid-template-columns: auto auto;
+  display: inline-flex;
   align-items: center;
-  column-gap: 4px;
+  gap: 4px;
   flex: 0 0 auto;
-}
-
-.service-label {
-  grid-column: 1;
-  /* 标签跨两行并保持垂直居中：后面一行或两行都不影响它的位置。 */
-  grid-row: 1 / span 2;
-}
-
-/* 第二行：这一项实际用的模型，与状态文字对齐。 */
-.service-target {
-  grid-column: 2;
-  margin-top: 1px;
-  max-width: 100%;
-  overflow: hidden;
-  color: #8a938b;
-  font-size: 11px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-}
-
-.service-target:empty {
-  display: none;
 }
 
 .service-item-version {
@@ -3213,8 +3190,10 @@ body {
 .service-strip strong,
 .service-strip b {
   display: inline-block;
-  min-width: 48px;
+  min-width: 60px;
   color: #414842;
+  /* 四项的值列统一宽度且左对齐，标签到状态的间距才会一致。 */
+  text-align: left;
 }
 
 .status-action {
@@ -3235,8 +3214,14 @@ body {
   opacity: 0.72;
 }
 
-/* 版本项：状态文字与「更新」按钮等宽，两种状态切换时后面的项不会左右跳动。 */
-.service-item-version > b,
+/* 版本项：状态文字与「更新」按钮占用同一宽度，两种状态切换时后面的项不会左右跳动。 */
+.service-item-version > b {
+  box-sizing: border-box;
+  width: 60px;
+  min-width: 60px;
+  text-align: left;
+}
+
 .service-item-version > .status-action {
   box-sizing: border-box;
   width: 60px;
