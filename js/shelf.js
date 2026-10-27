@@ -73,7 +73,7 @@ function normalizeShelfState(value, items = documents) {
 }
 
 function getShelfStorageKey() {
-  return currentUser?.id ? `${SITE_STORAGE_PREFIX}.shelf.schema1.user-${currentUser.id}` : "";
+  return currentUser?.id ? `${SITE_STORAGE_PREFIX}.shelf.schema2.user-${currentUser.id}` : "";
 }
 
 function getShelfState() {

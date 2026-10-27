@@ -251,7 +251,7 @@ class HttpServices:
             return result
         if operation == "prepare":
             if source.suffix.lower() == ".pdf":
-                import fitz
+                import pymupdf as fitz
                 with fitz.open(source) as pdf:
                     if pdf.needs_pass or pdf.page_count < 1:
                         raise ProcessingFailure("PDF 已加密或没有页面")
@@ -266,7 +266,7 @@ class HttpServices:
                 suffix = source.suffix.lower() or ".png"
                 content = source.read_bytes()
             else:
-                import fitz
+                import pymupdf as fitz
                 with fitz.open(source) as pdf:
                     pixmap = pdf.load_page(page_number - 1).get_pixmap(
                         matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False)
@@ -350,7 +350,7 @@ def preserve_server_fields(connection, document):
         merged = dict(page)
         if edit:
             merged["notes"] = edit.get("notes", page.get("notes", ""))
-            if (not active or page.get("llmDone")) and "punctuatedText" in edit:
+            if (not active or page.get("proofreadingDone")) and "punctuatedText" in edit:
                 # 过期的未处理快照不能删除刚生成的文本；显式文本编辑仍予以保留。
                 if edit.get("processingRevision", -1) == page.get("processingRevision", 0):
                     merged["punctuatedText"] = edit["punctuatedText"]
@@ -512,12 +512,8 @@ class Scheduler:
                 page.setdefault("stageStatus", {})
                 page.setdefault("normalizedText", "")
                 page.setdefault("punctuationDraftText", "")
-                if page.get("llmDone") and not page.get("proofreadingDone"):
-                    page["proofreadingDone"] = True
-                    page["stageStatus"].setdefault("proofreading", "done")
                 for stage in PROCESSING_STAGES:
                     page.setdefault(f"{stage}Done", False)
-                page.setdefault("llmDone", page.get("proofreadingDone", False))
                 return page
         page = {
             "id": f"{doc['id']}-page-{number}", "pageNumber": number,
@@ -531,8 +527,6 @@ class Scheduler:
 
     @staticmethod
     def _stage_terminal(page, stage):
-        if stage == "proofreading" and page.get("llmDone"):
-            return True
         if page.get(f"{stage}Done"):
             return True
         status = (page.get("stageStatus") or {}).get(stage)
@@ -552,8 +546,6 @@ class Scheduler:
     def _set_stage(page, stage, status):
         page.setdefault("stageStatus", {})[stage] = status
         page[f"{stage}Done"] = True
-        if stage == "proofreading":
-            page["llmDone"] = True
 
     @classmethod
     def _skip_downstream(cls, page, stage):
@@ -667,14 +659,13 @@ class Scheduler:
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page["punctuationDraftText"] = str(result.get("punctuatedText") or "").strip()
-                    page["punctuationWarnings"] = result.get("warnings") or []
                     page["status"] = "已完成标点"
                     self._set_stage(page, "punctuation", "done")
                 elif operation == "proofreading":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page.update(punctuatedText=str(result.get("punctuatedText") or "").strip(),
-                                proofreadingWarnings=result.get("warnings") or [], status="已生成整理稿")
+                                status="已生成整理稿")
                     self._set_stage(page, "proofreading", "done")
             self._update_status(job, doc, cp)
             if operation == "prepare":

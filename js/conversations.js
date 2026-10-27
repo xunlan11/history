@@ -1011,11 +1011,10 @@ function conversationRetrievalMatches(request) {
   });
 }
 
-function renderConversationRetrieval(matches, query, container, collapsible = false) {
-  const section = document.createElement(collapsible ? "details" : "section");
+function renderConversationRetrieval(matches, query, container) {
+  const section = document.createElement("section");
   section.className = "conversation-retrieval";
-  if (collapsible) section.open = true;
-  const title = document.createElement(collapsible ? "summary" : "p");
+  const title = document.createElement("p");
   title.className = "conversation-retrieval-title";
   title.textContent = `匹配内容 · 共 ${matches.length} 条`;
   section.append(title);

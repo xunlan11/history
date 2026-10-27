@@ -23,6 +23,7 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -345,7 +346,6 @@ def cancel_streams_by_document(documentId: str = ""):
     return {"status": "ok", "cancelled": cancelled, "freedBytes": freed}
 
 
-@app.on_event("startup")
 def recover_pending_tasks() -> None:
     """恢复 OCR 服务重启时处于排队状态的任务。"""
     cleanup_temp_files()
@@ -370,6 +370,15 @@ def recover_pending_tasks() -> None:
             args=(task["taskId"],),
             daemon=True,
         ).start()
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    recover_pending_tasks()
+    yield
+
+
+app.router.lifespan_context = _lifespan
 
 
 def upload_suffix(filename: str | None, fallback: str) -> str:
@@ -493,7 +502,7 @@ def process_pdf(
     quick_read: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError as exc:
         raise RuntimeError("未安装 PDF 拆页组件 PyMuPDF") from exc
 
@@ -562,7 +571,7 @@ def build_metadata_candidate(path: Path, on_progress: Any = None) -> dict[str, A
         return {"text": str(result.get("text") or ""), "pagesRead": 1, "totalPages": 1}
 
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError as exc:
         raise RuntimeError("未安装 PDF 拆页组件 PyMuPDF") from exc
 
@@ -613,7 +622,6 @@ def recognize_image(
     表格与图片区域。
     """
     ensure_image_readable(path)
-    mode = "quick" if quick_read else "formal"
     report_progress(on_progress, "提交服务端识别", 0, status="running")
     result = ocr_upstream.recognize_page_image(
         path, page_number=page_number, mode="quick" if quick_read else "reader", on_progress=on_progress)
@@ -631,7 +639,6 @@ def recognize_image(
         "markdownImages": result.get("markdownImages") or {},
         "confidence": sum(scores) / len(scores) if scores else None,
         "engine": result.get("engine") or "remote",
-        "readMode": mode,
         "width": result.get("width"),
         "height": result.get("height"),
         "blocks": blocks,

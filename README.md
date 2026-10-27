@@ -45,4 +45,3 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 1. 编年。
 2. 水印。
-3. 图表。

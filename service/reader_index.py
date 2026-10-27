@@ -244,7 +244,7 @@ def pdf_line_char_boxes(pdf_path: Any, page_number: Any, lines: list[dict[str, A
     if not pdf_path or not page_number or not lines or not _dimension(image_width):
         return {}
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError:  # 数据端未装 PyMuPDF 时只是没有字级精度，不影响索引。
         return {}
     try:

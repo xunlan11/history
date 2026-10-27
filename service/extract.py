@@ -131,7 +131,7 @@ def decode_text(content: bytes) -> str:
 
 def extract_pdf(content: bytes) -> tuple[str, list[str]]:
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError as exc:
         raise FileExtractionError("PDF 文字提取组件未安装") from exc
 

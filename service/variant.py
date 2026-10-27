@@ -6,9 +6,8 @@ OpenCC 的 ``convert`` 是只读操作（词典只读、无共享可变状态）
 
 用法::
 
-    from service.variant import to_simplified, to_traditional, convert
+    from service.variant import to_simplified, convert
 
-    to_traditional("汉字与后台的头发")   # -> 漢字與後臺的頭髮
     to_simplified("漢字與後臺的頭髮")    # -> 汉字与后台的头发
     convert("汉字", "traditional")       # 按变体名转换
 
@@ -34,7 +33,6 @@ __all__ = [
     "convert",
     "convert_many",
     "to_simplified",
-    "to_traditional",
 ]
 
 SIMPLIFIED = "simplified"
@@ -101,7 +99,3 @@ def convert_many(texts: Iterable[str | None], variant: str = SIMPLIFIED) -> list
 
 def to_simplified(text: str | None) -> str:
     return convert(text, SIMPLIFIED)
-
-
-def to_traditional(text: str | None) -> str:
-    return convert(text, TRADITIONAL)

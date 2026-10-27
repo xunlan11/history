@@ -186,7 +186,7 @@ def test_registration_cannot_reuse_an_existing_document_id(api):
 
 
 def pdf_bytes(*pages):
-    import fitz
+    import pymupdf as fitz
     with fitz.open() as document:
         for text in pages:
             document.new_page().insert_text((72, 72), text)
@@ -201,7 +201,7 @@ def stage(api, upload_id, content, name="book.pdf", mime="application/pdf"):
 
 
 def original_pdf():
-    import fitz
+    import pymupdf as fitz
     with data.database() as connection:
         row = connection.execute("SELECT storage_path FROM document_files WHERE role='source'").fetchone()
     return fitz.open(data.FILE_STORAGE_DIR / row[0])
@@ -305,7 +305,7 @@ def test_concurrent_multi_file_registration_creates_only_one_job(api):
 
 
 def test_encrypted_pdf_reports_the_file_and_leaves_no_registration(api):
-    import fitz
+    import pymupdf as fitz
     with fitz.open(stream=pdf_bytes("SECRET"), filetype="pdf") as pdf:
         encrypted = pdf.tobytes(encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="password")
     stage(api, "encrypted", encrypted, "encrypted.pdf")

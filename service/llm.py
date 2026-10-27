@@ -12,7 +12,7 @@ from typing import Any, Iterator, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, normalize_chronicle_dates, validate_result_citations
 from service.task_progress import progress_reporter, read_progress
@@ -76,8 +76,7 @@ class FinalizePageRequest(LlmTaskRequest):
     punctuationDraftText: str = ""
     previousPages: list[PreviousPageContext] = Field(default_factory=list)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ExtractMetadataRequest(LlmTaskRequest):

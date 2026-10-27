@@ -210,10 +210,6 @@ editDocumentButton?.addEventListener("click", async () => {
 });
 
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);
-const exportPdfButton = document.querySelector("#export-pdf");
-if (exportPdfButton) {
-  exportPdfButton.addEventListener("click", exportPdf);
-}
 
 searchInput?.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

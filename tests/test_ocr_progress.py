@@ -2,7 +2,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-import fitz
+import pymupdf as fitz
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image

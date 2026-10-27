@@ -80,8 +80,7 @@ test('all three groups render, including every result above the old limits', () 
   };
   const hits = Array.from({ length: 75 }, (_, i) => ({ ...evidence(i), quote: 'army', level: i < 30 ? 'exact' : i < 60 ? 'partial' : 'semantic' }));
   const container = new Element('div');
-  context.renderConversationRetrieval(hits, 'army', container, true);
-  assert.equal(container.children[0].open, true);
+  context.renderConversationRetrieval(hits, 'army', container);
   const groups = container.children[0].children.filter((node) => node.tag === 'details');
   assert.equal(groups.length, 3);
   assert.deepEqual(groups.map((group) => group.children[1].children.length), [30, 30, 15]);

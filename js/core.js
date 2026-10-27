@@ -13,7 +13,7 @@ const SITE_TITLE = SITE_TITLES[SITE_ID] || SITE_ID;
 // localStorage 按站点隔离；history 固定使用 modernMilitaryHistory 前缀，避免既有数据失效
 const SITE_STORAGE_PREFIX = SITE_ID === "history" ? "modernMilitaryHistory" : `wenqu.${SITE_ID}`;
 
-const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema9`;
+const STORAGE_KEY = `${SITE_STORAGE_PREFIX}.documents.schema10`;
 const FONT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.font.schema4`;
 const VARIANT_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.variant.schema1`;
 const DATA_SCHEMA_VERSION = 9;
@@ -261,8 +261,7 @@ const editDocumentButton = document.querySelector("#edit-document");
 const editDocumentLabel = document.querySelector("#edit-document-label");
 const readerDetailNode = document.querySelector("#reader-document-detail");
 const readerDetailActions = document.querySelector("#reader-detail-actions");
-const streamStatus = document.querySelector("#stream-status, #reader-stream-status");
-const streamProgress = document.querySelector("#stream-progress, #reader-stream-progress");
+const streamProgress = document.querySelector("#reader-stream-progress");
 const searchInput = document.querySelector("#search-input");
 const searchResults = document.querySelector("#search-results");
 const chronicleTopic = document.querySelector("#chronicle-topic");
@@ -314,14 +313,13 @@ const openSettingsButton = document.querySelector("#open-settings");
 const settingsDialog = document.querySelector("#settings-dialog");
 const closeSettingsButton = document.querySelector("#close-settings");
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
-const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema9`;
-const CLIENT_ID_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.clientId.schema4`;
-const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema9`;
-const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema9`;
-const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema9`;
-const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema9`;
+const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema10`;
+const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema10`;
+const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema10`;
+const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema10`;
+const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema10`;
 // 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
-const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema9`;
+const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels.schema10`;
 
 
 function getConversationStorageKey() {
@@ -386,7 +384,7 @@ function createRegistrationState() {
 function normalizeRegistration(value) {
   if (!value || typeof value !== "object") return null;
   const state = createRegistrationState();
-  if (["pending", "running", "waiting", "paused", "failed", "completed"].includes(value.status)) state.status = value.status;
+  if (["pending", "running", "waiting", "failed", "completed"].includes(value.status)) state.status = value.status;
   if (["archive", "metadata", "submit", "completed"].includes(value.stage)) state.stage = value.stage;
   if (["pending", "completed", "skipped"].includes(value.metadata)) state.metadata = value.metadata;
   state.error = typeof value.error === "string" ? value.error : "";
@@ -465,7 +463,6 @@ function normalizeDocuments(items) {
             variantDone: page.variantDone === true,
             punctuationDone: page.punctuationDone === true,
             proofreadingDone: page.proofreadingDone === true,
-            llmDone: page.llmDone === true || page.proofreadingDone === true,
             failureStage: page.failureStage || "",
             failureMessage: page.failureMessage || "",
             updatedAt: page.updatedAt || "",
@@ -532,15 +529,6 @@ function persistConversations() {
 function persistConversationsCache() {
   const storageKey = getConversationStorageKey();
   if (storageKey) localStorage.setItem(storageKey, JSON.stringify(conversations));
-}
-
-function getClientId() {
-  let clientId = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-  if (!clientId) {
-    clientId = newId();
-    localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
-  }
-  return clientId;
 }
 
 function cacheCurrentState() {
@@ -742,7 +730,6 @@ async function pushServerSnapshot() {
   const pushedRevision = syncRevision;
   const payload = {
     schemaVersion: DATA_SCHEMA_VERSION,
-    clientId: getClientId(),
     shelf: getShelfState(),
     documents,
     conversations,
@@ -1155,7 +1142,6 @@ function ensureSelectedPage(item) {
 function summarizeDocumentStatus(item) {
   if (item?.processingTask?.backendManaged) return item.processingTask.status || item.status || "排队中";
   if (isDocumentRegistrationPending(item)) {
-    if (item.registration.status === "paused") return "登记已暂停";
     if (item.registration.status === "failed") return "登记未完成";
     return "登记中";
   }
@@ -1341,11 +1327,6 @@ function normalizeStoredOcr(ocr) {
     engine: ocr.engine || "识别服务",
     width: ocr.width ?? null,
     height: ocr.height ?? null,
-    blockCount: Number(ocr.blockCount) || 0,
-    blockTypes: Array.isArray(ocr.blockTypes) ? ocr.blockTypes : [],
-    hasMarkdown: Boolean(ocr.hasMarkdown),
-    upstream: ocr.upstream || null,
     warnings: Array.isArray(ocr.warnings) ? ocr.warnings : [],
-    recognizedAt: ocr.recognizedAt || "",
   };
 }

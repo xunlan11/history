@@ -235,7 +235,7 @@ def ready_uploads(connection, ids, user):
 
 
 def merge_sources(rows, output):
-    import fitz
+    import pymupdf as fitz
     with fitz.open() as merged:
         for row in rows:
             try:

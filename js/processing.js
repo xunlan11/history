@@ -49,7 +49,7 @@ function applyBackendProcessingDocument(documentId, payload) {
       const local = localPages.get(page.id);
       if (!local) continue;
       page.notes = local.notes || "";
-      if (local.llmDone && local.processingRevision === page.processingRevision) {
+      if (local.proofreadingDone && local.processingRevision === page.processingRevision) {
         page.punctuatedText = local.punctuatedText;
       }
     }
@@ -124,7 +124,6 @@ let progressTotalNode, progressModeNode, progressFailedNode, failedPageMarkers;
 
 function setupCombinedProgress() {
   if (!streamProgress) return;
-  streamStatus?.remove();
   progressStageNodes = new Map([...streamProgress.querySelectorAll("[data-progress-stage]")].map((node) => [node.dataset.progressStage, {
     root: node,
     pages: node.querySelector("[data-progress-pages]"),
@@ -199,7 +198,6 @@ function renderFailedProcessingPages(item) {
 // 页是否已走过某个阶段（与后端 _stage_terminal 对齐：完成、失败、跳过都算终结）。
 function isStagePageTerminal(page, stageKey) {
   if (page?.[`${stageKey}Done`]) return true;
-  if (stageKey === "proofreading" && page?.llmDone) return true;
   const status = page?.stageStatus?.[stageKey];
   return status === "done" || status === "failed" || status === "skipped";
 }

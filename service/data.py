@@ -10,7 +10,8 @@ import re
 import secrets
 import shutil
 import sqlite3
-from contextlib import contextmanager
+import sys
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -94,7 +95,6 @@ async def auth_middleware(request: Request, call_next):
 
 class SyncPayload(BaseModel):
     schemaVersion: int
-    clientId: str = ""
     documents: list[dict[str, Any]] = Field(default_factory=list)
     conversations: list[dict[str, Any]] = Field(default_factory=list)
     deletedDocumentIds: list[str] = Field(default_factory=list)
@@ -1843,7 +1843,6 @@ def remove_failed_processing_page(document_id: str, page_number: int):
             omitted.append(page_number)
         # 此事务不会与页面结果提交发生竞争。只有失败且已终止的页面阶段可以删除，
         # 已归档原件保持不变。
-        import sys
         processing_scheduler.save_job_state(sys.modules[__name__], connection, dict(row), document, checkpoint)
         return {"document": public_processing_document(connection, document_id, user)}
 
@@ -1918,28 +1917,29 @@ _semantic_worker = None
 _embedding_client = EmbeddingClient()
 
 
-@app.on_event("startup")
-def start_document_scheduler():
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
     global _scheduler_worker, _semantic_worker
-    import sys
     with database():
         pass
     uploads.start_cleanup()
-    if semantic_enabled():
-        _semantic_worker = SemanticWorker(database, _embedding_client)
-        _semantic_worker.start()
-    if os.getenv("PROCESSING_SCHEDULER_ENABLED", "true").lower() not in {"0", "false", "no"}:
-        _scheduler_worker = processing_scheduler.Scheduler(sys.modules[__name__])
-        _scheduler_worker.start()
+    try:
+        if semantic_enabled():
+            _semantic_worker = SemanticWorker(database, _embedding_client)
+            _semantic_worker.start()
+        if os.getenv("PROCESSING_SCHEDULER_ENABLED", "true").lower() not in {"0", "false", "no"}:
+            _scheduler_worker = processing_scheduler.Scheduler(sys.modules[__name__])
+            _scheduler_worker.start()
+        yield
+    finally:
+        uploads.stop_cleanup()
+        if _semantic_worker:
+            _semantic_worker.stop()
+        if _scheduler_worker:
+            _scheduler_worker.stop()
 
 
-@app.on_event("shutdown")
-def stop_document_scheduler():
-    uploads.stop_cleanup()
-    if _semantic_worker:
-        _semantic_worker.stop()
-    if _scheduler_worker:
-        _scheduler_worker.stop()
+app.router.lifespan_context = _lifespan
 
 
 @app.post("/api/conversation-files/upload")

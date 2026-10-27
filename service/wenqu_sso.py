@@ -31,21 +31,6 @@ SELECT a.* FROM sessions s
 """
 
 
-def parse_cookies(header: Optional[str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for part in (header or "").split(";"):
-        if "=" not in part:
-            key = part.strip()
-            if key:
-                out[key] = ""
-            continue
-        key, value = part.split("=", 1)
-        key = key.strip()
-        if key:
-            out[key] = value.strip()
-    return out
-
-
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
