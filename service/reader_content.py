@@ -26,6 +26,9 @@ CAPTION_GAP_TYPES = CAPTION_TYPES | {"formula", "formula_number"}
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 TABLE_CAPTION_HINT = re.compile(r"^(?:表|tab(?:le)?\.?)\s*[0-9０-９一二三四五六七八九十百零〇]*", re.I)
 FIGURE_CAPTION_HINT = re.compile(r"^(?:图|fig(?:ure)?\.?|chart|illustration|map|plate)\s*[0-9０-９一二三四五六七八九十百零〇]*", re.I)
+# 图表旁的“注：/Note:”说明：OCR 常把它识别成正文，需要在内容层归到图表上。
+NOTE_HINT = re.compile(r"^\s*(?:注|说明|备注|note)\s*[:：]", re.I)
+NOTE_MAX_CHARS = 1500
 
 
 def digest(text):
@@ -291,6 +294,77 @@ def _utf16_offsets(text):
     return offsets
 
 
+def _region_box(item):
+    regions = item.get("sourceRegions") or []
+    if not regions:
+        return None
+    try:
+        x1, y1, x2, y2 = (float(n) for n in regions[0].get("bbox"))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(n) for n in (x1, y1, x2, y2)) or x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+def merge_caption_visuals(visuals, layout):
+    """把未归属的题注块按坐标并回最近的图表，避免它们单独渲染成“标题归属待核对”。"""
+    page_height = float(layout.get("imageHeight") or 0)
+    if page_height <= 0 or len(visuals) < 2:
+        return visuals
+    targets = [(visual, _region_box(visual)) for visual in visuals if visual.get("kind") != "caption"]
+    targets = [(visual, box) for visual, box in targets if box]
+    orphans = [visual for visual in visuals if visual.get("kind") == "caption" and _region_box(visual)]
+    if not targets or not orphans:
+        return visuals
+    merged = set()
+    for orphan in orphans:
+        box = _region_box(orphan)
+        candidates = []
+        for target, target_box in targets:
+            overlap = min(box[2], target_box[2]) - max(box[0], target_box[0])
+            narrower = min(box[2] - box[0], target_box[2] - target_box[0])
+            if narrower <= 0 or overlap < narrower * 0.5:
+                continue
+            # 图表与题注之间可以夹着注释等正文块，这里只看两者自身的纵向距离。
+            gap = max(0.0, target_box[1] - box[3], box[1] - target_box[3])
+            if gap > page_height * 0.3:
+                continue
+            candidates.append((gap, target, target_box))
+        if not candidates:
+            continue
+        candidates.sort(key=lambda entry: entry[0])
+        if len(candidates) > 1 and candidates[1][0] <= candidates[0][0] + 2:
+            continue  # 距离相同，归属有歧义，保持原状
+        _gap, target, target_box = candidates[0]
+        caption = dict((orphan.get("captions") or [{}])[0])
+        if not caption.get("text"):
+            continue
+        caption["position"] = "after" if box[1] >= target_box[1] else "before"
+        target.setdefault("captions", []).append(caption)
+        merged.add(orphan["id"])
+    if not merged:
+        return visuals
+    for target, _box in targets:
+        captions = target.get("captions") or []
+        if len(captions) > 1:
+            # 按版面纵坐标排序，保证“注 → Note → 图题 → Fig.”的顺序。
+            captions.sort(key=lambda cap: (_region_box(cap) or (0, float("inf"), 0, 0))[1])
+    return [visual for visual in visuals if visual["id"] not in merged]
+
+
+def leading_note_end(text: str, start: int, end: int):
+    """紧跟图表之后、以“注：/Note:”开头的首段，作为图表注释单独渲染。"""
+    segment = text[start:end]
+    if not NOTE_HINT.match(segment):
+        return None
+    paragraph_end = segment.find("\n\n")
+    note_end = start + (paragraph_end if paragraph_end >= 0 else len(segment))
+    if note_end - start > NOTE_MAX_CHARS:
+        return None
+    return note_end
+
+
 def build_reader_content(layout, page):
     displayed = page.get("punctuatedText") or page.get("ocrText") or ""
     source = layout.get("contentSourceText", page.get("ocrText") or "")
@@ -299,6 +373,7 @@ def build_reader_content(layout, page):
     current_image = not layout.get("contentImageHash") or layout.get("contentImageHash") == image_hash
     if not current_image:
         visuals = []
+    visuals = merge_caption_visuals(visuals, layout)
     normalized_source, source_pos = _normalized(source)
     normalized_target, target_pos = _normalized(displayed)
     matches = SequenceMatcher(None, normalized_source, normalized_target, autojunk=False).get_matching_blocks() if visuals else []
@@ -342,12 +417,19 @@ def build_reader_content(layout, page):
             point, state = previous, "approximate"
         placed[index] = (point, visual, state)
         previous = point
-    offsets, items, cursor = _utf16_offsets(displayed), [], 0
+    offsets, items, cursor, last_visual = _utf16_offsets(displayed), [], 0, None
     for point, visual, state in placed:
         if point > cursor:
-            items.append({"type": "text", "start": offsets[cursor], "end": offsets[point]})
+            start = cursor
+            note_end = leading_note_end(displayed, start, point) if last_visual else None
+            if note_end is not None:
+                items.append({"type": "note", "start": offsets[start], "end": offsets[note_end],
+                              "visualId": last_visual})
+                start = note_end
+            if point > start:
+                items.append({"type": "text", "start": offsets[start], "end": offsets[point]})
         items.append({"type": "visual", "visualId": visual["id"], "placement": state})
-        cursor = point
+        cursor, last_visual = point, visual["id"]
     if cursor < len(displayed):
         items.append({"type": "text", "start": offsets[cursor], "end": offsets[-1]})
     return {"version": 1, "sourceRevision": int(page.get("processingRevision") or 0),

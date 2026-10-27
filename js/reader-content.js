@@ -66,6 +66,11 @@ function isReaderContentValid(content, page) {
       if (!Number.isInteger(entry.start) || !Number.isInteger(entry.end) || entry.start !== offset ||
           entry.end <= offset || entry.end > text.length || !boundary(entry.start) || !boundary(entry.end)) return false;
       offset = entry.end;
+    } else if (entry?.type === "note") {
+      if (!Number.isInteger(entry.start) || !Number.isInteger(entry.end) || entry.start !== offset ||
+          entry.end <= offset || entry.end > text.length || !boundary(entry.start) || !boundary(entry.end) ||
+          typeof entry.visualId !== "string" || !Object.hasOwn(content.visuals, entry.visualId)) return false;
+      offset = entry.end;
     } else if (entry?.type === "visual") {
       const visual = Object.hasOwn(content.visuals, entry.visualId) && content.visuals[entry.visualId];
       if (!visual || !visual.id || visual.id !== entry.visualId || seen.has(visual.id) ||
@@ -200,15 +205,34 @@ function renderReaderContent(page, content, readerIndex = null) {
   if ((typeof readerEditing !== "undefined" && readerEditing) || !isReaderContentValid(content, page) ||
       typeof readerText === "undefined" || !readerText) return false;
   const fragment = document.createDocumentFragment();
+  const figures = new Map();
   const index = readerContentSentenceIndex(readerIndex, page, content.displayedText);
   for (const entry of content.items) {
     if (entry.type === "visual") {
       const figure = createReaderVisual(content.visuals[entry.visualId]);
+      figures.set(entry.visualId, figure);
       if (["unplaced", "approximate"].includes(entry.placement)) {
         figure.append(readerVisualElement("p", "reader-visual-placement-status",
           entry.placement === "unplaced" ? "位置待核对，请对照原页。" : "位置近似，请对照原页。"));
       }
       fragment.append(figure);
+      continue;
+    }
+    if (entry.type === "note") {
+      // 紧跟图表后的“注：”在内容层被标成图表注释：仍占正文区间（校验/检索不变），但不按段落渲染。
+      const figure = figures.get(entry.visualId);
+      const raw = content.displayedText.slice(entry.start, entry.end);
+      const value = raw.trim();
+      if (figure && value) {
+        const note = readerVisualElement("figcaption", "reader-visual-note", value);
+        note.dataset.readerAuxiliary = "true";
+        note.dataset.readerTextStart = String(entry.start + raw.length - raw.trimStart().length);
+        note.dataset.readerTextEnd = String(entry.end - (raw.length - raw.trimEnd().length));
+        const firstCaption = figure.querySelector(".reader-visual-caption");
+        if (firstCaption) figure.insertBefore(note, firstCaption); else figure.append(note);
+      } else if (value) {
+        fragment.append(document.createTextNode(value));
+      }
       continue;
     }
     const slices = index ? index.sentences.filter((sentence) => sentence.end > entry.start && sentence.start < entry.end) : [entry];
@@ -376,17 +400,18 @@ function setReaderVisualActive(id, options = {}) {
   if (!options.hover && options.scrollImage) scroll(readerOriginalPreview);
 }
 
-// 大图视图按原图 2.5 倍展示（不超过视口），比页内嵌图明显更大。
-const READER_VISUAL_LARGE_SCALE = 2.5;
+// 大图默认按屏幕自适应（装得下就铺满，不无限放大低分辨率小图）；滚轮可继续缩放。
+const READER_VISUAL_MAX_FIT_SCALE = 4;
+const READER_VISUAL_MIN_SCALE = 0.2;
+const READER_VISUAL_MAX_SCALE = 8;
 
-function scaleReaderVisualLarge(image) {
-  const natural = Number(image.naturalWidth) || 0;
-  if (!natural) return;
-  const viewport = Number(document.documentElement?.clientWidth) || Number(globalThis.innerWidth) || 1200;
-  const available = Math.max(320, viewport * 0.94 - 80);
-  image.style.width = `${Math.round(Math.min(natural * READER_VISUAL_LARGE_SCALE, available))}px`;
-  image.style.height = "auto";
-  image.style.maxWidth = "none";
+function readerVisualFitScale(natural, viewport) {
+  const width = Number(natural?.width) || 0, height = Number(natural?.height) || 0;
+  if (!width || !height) return 1;
+  const viewportWidth = Number(viewport?.width) || 1200, viewportHeight = Number(viewport?.height) || 800;
+  const availableWidth = Math.max(240, Math.min(viewportWidth * 0.96, 1760) - 96);
+  const availableHeight = Math.max(240, viewportHeight * 0.92 - 120);
+  return Math.min(availableWidth / width, availableHeight / height, READER_VISUAL_MAX_FIT_SCALE);
 }
 
 function openReaderVisualLarge(id) {
@@ -394,17 +419,37 @@ function openReaderVisualLarge(id) {
   if (!figure) return;
   document.querySelector(".reader-visual-dialog")?.remove();
   const dialog = readerVisualElement("dialog", "reader-visual-dialog");
-  dialog.setAttribute("aria-label", "图表大图");
+  dialog.setAttribute("aria-label", "图表大图，滚轮可缩放");
   const close = readerVisualElement("button", "reader-visual-dialog-close", "关闭");
   close.type = "button";
   close.addEventListener("click", () => { if (dialog.open) dialog.close(); else dialog.remove(); });
   const copy = figure.cloneNode(true);
-  dialog.append(close, copy);
+  const hint = readerVisualElement("p", "reader-visual-dialog-hint", "滚轮缩放 · Esc 关闭");
+  dialog.append(close, copy, hint);
   const largeImage = copy.querySelector("img");
+  const applyScale = (scale) => {
+    const natural = Number(largeImage?.naturalWidth) || 0;
+    if (!natural) return scale;
+    largeImage.style.width = `${Math.round(natural * scale)}px`;
+    largeImage.style.height = "auto";
+    largeImage.style.maxWidth = "none";
+    return scale;
+  };
+  let scale = 1;
+  const fitToViewport = () => {
+    scale = applyScale(readerVisualFitScale({ width: largeImage?.naturalWidth, height: largeImage?.naturalHeight }, {
+      width: document.documentElement?.clientWidth, height: document.documentElement?.clientHeight }));
+  };
   if (largeImage) {
     largeImage.loading = "eager";
-    if (largeImage.complete && largeImage.naturalWidth) scaleReaderVisualLarge(largeImage);
-    else largeImage.addEventListener("load", () => scaleReaderVisualLarge(largeImage), { once: true });
+    if (largeImage.complete && largeImage.naturalWidth) fitToViewport();
+    else largeImage.addEventListener("load", fitToViewport, { once: true });
+    dialog.addEventListener("wheel", (event) => {
+      if (!largeImage.naturalWidth) return;
+      event.preventDefault();
+      const next = scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12);
+      scale = applyScale(Math.min(READER_VISUAL_MAX_SCALE, Math.max(READER_VISUAL_MIN_SCALE, next)));
+    }, { passive: false });
   }
   const restore = () => { dialog.remove(); figure.focus(); };
   dialog.addEventListener("close", restore, { once: true });

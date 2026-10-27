@@ -53,6 +53,14 @@ class FakeNode {
   replaceChildren(...nodes) { for (const node of this.childNodes) node.parentNode = null; this.childNodes = []; this.append(...nodes); }
   remove() { if (this.parentNode) this.parentNode.childNodes = this.parentNode.childNodes.filter((node) => node !== this); this.parentNode = null; }
   replaceWith(node) { const parent = this.parentNode, index = parent.childNodes.indexOf(this); this.remove(); parent.childNodes.splice(index, 0, node); node.parentNode = parent; }
+  insertBefore(node, reference) {
+    if (typeof node === 'string') node = this.ownerDocument.createTextNode(node);
+    node.remove();
+    const index = this.childNodes.indexOf(reference);
+    if (index < 0) this.childNodes.push(node); else this.childNodes.splice(index, 0, node);
+    node.parentNode = this;
+    return node;
+  }
   contains(node) { return node === this || this.childNodes.some((child) => child.contains(node)); }
   matches(selector) {
     return selector.split(',').some((part) => {
@@ -277,6 +285,38 @@ if (require.main === module) {
     env.document.querySelector('.reader-visual-dialog-close').click(); assert.equal(env.document.querySelector('dialog'), null);
     assert.equal(env.c.readerVisualSafeUrl('data:text/html,bad'), '');
     assert.equal(env.c.readerVisualSafeUrl('/crop.png'), 'https://reader.example/crop.png');
+  });
+  test('figure notes render inside the figure and keep full text coverage', () => {
+    const env = setup();
+    const text = 'A😀B\n\n注：示例\n\nC';
+    env.page.text = text;
+    const content = { version: 1, sourceRevision: 7, displayedText: text, textHash: digest(text), imageHash: env.page.imageHash,
+      items: [
+        { type: 'text', start: 0, end: 4 },
+        { type: 'visual', visualId: 'v1' },
+        { type: 'note', start: 4, end: 10, visualId: 'v1' },
+        { type: 'text', start: 10, end: text.length },
+      ],
+      visuals: { v1: { id: 'v1', kind: 'figure', renderMode: 'image', url: '/visual.png',
+        captions: [{ id: 'c1', text: '图1 标题', position: 'after' }] } }, warnings: [] };
+    assert.equal(env.c.renderReaderContent(env.page, content), true);
+    const figure = env.readerText.querySelector('.reader-visual');
+    assert.equal(figure.querySelector('.reader-visual-note').textContent, '注：示例');
+    assert.equal(figure.querySelector('.reader-visual-caption').textContent, '图1 标题');
+    assert.equal(figure.children[figure.children.length - 1].className.includes('reader-visual-caption'), true);
+    assert.equal(env.readerText.querySelectorAll('.reader-visual-note').length, 1);
+    assert.equal(env.readerText.textContent.includes('注：示例'), true);
+    assert.ok(env.readerText.textContent.endsWith('C'));
+  });
+  test('large view fits the viewport and caps upscaling of tiny images', () => {
+    const { c } = setup();
+    const viewport = { width: 1600, height: 900 };
+    const small = c.readerVisualFitScale({ width: 100, height: 200 }, viewport);
+    assert.ok(Math.abs(small - 3.54) < 0.01, String(small));
+    const wide = c.readerVisualFitScale({ width: 2000, height: 1000 }, viewport);
+    assert.ok(Math.abs(wide - 0.708) < 0.01, String(wide));
+    assert.equal(c.readerVisualFitScale({ width: 200, height: 100 }, viewport), 4);
+    assert.equal(c.readerVisualFitScale({ width: 0, height: 0 }, viewport), 1);
   });
   test('standalone caption titles render without an image or enlarge control', () => {
     const env = setup();
