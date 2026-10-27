@@ -157,6 +157,7 @@ function createReaderVisual(visual) {
       image.addEventListener("error", () => {
         image.replaceWith(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用"));
       }, { once: true });
+      figure.classList.add("is-zoomable");
       figure.append(image);
     } else if (visual.kind !== "caption") {
       figure.append(readerVisualElement("p", "reader-visual-unavailable", "图像暂不可用"));
@@ -167,12 +168,6 @@ function createReaderVisual(visual) {
     }
   }
   for (const { node, caption } of captions) if (caption.position === "after") figure.append(node);
-  if (visual.kind === "caption") return figure;
-  const enlarge = readerVisualElement("button", "reader-visual-enlarge", "放大查看");
-  enlarge.type = "button";
-  enlarge.dataset.readerVisualEnlarge = visual.id;
-  enlarge.setAttribute("aria-label", "放大查看" + readerVisualKindLabel(visual.kind));
-  figure.append(enlarge);
   return figure;
 }
 
@@ -381,6 +376,19 @@ function setReaderVisualActive(id, options = {}) {
   if (!options.hover && options.scrollImage) scroll(readerOriginalPreview);
 }
 
+// 大图视图按原图 2.5 倍展示（不超过视口），比页内嵌图明显更大。
+const READER_VISUAL_LARGE_SCALE = 2.5;
+
+function scaleReaderVisualLarge(image) {
+  const natural = Number(image.naturalWidth) || 0;
+  if (!natural) return;
+  const viewport = Number(document.documentElement?.clientWidth) || Number(globalThis.innerWidth) || 1200;
+  const available = Math.max(320, viewport * 0.94 - 80);
+  image.style.width = `${Math.round(Math.min(natural * READER_VISUAL_LARGE_SCALE, available))}px`;
+  image.style.height = "auto";
+  image.style.maxWidth = "none";
+}
+
 function openReaderVisualLarge(id) {
   const figure = Array.from(readerText.querySelectorAll(".reader-visual")).find((node) => node.dataset.readerVisualId === id);
   if (!figure) return;
@@ -391,9 +399,14 @@ function openReaderVisualLarge(id) {
   close.type = "button";
   close.addEventListener("click", () => { if (dialog.open) dialog.close(); else dialog.remove(); });
   const copy = figure.cloneNode(true);
-  copy.querySelectorAll(".reader-visual-enlarge").forEach((node) => node.remove());
   dialog.append(close, copy);
-  const restore = () => { dialog.remove(); figure.querySelector(".reader-visual-enlarge")?.focus(); };
+  const largeImage = copy.querySelector("img");
+  if (largeImage) {
+    largeImage.loading = "eager";
+    if (largeImage.complete && largeImage.naturalWidth) scaleReaderVisualLarge(largeImage);
+    else largeImage.addEventListener("load", () => scaleReaderVisualLarge(largeImage), { once: true });
+  }
+  const restore = () => { dialog.remove(); figure.focus(); };
   dialog.addEventListener("close", restore, { once: true });
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && typeof dialog.showModal !== "function") { event.preventDefault(); restore(); }
@@ -429,9 +442,12 @@ function bindReaderVisualEvents(container) {
   const click = (event) => {
     const node = target(event);
     if (!node) return;
-    const enlarge = event.target?.closest?.("[data-reader-visual-enlarge]");
-    if (enlarge) { openReaderVisualLarge(enlarge.dataset.readerVisualEnlarge); return; }
     if (event.target?.closest?.("button,a,input,select,textarea") && !node.classList.contains("reader-visual-region")) return;
+    // 图表本体（含图片）单击即看大图；题注仍走选中/定位。
+    if (!node.dataset.readerCaptionId && node.querySelector("img")) {
+      openReaderVisualLarge(node.dataset.readerVisualId);
+      return;
+    }
     setReaderVisualActive(node.dataset.readerVisualId, { captionId: node.dataset.readerCaptionId, scrollText: true, scrollImage: true });
   };
   container.addEventListener("pointerover", hover);

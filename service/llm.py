@@ -127,6 +127,12 @@ class LlmServiceUnavailable(LlmServiceError):
 # 用于校验“模型只加了标点”的正文比较：标点与空白都不算正文字符。
 COMPARE_IGNORED_CATEGORIES = {"P", "Z"}
 
+# 校对结果的段落级核对：短于此长度的段落（小标题、脚注）不参与“整段丢失”判定；
+# 覆盖率低于该值且达到长度阈值的段落，用标点稿原文回填。
+FINALIZE_PARAGRAPH_MIN_CHARS = 12
+FINALIZE_PARAGRAPH_MIN_COVERAGE = 0.5
+FINALIZE_SHINGLE_SIZE = 8
+
 
 def normalize_layout_text(text: str) -> str:
     """清理 OCR 版面文本的空白，但保留逐行、逐列的换行。
@@ -185,16 +191,99 @@ def validate_punctuation_result(source: str, output: str) -> None:
         raise LlmServiceError("标点服务没有给出标点：原文和结果都没有句内或句末点号。")
 
 
-def validate_finalize_result(source: str, output: str) -> None:
-    """校对允许改字，但不允许相对输入大幅缩水（缩水多半是模型写成了摘要）。"""
+def split_paragraphs(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
+
+
+def _shingles(text: str, size: int = FINALIZE_SHINGLE_SIZE) -> set[str]:
+    return {text[index:index + size] for index in range(max(0, len(text) - size + 1))}
+
+
+def paragraph_coverage(paragraph: str, body: str, shingles: set[str]) -> float:
+    """段落里有多大比例的字符能在对照文本中找到（8 字滑窗）。
+
+    按滑窗而不是整段精确匹配，段落被合并、拆分、调序或改了几个字时仍然算“在”。
+    短于两个滑窗的段落退化为子串判断。
+    """
+    source = content_characters(paragraph)
+    if not source:
+        return 1.0
+    size = FINALIZE_SHINGLE_SIZE
+    if len(source) < size * 2:
+        return 1.0 if source in body else 0.0
+    total = len(source) - size + 1
+    hits = sum(1 for index in range(total) if source[index:index + size] in shingles)
+    return hits / total
+
+
+def _locate_output_paragraph(output_paragraphs: list[str], paragraph: str) -> int | None:
+    """在输出段落里找一段的落点（比对正文首尾片段，容忍段内改字）。"""
+    target = content_characters(paragraph)
+    if len(target) < 8:
+        return None
+    head, tail = target[:12], target[-12:]
+    for index, candidate in enumerate(output_paragraphs):
+        body = content_characters(candidate)
+        if head in body or tail in body:
+            return index
+    return None
+
+
+def repair_finalize_result(source: str, output: str) -> tuple[str, list[str]]:
+    """段落级核对校对结果：整段丢失时用标点稿原文回填，而不是废掉整页。
+
+    页级比例校验会把“偶发丢一段”当成整页摘要，重试也未必撞得回来；段落级比对能
+    锚定丢了哪一段，并把这一段补回原位，其余段落的校对成果照常保留。
+    """
     if not output.strip():
         raise LlmServiceError("校对服务没有返回正文。")
-    source_length = len(content_characters(source))
-    output_length = len(content_characters(output))
-    if source_length >= 200 and output_length < source_length * 0.85:
-        raise LlmServiceError(
-            f"校对结果只有 {output_length} 字，原文 {source_length} 字，疑似摘要，已放弃本次结果。"
+    source_paragraphs = split_paragraphs(source)
+    output_paragraphs = split_paragraphs(output)
+    source_content = content_characters(source)
+    if not source_content or not source_paragraphs or not output_paragraphs:
+        return output, []
+    output_content = content_characters(output)
+    output_shingles = _shingles(output_content)
+    missing = [
+        (index, paragraph) for index, paragraph in enumerate(source_paragraphs)
+        if len(content_characters(paragraph)) >= FINALIZE_PARAGRAPH_MIN_CHARS
+        and paragraph_coverage(paragraph, output_content, output_shingles) < FINALIZE_PARAGRAPH_MIN_COVERAGE
+    ]
+    for index, paragraph in missing:
+        # 优先接在原文后一段的位置，找不到就接在前一段后面，都没有就放到末尾。
+        position = next(
+            (pos for pos in (_locate_output_paragraph(output_paragraphs, source_paragraphs[other])
+                             for other in range(index + 1, len(source_paragraphs))) if pos is not None),
+            None,
         )
+        if position is None:
+            position = next(
+                (pos + 1 for pos in (_locate_output_paragraph(output_paragraphs, source_paragraphs[other])
+                                     for other in range(index - 1, -1, -1)) if pos is not None),
+                len(output_paragraphs),
+            )
+        output_paragraphs.insert(position, paragraph)
+    warnings: list[str] = []
+    if len(missing) == 1:
+        index, paragraph = missing[0]
+        warnings.append(f"第 {index + 1} 段疑似整段丢失（开头「{paragraph[:20]}」），已回填标点稿原文，请核对。")
+    elif missing:
+        warnings.append(
+            f"校对结果有 {len(missing)} 段整段丢失（首段开头「{missing[0][1][:20]}」），"
+            "已按标点稿回填，请核对。"
+        )
+    # 模型串页或扩写：输出里有成段内容在标点稿中找不到。
+    source_shingles = _shingles(source_content)
+    extras = [
+        paragraph for paragraph in output_paragraphs
+        if len(content_characters(paragraph)) >= 40
+        and paragraph_coverage(paragraph, source_content, source_shingles) < FINALIZE_PARAGRAPH_MIN_COVERAGE
+    ]
+    if extras:
+        warnings.append(
+            f"校对结果有 {len(extras)} 段内容在标点稿中找不到（可能是上一页串入或扩写），请核对。"
+        )
+    return "\n\n".join(output_paragraphs), warnings
 
 
 def text_task_budget(prompt: str, source_length: int) -> tuple[int, int]:
@@ -501,10 +590,10 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
         result = call_text_task(prompt, "punctuatedText", "校对", offset_reporter(report, 0),
                                 context_tokens=context_tokens, output_tokens=output_tokens)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
-        validate_finalize_result(source_text, punctuated_text)
+        punctuated_text, repair_warnings = repair_finalize_result(source_text, punctuated_text)
         if report:
             report(source_units, True)
-        warnings = list_value(result.get("warnings"))
+        warnings = list_value(result.get("warnings")) + repair_warnings
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
         punctuated_text = ""

@@ -4691,9 +4691,9 @@ body {
 .reader-content-text { white-space: pre-wrap; }
 .reader-visual { position: relative; display: block; margin: 1.25rem 0; padding: .75rem; border: 1px solid var(--border-color, #ddd6c7); border-radius: .5rem; background: var(--panel-bg, #fffdf7); white-space: normal; }
 .reader-visual > img { display: block; max-width: 100%; height: auto; margin: auto; }
-.reader-visual-caption { margin: .6rem 0; white-space: pre-wrap; line-height: 1.6; color: var(--muted-color, #675f53); }
+.reader-visual.is-zoomable { cursor: zoom-in; }
+.reader-visual-caption { margin: .6rem 0; white-space: pre-wrap; line-height: 1.6; color: var(--muted-color, #675f53); cursor: auto; }
 .reader-visual-caption:empty { display: none; }
-.reader-visual-enlarge { display: block; margin: .6rem 0 0 auto; }
 .reader-visual-unavailable { color: #786f60; }
 .reader-visual.is-active, .reader-visual-caption.is-active { outline: 2px solid #a57525; outline-offset: 2px; }
 .reader-visual.is-selected, .reader-visual-caption.is-selected { box-shadow: 0 0 0 2px #b18c48; }
@@ -4702,10 +4702,10 @@ body {
 .reader-visual-region { fill: transparent; stroke: transparent; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: all; cursor: pointer; }
 .reader-visual-region.is-active, .reader-visual-region:focus-visible { fill: rgb(197 146 50 / 22%); stroke: #ac7b25; outline: none; }
 .reader-visual-region.is-selected { stroke: #8d631b; fill: rgb(197 146 50 / 14%); }
-.reader-visual-dialog { width: min(94vw, 90rem); max-width: 94vw; max-height: 92vh; padding: 1rem; overflow: auto; border: 1px solid #bcb4a5; border-radius: .5rem; background: #fffdf7; color: #302b23; }
+.reader-visual-dialog { width: min(96vw, 110rem); max-width: 96vw; max-height: 94vh; padding: 1rem; overflow: auto; border: 1px solid #bcb4a5; border-radius: .5rem; background: #fffdf7; color: #302b23; }
 .reader-visual-dialog::backdrop { background: rgb(0 0 0 / 60%); }
 .reader-visual-dialog .reader-visual { margin-top: .5rem; }
-.reader-visual-dialog .reader-visual > img { max-height: none; }
+.reader-visual-dialog .reader-visual > img { max-width: none; max-height: none; cursor: default; }
 .reader-visual-dialog-close { display: block; margin-left: auto; }
 .reader-visual-catalog-toggle { cursor: pointer; white-space: nowrap; }
 .reader-visual-catalog-toggle.is-reader-rail-button { position: absolute; top: 3.25rem; left: .35rem; z-index: 5; writing-mode: vertical-rl; padding: .6rem .4rem; }
@@ -4721,7 +4721,7 @@ body {
 .reader-visual-catalog-page { flex-shrink: 0; color: #786f60; font-size: .875rem; }
 .reader-visual :focus-visible, .reader-visual-catalog :focus-visible, .reader-visual-catalog-toggle:focus-visible { outline: 2px solid #a57525; outline-offset: 2px; }
 @media (max-width: 600px) { .reader-visual-catalog { top: 4rem; max-height: calc(100dvh - 5rem); } }
-.reader-visual-enlarge, .reader-visual-dialog-close, .reader-visual-catalog-heading > button,
+.reader-visual-dialog-close, .reader-visual-catalog-heading > button,
 .reader-visual-catalog-toggle {
   border: 1px solid #d2c8b6;
   border-radius: .4rem;
@@ -4733,7 +4733,7 @@ body {
   padding: .35rem .6rem;
   cursor: pointer;
 }
-.reader-visual-enlarge:hover, .reader-visual-dialog-close:hover,
+.reader-visual-dialog-close:hover,
 .reader-visual-catalog-heading > button:hover,
 .reader-visual-catalog-toggle:hover { background: #eee5d3; color: #302b23; }
 .reader-visual-catalog-toggle.is-reader-rail-button { padding: .6rem .4rem; }

@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .agents
 /.codegraph/
+.pytest_cache
 /docs
 /tests
 测试文件

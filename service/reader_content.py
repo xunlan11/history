@@ -66,6 +66,42 @@ def block_box(block):
     return x1, y1, x2, y2
 
 
+def visual_anchor(block, blocks):
+    """图表块的插入点：OCR 常把图表块排在正文块之后，按坐标找回它在同栏正文里的位置。
+
+    返回 contentSourceText 里的偏移。优先落在同一栏中位于图表下方的第一段正文之前；
+    没有下方正文就落在上方正文之后。找不到同栏正文（无坐标、跨栏整页图）时返回块自带边界。
+    """
+    box = block_box(block)
+    if not box:
+        return block.get("sourceBoundary") or 0
+    below = above = None
+    for other in blocks:
+        if not isinstance(other, dict) or other.get("kind") in NON_BODY_TYPES:
+            continue
+        if "start" not in other or "end" not in other:
+            continue
+        other_box = block_box(other)
+        if not other_box:
+            continue
+        overlap = min(box[2], other_box[2]) - max(box[0], other_box[0])
+        narrower = min(box[2] - box[0], other_box[2] - other_box[0])
+        if narrower <= 0 or overlap < narrower * 0.5:
+            continue
+        if other_box[1] >= box[3] - 2:
+            # 跨栏图表下方会同时有左右两栏正文，取阅读顺序最早的那段当插入点。
+            if below is None or other["start"] < below:
+                below = other["start"]
+        elif other_box[3] <= box[1] + 2:
+            if above is None or other["end"] > above:
+                above = other["end"]
+    if below is not None:
+        return below
+    if above is not None:
+        return above
+    return block.get("sourceBoundary") or 0
+
+
 def caption_family(block):
     """图/表家族：先看“图/Fig./表/Table”文字前缀，再看上游块类型。"""
     text = re.sub(r"\s+", "", str(block.get("text") or ""))[:16]
@@ -273,8 +309,12 @@ def build_reader_content(layout, page):
         boundaries += [m.end() for m in re.finditer(r"[。！？!?；;]+", displayed)]
     boundaries = sorted(set(boundaries))
     placed = []
+    content_blocks = [b for b in (layout.get("contentBlocks") or []) if isinstance(b, dict)]
+    blocks_by_id = {str(b.get("id")): b for b in content_blocks if b.get("id") is not None}
     for visual in visuals:
-        boundary = min(len(source), max(0, int(visual.get("sourceBoundary") or 0)))
+        block = blocks_by_id.get(str(visual.get("blockId") or ""))
+        anchor = visual_anchor(block, content_blocks) if block else visual.get("sourceBoundary")
+        boundary = min(len(source), max(0, int(anchor or 0)))
         if boundary == 0:
             point, state = 0, "aligned"
         elif boundary == len(source):

@@ -244,29 +244,36 @@ if (require.main === module) {
     assert.equal(env.c.renderReaderVisualOverlay(env.page, env.content), false);
     assert.equal(env.c.readerVisualRegions({ polygon: [[-1, 0], [2, 0], [2, 2]] }, 100, 200), null);
   });
-  test('hover never scrolls and leaving a caption restores clicked selection; click scrolls both panels', () => {
+  test('hover never scrolls; clicking a figure opens the large view; caption click selects', () => {
     const env = setup(); addImage(env); const scrolls = [], sentences = [];
     env.c.scrollReaderRegionIntoView = (node, container) => scrolls.push([node, container]);
     env.c.setReaderLinkActive = (id) => sentences.push(id);
     env.c.renderReaderContent(env.page, env.content); env.c.renderReaderVisualOverlay(env.page, env.content);
     const figure = env.readerText.querySelector('.reader-visual'), caption = env.readerText.querySelector('figcaption');
-    figure.click(); assert.equal(scrolls.length, 2); assert.equal(sentences.at(-1), null);
-    assert.equal(figure.classList.contains('is-selected'), true);
-    caption.dispatch('pointerover'); assert.equal(scrolls.length, 2); assert.equal(caption.classList.contains('is-active'), true);
-    caption.dispatch('pointerout', { relatedTarget: null }); assert.equal(figure.classList.contains('is-active'), true);
-    caption.click(); assert.equal(scrolls.length, 4);
+    figure.click(); assert.equal(scrolls.length, 0);
+    assert.ok(env.document.querySelector('.reader-visual-dialog'));
+    env.document.querySelector('.reader-visual-dialog-close').click();
+    assert.equal(env.document.querySelector('.reader-visual-dialog'), null);
+    caption.dispatch('pointerover'); assert.equal(scrolls.length, 0); assert.equal(caption.classList.contains('is-active'), true);
+    caption.dispatch('pointerout', { relatedTarget: null }); assert.equal(figure.classList.contains('is-active'), false);
+    caption.click(); assert.equal(scrolls.length, 2); assert.equal(sentences.at(-1), null);
     const region = env.readerOriginalPreview.querySelector('[data-reader-caption-id]');
     assert.equal(region.classList.contains('is-selected'), true);
     env.c.bindReaderVisualEvents(env.readerText);
     assert.equal(env.readerText.listeners.click.length, 1);
   });
-  test('large view has a separate button and safe image URLs; ordinary click never opens it', () => {
+  test('large view opens by clicking the image; unsafe URLs remove the image and the click target', () => {
     const env = setup(); env.content.visuals.v1.kind = 'figure'; env.content.visuals.v1.renderMode = 'image';
     env.content.visuals.v1.url = 'javascript:alert(1)';
     env.c.renderReaderContent(env.page, env.content);
     assert.equal(env.readerText.querySelector('img'), null);
+    assert.equal(env.readerText.querySelector('.reader-visual-enlarge'), null);
     env.readerText.querySelector('.reader-visual').click(); assert.equal(env.document.querySelector('dialog'), null);
-    env.readerText.querySelector('.reader-visual-enlarge').click(); assert.ok(env.document.querySelector('dialog'));
+    env.content.visuals.v1.url = '/visual.png';
+    env.c.renderReaderContent(env.page, env.content);
+    assert.equal(env.readerText.querySelector('.reader-visual').classList.contains('is-zoomable'), true);
+    env.readerText.querySelector('.reader-visual img').click();
+    assert.ok(env.document.querySelector('.reader-visual-dialog'));
     env.document.querySelector('.reader-visual-dialog-close').click(); assert.equal(env.document.querySelector('dialog'), null);
     assert.equal(env.c.readerVisualSafeUrl('data:text/html,bad'), '');
     assert.equal(env.c.readerVisualSafeUrl('/crop.png'), 'https://reader.example/crop.png');
