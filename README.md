@@ -24,15 +24,15 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 ## 提示词索引
 
-- 页面标点：[llm.py L350–L399](service/llm.py#L350-L399)
-- 页面校对：[llm.py L467–L496](service/llm.py#L467-L496)
-- 元数据识别：[llm.py L531–L556](service/llm.py#L531-L556)
-- 编年补充：[llm.py L600–L635](service/llm.py#L600-L635)
-- 证据回答：[evidence.py L101–L109](service/evidence.py#L101-L109)
-- 证据 JSON 模板：[evidence.py L96–L100](service/evidence.py#L96-L100)
-- JSON 公共 system：[llm.py L673–L678](service/llm.py#L673-L678)
-- 缺字段重试：[llm.py L705–L711](service/llm.py#L705-L711)
-- 无材料对话：[llm.py L1030–L1036](service/llm.py#L1030-L1036)
+- [页面标点](service/llm.py#L347-L397)
+- [页面校对](service/llm.py#L465-L495)
+- [元数据识别](service/llm.py#L530-L555)
+- [编年补充](service/llm.py#L599-L634)
+- [证据回答](service/evidence.py#L101-L109)
+- [证据 JSON 模板](service/evidence.py#L96-L100)
+- [JSON 公共 system](service/llm.py#L672-L677)
+- [缺字段重试](service/llm.py#L704-L710)
+- [无材料对话](service/llm.py#L996-L1002)
 
 ### 待做
 

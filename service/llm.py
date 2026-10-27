@@ -127,9 +127,6 @@ class LlmServiceUnavailable(LlmServiceError):
 # 用于校验“模型只加了标点”的正文比较：标点与空白都不算正文字符。
 COMPARE_IGNORED_CATEGORIES = {"P", "Z"}
 
-# 正文段落不会只有几个字；短于此值的段落基本都是 OCR 抬格被当成分段，需并回原句。
-ORPHAN_PARAGRAPH_CHARS = 6
-
 
 def normalize_layout_text(text: str) -> str:
     """清理 OCR 版面文本的空白，但保留逐行、逐列的换行。
@@ -362,9 +359,6 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
 /no_think
 请给下面这一页近代军史文献（多为竖排古籍 OCR 结果）断句，并加上现代汉语标点。
 {chunk_note}
-待整理文本（自 OCR 版面导出：换行来自原书的一列、一行，抬头（抬格）的字词也可能单独成行；空行表示原文的段落分隔。这些换行都不是句子或自然段的边界）：
-{source_text}
-
 怎么做：
 1. 先通读整页、读懂全文再动手。竖排 OCR 的一列、一行只是版面，不要按行读、不要按行断句：凡是被换行切断的同一句话都要接起来读，读完整段才算一段结束。
    单独成行的抬格字词（称谓、敬语这类抬头）既不是标题，也不是独立的一句，而是被打断那句话的一部分：先把它接回上下文，和上下文的字词合成完整一句再断句，不能单独成句，也不能单独成段。
@@ -373,6 +367,7 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
 4. 输入已经由 OpenCC 完成简体转换；输出必须使用简体中文，不得混入繁体字。保持输入字词及顺序，不要再次做简繁转换，也不要改写字形。
 5. 输出里不要残留版面换行：接起来的句子直接相连，只在自然段之间空一行（JSON 字符串中写作 \\n\\n）。
 6. 按语义分段，每段通常 2 至 5 句；不要把整页压成一段，也不要按 OCR 的行分组分段、逐行成段。每段必须至少是一个完整句子：只有几个字、一个称谓或半句话的内容绝不能单独成段，要并进它所属的那一句和那一段。
+   章节标题（含各级编号标题）是独立段落，单独成行：不要并入上一段或下一段，也不要把相邻的两级标题合并成一段。
 7. 人名、地名、官署名、机构名、部队番号、职务、年号、日期、档案号等专名原样保留，不要把专名拆开。
 
 标点用法（统一使用中文全角标点，标点前后不加英文空格）：
@@ -387,15 +382,18 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
 - 不要用“不加标点”来回避判断：字词或句界不确定时，仍按最合理的读法断句并加标点，再把疑点写进 uncertainItems。
 - 不确定的专名、句界或引文范围保留原样，不替原文作历史判断，也不把推测写进正文。
 
-返回格式（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段）：
+文献信息：
+{format_metadata(metadata)}
+
+待整理文本（自 OCR 版面导出：换行来自原书的一列、一行，抬头（抬格）的字词也可能单独成行；空行表示原文的段落分隔。这些换行都不是句子或自然段的边界）：
+{source_text}
+
+只输出一个 JSON 对象（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段，也不要复述上面的任何要求）：
 {{
   "punctuatedText": "已完成断句和标点的文本",
   "uncertainItems": ["不确定处"],
   "warnings": ["处理提示"]
 }}
-
-文献信息：
-{format_metadata(metadata)}
 """.strip()
 
 
@@ -474,6 +472,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 3. 结果必须使用简体中文，专名、年代、档案号原样保留。
 4. 保留自然段：段落之间用两个换行字符（JSON 字符串中写作 \\n\\n），不要按行分组，也不要每句单独成段；输出里不要残留逐行换行。
    不得让只有称谓或几个字的残句单独成段：抬格称谓属于它所在的那一句，遇到单独成行的就并回该句。
+   章节标题（含各级编号标题）保持独立段落，不要并入相邻正文或另一个标题。
 5. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
 6. 上一页末尾只用于判断本页开头的续句、承接关系和简称，不得把上一页文字重复写入本页。
 7. 只输出 JSON，不要输出解释文字。
@@ -958,40 +957,7 @@ def normalize_generated_text(value: Any) -> str:
     # 这里并回同一段，避免正文又变成一行一句。
     text = merge_single_newlines(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    text = merge_orphan_paragraphs(text)
     return text.strip()
-
-
-def merge_orphan_paragraphs(text: str) -> str:
-    """把只有几个字的孤立段落并回相邻段落。
-
-    OCR 抬格（单独成行的称谓、敬语）常被模型当成独立段落，出现「皇太后」这类
-    一两词自成一段的结果。前一段没有句末点号，说明是同一句被打断，直接接上；
-    前一段已经收尾，则说明这个残句属于下一段的开头。
-    """
-    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
-    if len(paragraphs) < 2:
-        return text
-    merged: list[str] = []
-    pending = ""
-    for paragraph in paragraphs:
-        if pending:
-            paragraph = pending + paragraph
-            pending = ""
-        if (len(content_characters(paragraph)) <= ORPHAN_PARAGRAPH_CHARS
-                and not re.search(r"[。？！…]$", paragraph)):
-            if merged and not re.search(r"[。？！…”」』）]$", merged[-1]):
-                merged[-1] = merged[-1] + paragraph
-            else:
-                pending = paragraph
-            continue
-        merged.append(paragraph)
-    if pending:
-        if merged:
-            merged[-1] = merged[-1] + pending
-        else:
-            merged.append(pending)
-    return "\n\n".join(merged)
 
 
 def merge_single_newlines(text: str) -> str:

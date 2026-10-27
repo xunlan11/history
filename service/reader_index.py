@@ -337,8 +337,11 @@ def build_reader_index(*, layout: dict[str, Any], source_text: str,
             continue
         span = hits[-1] - hits[0] + 1
         exact = len(hits) == len(chars) and span == len(chars)
+        # 校对/简繁会改动个别字词（英文标题里的冠词常被删掉），源文字符可能比展示文本多几个；
+        # 跨度允许超出 5%（至少 2 字），否则整句拿不到坐标，原文高亮会缺一块。
         fuzzy = (len(chars) >= 8 and len(hits) / len(chars) >= 0.9 and
-                 len(chars) - len(hits) <= 2 and span <= len(chars) + 2)
+                 len(chars) - len(hits) <= 2 and
+                 span <= len(chars) + max(2, len(chars) // 20))
         # 同一段文字在页面上出现多次（标题同时也出现在参考文献条目里）时，模糊对齐可能落到
         # 另一处，只接受整段全部命中的精确对齐；同时要求目标位置单调前进，避免跳回前文。
         repeated = source != target and source.count(chars) > 1
