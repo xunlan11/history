@@ -447,39 +447,120 @@ label {
 .auth-card p { color:#b42318; min-height:20px; margin:0; }
 
 .reader-sidebar-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左侧整栏：顶部三个面板开关 + 下方卡片区。
+   卡片高度按内容自适应；内容超出可视高度时只滚动卡片区，按钮保持可见。 */
+.reader-sidebar-shell {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.reader-sidebar-tabs {
+  flex: 0 0 auto;
   display: grid;
-  grid-template-rows: auto auto minmax(120px, 1fr);
-  gap: 14px;
-  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.reader-sidebar-tab {
+  min-height: 32px;
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.reader-sidebar-tab:hover {
+  border-color: #bac7c0;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* 展开状态绿底白字、收起状态白底灰字，按钮状态一眼可分 */
+.reader-sidebar-tab[aria-expanded="true"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.reader-sidebar-tab[aria-expanded="true"]:hover {
+  border-color: var(--primary-dark);
+  background: var(--primary-dark);
+}
+
+.reader-sidebar-cards {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-/* 中栏由内部进度框提供边框，避免额外上下留白 */
-.reader-progress-panel {
+.reader-sidebar-card {
+  flex: 0 0 auto;
   min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  padding: 16px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
-/* 与上/下两栏的 .panel 保持同一内边距（20px），让三栏标题到卡片左上角的
-   距离一致（1px 边框 + 20px 内边距 = 21px） */
-.reader-progress-panel .progress-stack {
-  margin-top: 0;
-  padding: 20px;
-}
-
-/* 状态文字为空时不占高度 */
-.reader-sidebar > .inline-status:empty {
+.reader-sidebar-card[hidden] {
   display: none;
 }
 
-.reader-sidebar {
+.reader-sidebar-cards-empty {
+  margin: 0;
+  padding: 18px 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.reader-sidebar-cards-empty[hidden] {
+  display: none;
+}
+
+/* 进度块整块隐藏（未打开文献）时给出占位说明，避免出现空白卡片 */
+.reader-card-empty {
+  display: none;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+#reader-stream-progress.hidden + .reader-card-empty {
+  display: block;
+}
+
+.reader-progress-panel {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+}
+
+/* 状态文字为空时不占高度 */
+.reader-detail-card > .inline-status:empty {
+  display: none;
 }
 
 .reader-search-panel {
@@ -582,7 +663,8 @@ label {
   border-bottom: 1px solid var(--line);
 }
 
-.reader-search-results { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; }
+/* 卡片高度随内容自适应；结果列表单独限高并在内部滚动，避免一张卡片占满整栏 */
+.reader-search-results { flex: 0 1 auto; max-height: min(50vh, 420px); overflow: auto; margin: 0; padding: 0; list-style: none; }
 .reader-search-result-row + .reader-search-result-row { border-top: 1px solid var(--line); }
 .reader-search-result { width: 100%; padding: 6px 9px; text-align: left; border: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.5; }
 .reader-search-result:hover, .reader-search-result:focus-visible { background: #faf7fe; }
@@ -657,6 +739,11 @@ mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset
 
 .reader-detail-heading h3 {
   font-size: 14px;
+}
+
+/* 无操作按钮时不占高度 */
+.reader-detail-actions:empty {
+  display: none;
 }
 
 .reader-detail-actions .reader-detail-registration-status {
@@ -1155,17 +1242,10 @@ button:focus-visible {
   line-height: 38px;
 }
 
-/* 与上/下两栏的 .panel 保持同一卡片外观（底色 var(--surface) + 阴影），
-   三栏底色/投影一致 */
+/* 进度卡片的外框由 .reader-sidebar-card 提供，这里只负责内部排列 */
 .progress-stack {
   display: grid;
   gap: 8px;
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
 }
 
 .progress-track {
@@ -2627,7 +2707,7 @@ a.citation:hover {
   }
 
   .reader-sidebar-stack {
-    grid-template-rows: auto auto minmax(120px, 1fr);
+    height: auto;
   }
 
   /* 单列时没有左右分隔带，胶囊贴主区左边缘（否则 -13px 会被 .reader-layout 的 overflow 裁掉） */
@@ -4422,9 +4502,10 @@ body {
 
 @media (max-width: 980px) {
   .reader-layout { grid-template-rows: max-content max-content; overflow: auto; }
-  .reader-sidebar-stack { grid-template-rows: max-content max-content max-content; }
-  .reader-search-panel { max-height: 560px; }
-  .reader-search-results { flex: 1 0 auto; max-height: 320px; }
+  /* 单列时整页滚动，卡片区不再单独出滚动条 */
+  .reader-sidebar-cards { overflow: visible; }
+  .reader-search-results { max-height: 320px; }
+  .reader-visual-catalog-items { max-height: 320px; }
 }
 
 /* 共用的个人书架文件夹。 */
@@ -4713,22 +4794,21 @@ body {
 .reader-visual-dialog .reader-visual { margin-top: .5rem; }
 .reader-visual-dialog .reader-visual > img { max-width: none; max-height: none; cursor: default; }
 .reader-visual-dialog-close { display: block; margin-left: auto; }
-.reader-visual-catalog-toggle { cursor: pointer; white-space: nowrap; }
-.reader-visual-catalog-toggle.is-reader-rail-button { position: absolute; top: 3.25rem; left: .35rem; z-index: 5; writing-mode: vertical-rl; padding: .6rem .4rem; }
-.reader-visual-catalog { position: fixed; z-index: 60; left: 1rem; top: 5rem; width: min(23rem, calc(100vw - 2rem)); max-height: calc(100dvh - 6rem); overflow-y: auto; padding: 1rem; border: 1px solid #d2c8b6; border-radius: .6rem; background: var(--panel-bg, #fffdf7); color: var(--text-color, #302b23); box-shadow: 0 .5rem 2rem rgb(0 0 0 / 18%); }
+/* 图表目录卡片：外框与内边距由 .reader-sidebar-card 提供，内部对齐文内检索卡片 */
+.reader-visual-catalog { min-width: 0; }
 .reader-visual-catalog[hidden] { display: none; }
-.reader-visual-catalog-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.reader-visual-catalog-heading h3 { margin: 0; }
-.reader-visual-catalog-status { font-size: .875rem; color: #675f53; }
-.reader-visual-catalog-items { list-style: none; margin: 0; padding: 0; }
-.reader-visual-catalog-item { width: 100%; display: flex; justify-content: space-between; gap: 1rem; padding: .7rem .4rem; border: 0; border-bottom: 1px solid #e2dbce; background: transparent; text-align: start; cursor: pointer; color: inherit; }
-.reader-visual-catalog-item:hover, .reader-visual-catalog-item[aria-current="true"] { background: #eee5d3; }
+.reader-visual-catalog-heading { margin-bottom: 8px; }
+.reader-visual-catalog-status { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.reader-visual-catalog-status:empty { display: none; }
+.reader-visual-catalog-items { list-style: none; margin: 0; padding: 0; max-height: min(50vh, 420px); overflow-y: auto; }
+.reader-visual-catalog-item { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 6px 9px; border: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.5; text-align: left; cursor: pointer; }
+.reader-visual-catalog-items li + li .reader-visual-catalog-item { border-top: 1px solid var(--line); }
+.reader-visual-catalog-item:hover, .reader-visual-catalog-item:focus-visible { background: #faf7fe; }
+.reader-visual-catalog-item[aria-current="true"] { background: #f3edfc; box-shadow: inset 2px 0 0 #7152a3; }
 .reader-visual-catalog-title { overflow-wrap: anywhere; }
-.reader-visual-catalog-page { flex-shrink: 0; color: #786f60; font-size: .875rem; }
-.reader-visual :focus-visible, .reader-visual-catalog :focus-visible, .reader-visual-catalog-toggle:focus-visible { outline: 2px solid #a57525; outline-offset: 2px; }
-@media (max-width: 600px) { .reader-visual-catalog { top: 4rem; max-height: calc(100dvh - 5rem); } }
-.reader-visual-dialog-close, .reader-visual-catalog-heading > button,
-.reader-visual-catalog-toggle {
+.reader-visual-catalog-page { flex-shrink: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.reader-visual :focus-visible, .reader-visual-catalog :focus-visible { outline: 2px solid #a57525; outline-offset: 2px; }
+.reader-visual-dialog-close {
   border: 1px solid #d2c8b6;
   border-radius: .4rem;
   background: #f8f6ef;
@@ -4739,8 +4819,5 @@ body {
   padding: .35rem .6rem;
   cursor: pointer;
 }
-.reader-visual-dialog-close:hover,
-.reader-visual-catalog-heading > button:hover,
-.reader-visual-catalog-toggle:hover { background: #eee5d3; color: #302b23; }
-.reader-visual-catalog-toggle.is-reader-rail-button { padding: .6rem .4rem; }
+.reader-visual-dialog-close:hover { background: #eee5d3; color: #302b23; }
 .reader-visual-placement-status { margin: .5rem 0 0; color: #786f60; font-size: .85rem; }

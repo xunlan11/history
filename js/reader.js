@@ -21,6 +21,19 @@ function getReaderTextNodes(container) {
 /* reader-text-dom:end */
 
 const READER_PANEL_STATE_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.readerPanels`;
+const READER_SIDEBAR_CARD_KEYS = ["detail", "progress", "search", "catalog"];
+// 前三张沿用改造前的默认展开；图表目录原本是默认关闭的浮动面板，保持默认收起。
+const READER_SIDEBAR_CARD_DEFAULT = { detail: true, progress: true, search: true, catalog: false };
+
+function normalizeReaderSidebarCards(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const cards = {};
+  for (const key of READER_SIDEBAR_CARD_KEYS) {
+    const fallback = READER_SIDEBAR_CARD_DEFAULT[key] !== false;
+    cards[key] = source[key] === undefined ? fallback : source[key] !== false;
+  }
+  return cards;
+}
 
 function loadReaderPanelState() {
   try {
@@ -29,13 +42,61 @@ function loadReaderPanelState() {
       sidebarCollapsed: value.sidebarCollapsed === true,
       originalCollapsed: value.originalCollapsed === true,
       annotationCollapsed: value.annotationCollapsed === true,
+      sidebarCards: normalizeReaderSidebarCards(value.sidebarCards),
     };
   } catch {
-    return { sidebarCollapsed: false, originalCollapsed: false, annotationCollapsed: false };
+    return {
+      sidebarCollapsed: false,
+      originalCollapsed: false,
+      annotationCollapsed: false,
+      sidebarCards: { ...READER_SIDEBAR_CARD_DEFAULT },
+    };
   }
 }
 
 let readerPanelState = loadReaderPanelState();
+
+function saveReaderPanelState() {
+  localStorage.setItem(READER_PANEL_STATE_STORAGE_KEY, JSON.stringify(readerPanelState));
+}
+
+// 顶部按钮的展开/收起状态与下方卡片显隐保持一致（按钮用 aria-expanded 表达状态）。
+function applyReaderSidebarCards() {
+  const cards = normalizeReaderSidebarCards(readerPanelState.sidebarCards);
+  let expandedCount = 0;
+  document.querySelectorAll("[data-reader-sidebar-card]").forEach((card) => {
+    const key = card.dataset.readerSidebarCard;
+    const expanded = cards[key] !== false;
+    if (expanded) expandedCount += 1;
+    card.hidden = !expanded;
+    const button = document.querySelector(`[data-reader-sidebar-tab="${key}"]`);
+    if (button) button.setAttribute("aria-expanded", String(expanded));
+    // 图表目录卡片展开时才拉取目录，与旧浮动面板的懒加载行为一致。
+    if (key === "catalog" && expanded && typeof syncReaderVisualCatalog === "function") {
+      syncReaderVisualCatalog(typeof getSelectedDocument === "function" ? getSelectedDocument() : null);
+    }
+  });
+  const empty = document.querySelector("#reader-sidebar-cards-empty");
+  if (empty) empty.hidden = expandedCount > 0;
+}
+
+function setReaderSidebarCardExpanded(key, expanded) {
+  if (!READER_SIDEBAR_CARD_KEYS.includes(key)) {
+    return;
+  }
+  readerPanelState.sidebarCards = normalizeReaderSidebarCards(readerPanelState.sidebarCards);
+  readerPanelState.sidebarCards[key] = Boolean(expanded);
+  saveReaderPanelState();
+  applyReaderSidebarCards();
+}
+
+function toggleReaderSidebarCard(key) {
+  if (!READER_SIDEBAR_CARD_KEYS.includes(key)) {
+    return;
+  }
+  const cards = normalizeReaderSidebarCards(readerPanelState.sidebarCards);
+  setReaderSidebarCardExpanded(key, !cards[key]);
+}
 
 function applyReaderPanelState() {
   const { sidebarCollapsed, originalCollapsed, annotationCollapsed } = readerPanelState;
@@ -46,6 +107,7 @@ function applyReaderPanelState() {
     readerSidebarToggle.setAttribute("aria-expanded", String(!sidebarCollapsed));
     readerSidebarToggle.setAttribute("aria-label", label);
   }
+  applyReaderSidebarCards();
   readerCompare?.classList.toggle("is-original-collapsed", originalCollapsed);
   readerCompare?.classList.toggle("is-annotation-collapsed", annotationCollapsed);
   readerOriginalPanel?.classList.toggle("reader-panel-collapsed", originalCollapsed);
@@ -71,13 +133,16 @@ function toggleReaderPanel(panel) {
   } else {
     return;
   }
-  localStorage.setItem(READER_PANEL_STATE_STORAGE_KEY, JSON.stringify(readerPanelState));
+  saveReaderPanelState();
   applyReaderPanelState();
 }
 
 readerSidebarToggle?.addEventListener("click", () => toggleReaderPanel("sidebar"));
 readerOriginalToggle?.addEventListener("click", () => toggleReaderPanel("original"));
 readerAnnotationToggle?.addEventListener("click", () => toggleReaderPanel("annotation"));
+document.querySelectorAll("[data-reader-sidebar-tab]").forEach((button) => {
+  button.addEventListener("click", () => toggleReaderSidebarCard(button.dataset.readerSidebarTab));
+});
 applyReaderPanelState();
 const readerProgressCache = new Map();
 const readerProgressSaveStates = new Map();

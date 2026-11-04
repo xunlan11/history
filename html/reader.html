@@ -30,96 +30,112 @@
 
           <div class="reader-layout" id="reader-layout">
             <div class="reader-sidebar-stack" id="reader-sidebar-stack">
-              <aside class="panel reader-sidebar" aria-label="文献信息">
-                <div class="section-heading reader-detail-heading">
-                  <h3>文献信息</h3>
-                  <span class="reader-detail-actions" id="reader-detail-actions"></span>
+              <div class="panel reader-sidebar-shell">
+                <div class="reader-sidebar-tabs" role="group" aria-label="工具栏面板">
+                  <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="detail" aria-controls="reader-sidebar-detail" aria-expanded="true">信息</button>
+                  <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="progress" aria-controls="reader-sidebar-progress" aria-expanded="true">处理</button>
+                  <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="search" aria-controls="reader-search-panel" aria-expanded="true">检索</button>
+                  <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="catalog" aria-controls="reader-visual-catalog" aria-expanded="false">图表</button>
                 </div>
-                <dl id="reader-document-detail"></dl>
-                <span class="inline-status" id="reader-stream-status">等待处理</span>
-              </aside>
-              <section class="panel reader-progress-panel" aria-label="处理进度">
-                <div class="reader-progress-area">
-                  <div class="progress-stack hidden" id="reader-stream-progress">
-                    <div class="progress-header">
-                      <div class="progress-heading">
-                        <span class="progress-title">处理进度</span>
-                        <span class="progress-mode" data-progress-mode>串行</span>
-                      </div>
-                      <div class="progress-header-tools" aria-label="各阶段每页处理进度">
-                        <div class="progress-stage-ring-item" data-progress-stage="ocr" title="文字识别">
-                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-ocr" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">识别</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
-                        </div>
-                        <div class="progress-stage-ring-item" data-progress-stage="variant" title="简繁转换">
-                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-variant" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">简繁</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
-                        </div>
-                        <div class="progress-stage-ring-item" data-progress-stage="punctuation" title="标点符号">
-                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-punctuation" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">标点</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
-                        </div>
-                        <div class="progress-stage-ring-item" data-progress-stage="proofreading" title="校对">
-                          <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-proofreading" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">校对</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
-                        </div>
-                      </div>
+                <div class="reader-sidebar-cards" id="reader-sidebar-cards">
+                  <aside class="reader-sidebar-card reader-detail-card" id="reader-sidebar-detail" data-reader-sidebar-card="detail" aria-label="文献信息">
+                    <div class="section-heading reader-detail-heading">
+                      <h3>文献信息</h3>
+                      <span class="reader-detail-actions" id="reader-detail-actions"></span>
                     </div>
-                    <div class="progress-bar-row">
-                      <div class="progress-track progress-track-main" aria-label="四阶段合并进度">
-                        <div class="progress-fill progress-fill-ocr" data-progress-fill="ocr"></div>
-                        <div class="progress-fill progress-fill-variant" data-progress-fill="variant"></div>
-                        <div class="progress-fill progress-fill-punctuation" data-progress-fill="punctuation"></div>
-                        <div class="progress-fill progress-fill-proofreading" data-progress-fill="proofreading"></div>
+                    <dl id="reader-document-detail"></dl>
+                    <span class="inline-status" id="reader-stream-status">等待处理</span>
+                  </aside>
+                  <section class="reader-sidebar-card reader-progress-panel" id="reader-sidebar-progress" data-reader-sidebar-card="progress" aria-label="处理进度">
+                    <div class="reader-progress-area">
+                      <div class="progress-stack hidden" id="reader-stream-progress">
+                        <div class="progress-header">
+                          <div class="progress-heading">
+                            <span class="progress-title">处理进度</span>
+                            <span class="progress-mode" data-progress-mode>串行</span>
+                          </div>
+                          <div class="progress-header-tools" aria-label="各阶段每页处理进度">
+                            <div class="progress-stage-ring-item" data-progress-stage="ocr" title="文字识别">
+                              <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-ocr" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">识别</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                            </div>
+                            <div class="progress-stage-ring-item" data-progress-stage="variant" title="简繁转换">
+                              <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-variant" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">简繁</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                            </div>
+                            <div class="progress-stage-ring-item" data-progress-stage="punctuation" title="标点符号">
+                              <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-punctuation" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">标点</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                            </div>
+                            <div class="progress-stage-ring-item" data-progress-stage="proofreading" title="校对">
+                              <div class="progress-ring" aria-hidden="true"><svg viewBox="0 0 36 36"><circle class="progress-ring-track" cx="18" cy="18" r="15.5"></circle><circle class="progress-ring-fill progress-ring-fill-proofreading" cx="18" cy="18" r="15.5" data-progress-ring></circle></svg><span class="progress-ring-label">校对</span><span class="progress-ring-count"><b data-progress-pages>0</b></span></div>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="progress-bar-row">
+                          <div class="progress-track progress-track-main" aria-label="四阶段合并进度">
+                            <div class="progress-fill progress-fill-ocr" data-progress-fill="ocr"></div>
+                            <div class="progress-fill progress-fill-variant" data-progress-fill="variant"></div>
+                            <div class="progress-fill progress-fill-punctuation" data-progress-fill="punctuation"></div>
+                            <div class="progress-fill progress-fill-proofreading" data-progress-fill="proofreading"></div>
+                          </div>
+                          <span class="progress-total" title="总页数"><b data-progress-total>0</b></span>
+                        </div>
+                        <div class="processing-failed hidden" data-progress-failed>
+                          <span class="processing-failed-title">失败页</span>
+                          <div class="processing-failed-pages" data-progress-failed-pages></div>
+                        </div>
                       </div>
-                      <span class="progress-total" title="总页数"><b data-progress-total>0</b></span>
+                      <p class="reader-card-empty">暂无处理进度</p>
                     </div>
-                    <div class="processing-failed hidden" data-progress-failed>
-                      <span class="processing-failed-title">失败页</span>
-                      <div class="processing-failed-pages" data-progress-failed-pages></div>
+                  </section>
+                  <section class="reader-sidebar-card reader-search-panel" id="reader-search-panel" data-reader-sidebar-card="search" aria-labelledby="reader-search-title">
+                    <div class="section-heading"><h3 id="reader-search-title">文内检索</h3></div>
+                    <form class="reader-search-form" id="reader-search-form" role="search">
+                      <div class="reader-search-field">
+                        <svg class="reader-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                          <circle cx="10.5" cy="10.5" r="6.5"></circle>
+                          <path d="m16 16 5 5"></path>
+                        </svg>
+                        <input id="reader-search-input" type="search" maxlength="2000" autocomplete="off" aria-label="检索当前文献的整理文本" />
+                      </div>
+                      <button class="secondary-button" type="submit" id="reader-search-submit">检索</button>
+                    </form>
+                    <div class="reader-search-action-row">
+                      <div class="reader-search-nav-group">
+                        <button class="reader-search-nav-button" type="button" data-reader-search-nav="first">首项</button>
+                        <button class="reader-search-nav-button" type="button" data-reader-search-nav="last">末项</button>
+                      </div>
+                      <div class="reader-search-nav-group">
+                        <button class="reader-search-nav-button" type="button" data-reader-search-nav="prev">上一项</button>
+                        <button class="reader-search-nav-button" type="button" data-reader-search-nav="next">下一项</button>
+                      </div>
+                      <button class="reader-search-mark-button" id="reader-search-mark-all" type="button" aria-pressed="false">标注</button>
                     </div>
-                  </div>
+                    <div class="reader-search-filter-row">
+                      <fieldset class="reader-search-filters" aria-label="筛选匹配层级，可任选零至三个层级">
+                        <label><input type="checkbox" data-reader-search-level="exact" checked /><span class="reader-search-level-exact">严格</span> <span data-reader-search-count="exact">0</span></label>
+                        <label><input type="checkbox" data-reader-search-level="partial" checked /><span class="reader-search-level-partial">部分</span> <span data-reader-search-count="partial">0</span></label>
+                        <label><input type="checkbox" data-reader-search-level="semantic" checked /><span class="reader-search-level-semantic">嵌入</span> <span data-reader-search-count="semantic">0</span></label>
+                      </fieldset>
+                      <fieldset class="reader-search-page-range" aria-label="按页码筛选结果，留空表示不限制">
+                        <span>第</span>
+                        <input id="reader-search-page-from" type="number" min="1" step="1" inputmode="numeric" aria-label="起始页码" />
+                        <span>-</span>
+                        <input id="reader-search-page-to" type="number" min="1" step="1" inputmode="numeric" aria-label="终止页码" />
+                        <span>页</span>
+                      </fieldset>
+                    </div>
+                    <p class="reader-search-status" id="reader-search-status" role="status" aria-live="polite"></p>
+                    <ol class="reader-search-results" id="reader-search-results" aria-label="匹配结果，按文中位置排序"></ol>
+                  </section>
+                  <section class="reader-sidebar-card reader-visual-catalog" id="reader-visual-catalog" data-reader-sidebar-card="catalog" role="region" aria-label="图表目录" hidden>
+                    <div class="section-heading reader-visual-catalog-heading"><h3>图表目录</h3></div>
+                    <p class="reader-visual-catalog-status" role="status" aria-live="polite">请先打开文献</p>
+                    <ol class="reader-visual-catalog-items"></ol>
+                  </section>
+                  <p class="reader-sidebar-cards-empty" id="reader-sidebar-cards-empty" hidden>所有面板均已收起，点击上方按钮展开。</p>
                 </div>
-              </section>
-              <section class="panel reader-search-panel" id="reader-search-panel" aria-labelledby="reader-search-title">
-                <div class="section-heading"><h3 id="reader-search-title">文内检索</h3></div>
-                <form class="reader-search-form" id="reader-search-form" role="search">
-                  <div class="reader-search-field">
-                    <svg class="reader-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                      <circle cx="10.5" cy="10.5" r="6.5"></circle>
-                      <path d="m16 16 5 5"></path>
-                    </svg>
-                    <input id="reader-search-input" type="search" maxlength="2000" autocomplete="off" aria-label="检索当前文献的整理文本" />
-                  </div>
-                  <button class="secondary-button" type="submit" id="reader-search-submit">检索</button>
-                </form>
-                <div class="reader-search-action-row">
-                  <div class="reader-search-nav-group">
-                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="first">首项</button>
-                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="last">末项</button>
-                  </div>
-                  <div class="reader-search-nav-group">
-                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="prev">上一项</button>
-                    <button class="reader-search-nav-button" type="button" data-reader-search-nav="next">下一项</button>
-                  </div>
-                  <button class="reader-search-mark-button" id="reader-search-mark-all" type="button" aria-pressed="false">标注</button>
-                </div>
-                <div class="reader-search-filter-row">
-                  <fieldset class="reader-search-filters" aria-label="筛选匹配层级，可任选零至三个层级">
-                    <label><input type="checkbox" data-reader-search-level="exact" checked /><span class="reader-search-level-exact">严格</span> <span data-reader-search-count="exact">0</span></label>
-                    <label><input type="checkbox" data-reader-search-level="partial" checked /><span class="reader-search-level-partial">部分</span> <span data-reader-search-count="partial">0</span></label>
-                    <label><input type="checkbox" data-reader-search-level="semantic" checked /><span class="reader-search-level-semantic">嵌入</span> <span data-reader-search-count="semantic">0</span></label>
-                  </fieldset>
-                  <fieldset class="reader-search-page-range" aria-label="按页码筛选结果，留空表示不限制">
-                    <span>第</span>
-                    <input id="reader-search-page-from" type="number" min="1" step="1" inputmode="numeric" aria-label="起始页码" />
-                    <span>-</span>
-                    <input id="reader-search-page-to" type="number" min="1" step="1" inputmode="numeric" aria-label="终止页码" />
-                    <span>页</span>
-                  </fieldset>
-                </div>
-                <p class="reader-search-status" id="reader-search-status" role="status" aria-live="polite"></p>
-                <ol class="reader-search-results" id="reader-search-results" aria-label="匹配结果，按文中位置排序"></ol>
-              </section>
+              </div>
             </div>
             <section class="reader-main">
-              <button class="reader-visual-catalog-toggle is-reader-rail-button" id="reader-visual-catalog-toggle" type="button" aria-label="图表目录" aria-controls="reader-visual-catalog" aria-expanded="false">图表目录</button>
               <button class="icon-button reader-panel-toggle reader-sidebar-toggle" id="reader-sidebar-toggle" type="button" aria-label="折叠工具栏" aria-controls="reader-sidebar-stack" aria-expanded="true">
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
               </button>

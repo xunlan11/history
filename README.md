@@ -38,8 +38,7 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 1. 失败恢复。
 2. 补充上传。
-3. 阅览器侧边栏。
-4. 章节目录。
+3. 章节目录、图表目录。
 
 ### 测试
 

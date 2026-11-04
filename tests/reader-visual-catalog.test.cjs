@@ -4,10 +4,22 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { setup: setupContent, digest } = require('./reader-content.test.cjs');
 
-function setup(options = {}) {
+function setup() {
   const env = setupContent();
-  const host = env.document.createElement(options.hostTag || 'div'); host.id = 'reader-visual-catalog-toggle';
-  env.document.body.append(host);
+  const button = env.document.createElement('button');
+  button.className = 'reader-sidebar-tab';
+  button.dataset.readerSidebarTab = 'catalog';
+  button.setAttribute('aria-expanded', 'false');
+  const panel = env.document.createElement('section');
+  panel.id = 'reader-visual-catalog';
+  panel.className = 'reader-sidebar-card reader-visual-catalog';
+  panel.hidden = true;
+  env.document.body.append(button, panel);
+  env.c.setReaderSidebarCardExpanded = (key, expanded) => {
+    if (key !== 'catalog') return;
+    panel.hidden = !expanded;
+    button.setAttribute('aria-expanded', String(expanded));
+  };
   const second = { ...env.page, id: 'p2', pageNumber: 9 };
   env.item.pages.push(second);
   env.catalog = { documentId: env.item.id, catalogRevision: 'c1', total: 2, indexedPages: 2, totalPages: 2, complete: true,
@@ -20,20 +32,24 @@ function setup(options = {}) {
   env.c.renderReader = () => { env.renders.push(env.c.selectedPageId); };
   vm.runInContext(fs.readFileSync('js/reader-visual-catalog.js', 'utf8'), env.c);
   env.state = vm.runInContext('readerVisualCatalogState', env.c);
-  env.host = host;
+  env.button = button; env.panel = panel;
   return env;
 }
-async function open(env) { env.state.open = true; await env.c.syncReaderVisualCatalog(env.item); }
+async function open(env) {
+  env.panel.hidden = false;
+  env.button.setAttribute('aria-expanded', 'true');
+  await env.c.syncReaderVisualCatalog(env.item);
+}
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-test('explicit host creates one accessible toggle and catalogue remains open after exact page/visual navigation', async () => {
+test('toolbar tab opens the catalogue card and keeps it open after exact page/visual navigation', async () => {
   const env = setup();
   await env.c.syncReaderVisualCatalog(env.item);
   assert.equal(env.requests.length, 0);
   await open(env); await env.c.syncReaderVisualCatalog(env.item);
-  assert.equal(env.host.querySelectorAll('button').length, 1);
+  assert.equal(env.document.querySelectorAll('[data-reader-sidebar-tab="catalog"]').length, 1);
   assert.equal(env.requests.length, 1);
-  assert.equal(env.host.querySelector('button').getAttribute('aria-expanded'), 'true');
+  assert.equal(env.button.getAttribute('aria-expanded'), 'true');
   const rows = env.state.panel.querySelectorAll('[data-catalog-page-id]');
   assert.deepEqual(rows.map((row) => row.dataset.catalogPageId), [env.page.id, 'p2']);
   env.c.loadReaderContent = async () => env.content;
@@ -42,36 +58,32 @@ test('explicit host creates one accessible toggle and catalogue remains open aft
   assert.equal(await env.c.navigateReaderVisualCatalog('p2', 'v1'), true);
   assert.equal(env.c.selectedPageId, 'p2');
   assert.deepEqual(calls, [['v1', true, true]]);
-  assert.equal(env.state.open, true); assert.equal(env.state.panel.hidden, false);
+  assert.equal(env.panel.hidden, false);
   assert.ok(env.renders.length >= 1);
 });
 
-test('button host is used directly and Escape returns focus to the persistent rail', async () => {
-  const env = setup({ hostTag: 'button' });
+test('Escape collapses the catalogue card and returns focus to its toolbar tab', async () => {
+  const env = setup();
   await open(env);
-  assert.equal(env.host.querySelectorAll('button').length, 0);
   env.document.dispatch('keydown', { key: 'Escape' });
-  assert.equal(env.state.panel.hidden, true);
-  assert.equal(env.host.getAttribute('aria-expanded'), 'false');
-  assert.equal(env.document.activeElement, env.host);
+  assert.equal(env.panel.hidden, true);
+  assert.equal(env.button.getAttribute('aria-expanded'), 'false');
+  assert.equal(env.document.activeElement, env.button);
 });
 
-test('fallback toggle attaches beside sidebar collapse control, outside the collapsed sidebar', async () => {
-  const env = setup(); env.host.remove();
-  const sidebar = env.document.createElement('aside'); sidebar.className = 'reader-sidebar'; sidebar.hidden = true;
-  const main = env.document.createElement('section');
-  const toggle = env.document.createElement('button'); toggle.className = 'reader-sidebar-toggle';
-  main.append(toggle); env.document.body.append(sidebar, main);
+test('catalogue reuses the static toolbar card and creates no floating controls', async () => {
+  const env = setup();
   await env.c.syncReaderVisualCatalog(env.item);
-  const button = env.document.querySelector('[data-reader-catalog-button]');
-  assert.equal(button.parentNode, main);
-  assert.equal(button.classList.contains('is-reader-rail-button'), true);
+  assert.equal(env.state.panel, env.panel);
+  assert.equal(env.state.button, env.button);
+  assert.equal(env.document.querySelectorAll('#reader-visual-catalog-toggle').length, 0);
+  assert.equal(env.document.querySelectorAll('[data-reader-catalog-button]').length, 0);
 });
 
 test('catalogue rejects a previous document response and invalidates on per-page revisions', async () => {
   const env = setup(); const pending = [];
   env.c.fetch = () => new Promise((resolve) => pending.push(resolve));
-  env.state.open = true;
+  env.panel.hidden = false;
   const first = env.c.syncReaderVisualCatalog(env.item);
   const other = { ...env.item, id: 'other' };
   env.c.getSelectedDocument = () => other;
@@ -87,7 +99,7 @@ test('catalogue rejects a previous document response and invalidates on per-page
 
 test('empty, partial, loading, malformed and error states are visible and retryable', async () => {
   const env = setup(); let resolve;
-  env.c.fetch = () => new Promise((done) => { resolve = done; }); env.state.open = true;
+  env.c.fetch = () => new Promise((done) => { resolve = done; }); env.panel.hidden = false;
   const pending = env.c.syncReaderVisualCatalog(env.item);
   assert.match(env.state.panel.textContent, /正在加载/);
   resolve({ ok: false }); await pending;

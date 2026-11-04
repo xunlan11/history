@@ -1,8 +1,7 @@
-/* 可选的浮动图目录。父级在 renderReader 中调用 syncReaderVisualCatalog(item)。 */
+/* 可选的图目录，作为左侧工具栏的第四张卡片。父级在 renderReader 中调用 syncReaderVisualCatalog(item)。 */
 const readerVisualCatalogCache = new Map();
-const readerVisualCatalogButtons = new WeakSet();
 const readerVisualCatalogState = {
-  documentId: null, snapshot: "", open: false, loading: false, error: "", catalog: null,
+  documentId: null, snapshot: "", loading: false, error: "", catalog: null,
   revision: 0, navigationRevision: 0, button: null, panel: null, bound: false,
 };
 
@@ -22,83 +21,46 @@ function readerVisualCatalogNode(tag, className, text) {
 
 function ensureReaderVisualCatalog() {
   const state = readerVisualCatalogState;
-  const host = document.querySelector("#reader-visual-catalog-toggle");
-  let button = host?.tagName === "BUTTON" ? host : host?.querySelector("[data-reader-catalog-button]");
-  if (!button) {
-    button = document.querySelector("[data-reader-catalog-button]");
-    if (host && button && !host.contains(button)) { button.remove(); button = null; }
-  }
-  if (!button) {
-    const sidebarToggle = document.querySelector(".reader-sidebar-toggle") || document.querySelector("#reader-sidebar-toggle");
-    const anchor = host || sidebarToggle?.parentElement || document.querySelector("#reader-sidebar") || document.querySelector(".reader-sidebar");
-    if (!anchor) return false;
-    button = readerVisualCatalogNode("button", "reader-visual-catalog-toggle", "图表目录");
-    button.type = "button";
-    button.dataset.readerCatalogButton = "true";
-    if (!host && sidebarToggle) button.classList.add("is-reader-rail-button");
-    anchor.append(button);
-  }
-  button.classList.add("reader-visual-catalog-toggle");
+  const button = document.querySelector('[data-reader-sidebar-tab="catalog"]');
+  const panel = document.querySelector("#reader-visual-catalog");
+  if (!button || !panel) return false;
   button.setAttribute("aria-controls", "reader-visual-catalog");
-  button.setAttribute("aria-expanded", String(state.open));
   button.setAttribute("aria-label", "图表目录");
   state.button = button;
-  if (!readerVisualCatalogButtons.has(button)) {
-    readerVisualCatalogButtons.add(button);
-    button.addEventListener("click", () => {
-      state.open = !state.open;
-      button.setAttribute("aria-expanded", String(state.open));
-      if (state.open) {
-        syncReaderVisualCatalog(getSelectedDocument());
-        state.panel?.querySelector("button")?.focus();
-      } else closeReaderVisualCatalog();
-    });
-  }
-  state.panel = document.querySelector("#reader-visual-catalog");
-  if (!state.panel) {
-    state.panel = readerVisualCatalogNode("section", "reader-visual-catalog");
-    state.panel.id = "reader-visual-catalog";
-    state.panel.setAttribute("role", "region");
-    state.panel.setAttribute("aria-label", "图表目录");
-    document.body.append(state.panel);
-    state.panel.addEventListener("click", (event) => {
-      const row = event.target?.closest?.("[data-catalog-page-id]");
-      if (row && state.panel.contains(row)) navigateReaderVisualCatalog(row.dataset.catalogPageId, row.dataset.catalogVisualId);
-    });
-  }
+  state.panel = panel;
   if (!state.bound) {
     state.bound = true;
+    panel.addEventListener("click", (event) => {
+      const row = event.target?.closest?.("[data-catalog-page-id]");
+      if (row && panel.contains(row)) navigateReaderVisualCatalog(row.dataset.catalogPageId, row.dataset.catalogVisualId);
+    });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && state.open) { event.preventDefault(); closeReaderVisualCatalog(); }
+      if (event.key === "Escape" && !panel.hidden) { event.preventDefault(); closeReaderVisualCatalog(); }
     });
   }
-  state.panel.hidden = !state.open;
   return true;
 }
 
 function closeReaderVisualCatalog() {
   const state = readerVisualCatalogState;
-  state.open = false;
-  if (state.panel) state.panel.hidden = true;
-  state.button?.setAttribute("aria-expanded", "false");
+  if (typeof setReaderSidebarCardExpanded === "function") {
+    setReaderSidebarCardExpanded("catalog", false);
+  } else if (state.panel) {
+    state.panel.hidden = true;
+  }
   state.button?.focus();
 }
 
 function renderReaderVisualCatalog() {
   const state = readerVisualCatalogState, panel = state.panel;
   if (!panel) return;
-  panel.hidden = !state.open;
   const focused = document.activeElement;
   const focusedRow = focused?.closest?.("[data-catalog-page-id]");
   const restoreRow = focusedRow && panel.contains(focusedRow) ? { ...focusedRow.dataset } : null;
   panel.setAttribute("aria-busy", String(state.loading));
   panel.replaceChildren();
-  const heading = readerVisualCatalogNode("div", "reader-visual-catalog-heading");
+  const heading = readerVisualCatalogNode("div", "section-heading reader-visual-catalog-heading");
   heading.append(readerVisualCatalogNode("h3", "", "图表目录"));
-  const close = readerVisualCatalogNode("button", "reader-visual-catalog-close", "关闭");
-  close.type = "button";
-  close.addEventListener("click", closeReaderVisualCatalog);
-  heading.append(close);
   panel.append(heading);
   const status = readerVisualCatalogNode("p", "reader-visual-catalog-status");
   status.setAttribute("role", "status");
@@ -170,9 +132,9 @@ async function syncReaderVisualCatalog(item) {
     state.revision++;
   }
   if (!ensureReaderVisualCatalog()) return;
-  state.button.disabled = !item;
   renderReaderVisualCatalog();
-  if (!state.open || !item?.id) return;
+  const open = Boolean(state.panel && !state.panel.hidden);
+  if (!open || !item?.id) return;
   const revision = state.revision;
   let entry = readerVisualCatalogCache.get(snapshot);
   if (!entry) {
