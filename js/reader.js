@@ -22,8 +22,8 @@ function getReaderTextNodes(container) {
 
 const READER_PANEL_STATE_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.readerPanels`;
 const READER_SIDEBAR_CARD_KEYS = ["detail", "progress", "search", "catalog"];
-// 前三张沿用改造前的默认展开；图表目录原本是默认关闭的浮动面板，保持默认收起。
-const READER_SIDEBAR_CARD_DEFAULT = { detail: true, progress: true, search: true, catalog: false };
+// 新文献默认只展开「信息」「处理」；检索与图表按需打开。
+const READER_SIDEBAR_CARD_DEFAULT = { detail: true, progress: true, search: false, catalog: false };
 
 function normalizeReaderSidebarCards(value) {
   const source = value && typeof value === "object" ? value : {};
@@ -35,6 +35,17 @@ function normalizeReaderSidebarCards(value) {
   return cards;
 }
 
+function normalizeReaderDocumentCards(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const cards = {};
+  for (const [documentId, entry] of Object.entries(source)) {
+    if (typeof documentId === "string" && documentId && entry && typeof entry === "object") {
+      cards[documentId] = normalizeReaderSidebarCards(entry);
+    }
+  }
+  return cards;
+}
+
 function loadReaderPanelState() {
   try {
     const value = JSON.parse(localStorage.getItem(READER_PANEL_STATE_STORAGE_KEY)) || {};
@@ -42,13 +53,18 @@ function loadReaderPanelState() {
       sidebarCollapsed: value.sidebarCollapsed === true,
       originalCollapsed: value.originalCollapsed === true,
       annotationCollapsed: value.annotationCollapsed === true,
-      sidebarCards: normalizeReaderSidebarCards(value.sidebarCards),
+      // 每次进入阅读页都从当前文献重新载入，不沿用上次页面会话的文献 id。
+      activeDocumentId: "",
+      documentCards: normalizeReaderDocumentCards(value.documentCards),
+      sidebarCards: { ...READER_SIDEBAR_CARD_DEFAULT },
     };
   } catch {
     return {
       sidebarCollapsed: false,
       originalCollapsed: false,
       annotationCollapsed: false,
+      activeDocumentId: "",
+      documentCards: {},
       sidebarCards: { ...READER_SIDEBAR_CARD_DEFAULT },
     };
   }
@@ -56,8 +72,37 @@ function loadReaderPanelState() {
 
 let readerPanelState = loadReaderPanelState();
 
+// 把当前文献的卡片状态写回 documentCards，再整体落盘。
 function saveReaderPanelState() {
-  localStorage.setItem(READER_PANEL_STATE_STORAGE_KEY, JSON.stringify(readerPanelState));
+  const activeId = readerPanelState.activeDocumentId;
+  if (activeId) {
+    readerPanelState.documentCards = {
+      ...readerPanelState.documentCards,
+      [activeId]: { ...readerPanelState.sidebarCards },
+    };
+  }
+  localStorage.setItem(READER_PANEL_STATE_STORAGE_KEY, JSON.stringify({
+    sidebarCollapsed: readerPanelState.sidebarCollapsed,
+    originalCollapsed: readerPanelState.originalCollapsed,
+    annotationCollapsed: readerPanelState.annotationCollapsed,
+    documentCards: readerPanelState.documentCards,
+  }));
+}
+
+// 切换文献时载入该文献上次的卡片状态；没有记录的新文献使用默认值（信息 + 处理）。
+function syncReaderSidebarDocument(documentId) {
+  const id = typeof documentId === "string" ? documentId : "";
+  if (readerPanelState.activeDocumentId === id) {
+    return;
+  }
+  saveReaderPanelState();
+  readerPanelState.activeDocumentId = id;
+  const saved = id ? readerPanelState.documentCards[id] : null;
+  readerPanelState.sidebarCards = saved
+    ? normalizeReaderSidebarCards(saved)
+    : { ...READER_SIDEBAR_CARD_DEFAULT };
+  applyReaderSidebarCards();
+  saveReaderPanelState();
 }
 
 // 顶部按钮的展开/收起状态与下方卡片显隐保持一致（按钮用 aria-expanded 表达状态）。

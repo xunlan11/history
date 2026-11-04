@@ -744,6 +744,8 @@ function renderReader() {
 
   const linkRevision = resetReaderLink();
   const item = getSelectedDocument();
+  // 切换文献时恢复该文献上次的工具栏卡片展开状态。
+  if (typeof syncReaderSidebarDocument === "function") syncReaderSidebarDocument(item?.id || "");
   readerOriginalPreview.innerHTML = "";
   readerText.innerHTML = "";
   readerNotes.innerHTML = "";

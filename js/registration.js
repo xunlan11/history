@@ -435,7 +435,9 @@ function refreshDocumentCardStatusIndicators(documentId) {
     const item = getLiveDocument(documentId);
     renderReaderDetailActions(item, canEditDocument(item), readerDetailEditing);
     const statusNode = document.querySelector("#reader-stream-status");
-    if (statusNode && text) {
+    if (statusNode) {
+      // 没有上传/登记进度时清空（空节点由 .inline-status:empty 隐藏），
+      // 否则会一直停留在上一次的进度文案。
       statusNode.textContent = text;
     }
   }
