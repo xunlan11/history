@@ -469,7 +469,7 @@ label {
 .reader-sidebar-tabs {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -4506,6 +4506,7 @@ body {
   .reader-sidebar-cards { overflow: visible; }
   .reader-search-results { max-height: 320px; }
   .reader-visual-catalog-items { max-height: 320px; }
+  .reader-chapter-catalog-items { max-height: 320px; }
 }
 
 /* 共用的个人书架文件夹。 */
@@ -4795,6 +4796,25 @@ body {
 .reader-visual-dialog .reader-visual > img { max-width: none; max-height: none; cursor: default; }
 .reader-visual-dialog-close { display: block; margin-left: auto; }
 /* 图表目录卡片：外框与内边距由 .reader-sidebar-card 提供，内部对齐文内检索卡片 */
+.reader-chapter-catalog { min-width: 0; }
+.reader-chapter-catalog[hidden] { display: none; }
+.reader-chapter-catalog-heading { margin-bottom: 8px; }
+.reader-chapter-catalog-status { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.reader-chapter-catalog-status:empty { display: none; }
+.reader-chapter-catalog-retry { min-height: 28px; padding: 3px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer; }
+.reader-chapter-catalog-retry:hover { border-color: #bac7c0; background: var(--surface-2); }
+.reader-chapter-catalog-items { list-style: none; margin: 0; padding: 0; max-height: min(50vh, 420px); overflow-y: auto; }
+.reader-chapter-catalog-item { width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 9px; border: 0; border-radius: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.5; text-align: left; cursor: pointer; }
+.reader-chapter-catalog-items li + li .reader-chapter-catalog-item { border-top: 1px solid var(--line); }
+.reader-chapter-catalog-item:hover, .reader-chapter-catalog-item:focus-visible { background: #faf7fe; }
+.reader-chapter-catalog-item[aria-current="true"] { background: #f3edfc; box-shadow: inset 2px 0 0 #7152a3; }
+.reader-chapter-catalog-title { min-width: 0; overflow-wrap: anywhere; }
+.reader-chapter-catalog-item[data-level="1"] .reader-chapter-catalog-title { font-weight: 700; }
+.reader-chapter-catalog-page { flex-shrink: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.reader-chapter-catalog :focus-visible { outline: 2px solid #a57525; outline-offset: 2px; }
+/* 无句子索引时用文本节点定位章节标题，短暂标一下目标位置。 */
+.is-outline-target { background: #f5e3a6; box-shadow: 0 0 0 2px #f5e3a6; border-radius: 2px; }
+
 .reader-visual-catalog { min-width: 0; }
 .reader-visual-catalog[hidden] { display: none; }
 .reader-visual-catalog-heading { margin-bottom: 8px; }

@@ -21,9 +21,9 @@ function getReaderTextNodes(container) {
 /* reader-text-dom:end */
 
 const READER_PANEL_STATE_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.readerPanels`;
-const READER_SIDEBAR_CARD_KEYS = ["detail", "progress", "search", "catalog"];
-// 新文献默认只展开「信息」「处理」；检索与图表按需打开。
-const READER_SIDEBAR_CARD_DEFAULT = { detail: true, progress: true, search: false, catalog: false };
+const READER_SIDEBAR_CARD_KEYS = ["detail", "progress", "search", "chapters", "catalog"];
+// 新文献默认只展开「信息」「处理」；检索、章节与图表按需打开。
+const READER_SIDEBAR_CARD_DEFAULT = { detail: true, progress: true, search: false, chapters: false, catalog: false };
 
 function normalizeReaderSidebarCards(value) {
   const source = value && typeof value === "object" ? value : {};
@@ -119,6 +119,10 @@ function applyReaderSidebarCards() {
     // 图表目录卡片展开时才拉取目录，与旧浮动面板的懒加载行为一致。
     if (key === "catalog" && expanded && typeof syncReaderVisualCatalog === "function") {
       syncReaderVisualCatalog(typeof getSelectedDocument === "function" ? getSelectedDocument() : null);
+    }
+    // 章节目录同理：展开时才识别/拉取。
+    if (key === "chapters" && expanded && typeof syncReaderOutline === "function") {
+      syncReaderOutline(typeof getSelectedDocument === "function" ? getSelectedDocument() : null);
     }
   });
   const empty = document.querySelector("#reader-sidebar-cards-empty");

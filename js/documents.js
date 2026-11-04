@@ -756,6 +756,7 @@ function renderReader() {
   if (!item) {
     if (typeof syncReaderSearch === "function") syncReaderSearch(null);
     if (typeof syncReaderVisualCatalog === "function") syncReaderVisualCatalog(null);
+    if (typeof syncReaderOutline === "function") syncReaderOutline(null);
     setReaderEditing(false);
     readerTitle.textContent = "未选择文献";
     readerPageInput.value = "";
@@ -780,6 +781,7 @@ function renderReader() {
   ensureSelectedPage(item);
   const page = getSelectedPage();
   if (typeof syncReaderVisualCatalog === "function") syncReaderVisualCatalog(item);
+  if (typeof syncReaderOutline === "function") syncReaderOutline(item);
   const canEdit = canEditDocument(item);
   const editingPageKey = JSON.stringify([currentUser?.id, item.id, page?.id]);
   if (!canEdit || readerEditingPageKey !== editingPageKey) readerEditing = false;

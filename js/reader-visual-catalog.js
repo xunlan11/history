@@ -1,4 +1,4 @@
-/* 可选的图目录，作为左侧工具栏的第四张卡片。父级在 renderReader 中调用 syncReaderVisualCatalog(item)。 */
+/* 可选的图表目录，作为左侧工具栏的第五张卡片。父级在 renderReader 中调用 syncReaderVisualCatalog(item)。 */
 const readerVisualCatalogCache = new Map();
 const readerVisualCatalogState = {
   documentId: null, snapshot: "", loading: false, error: "", catalog: null,

@@ -35,6 +35,7 @@
                   <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="detail" aria-controls="reader-sidebar-detail" aria-expanded="true">信息</button>
                   <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="progress" aria-controls="reader-sidebar-progress" aria-expanded="true">处理</button>
                   <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="search" aria-controls="reader-search-panel" aria-expanded="true">检索</button>
+                  <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="chapters" aria-controls="reader-chapters-panel" aria-expanded="false">章节</button>
                   <button class="reader-sidebar-tab" type="button" data-reader-sidebar-tab="catalog" aria-controls="reader-visual-catalog" aria-expanded="false">图表</button>
                 </div>
                 <div class="reader-sidebar-cards" id="reader-sidebar-cards">
@@ -126,6 +127,10 @@
                     <p class="reader-search-status" id="reader-search-status" role="status" aria-live="polite"></p>
                     <ol class="reader-search-results" id="reader-search-results" aria-label="匹配结果，按文中位置排序"></ol>
                   </section>
+                  <section class="reader-sidebar-card reader-chapter-catalog" id="reader-chapters-panel" data-reader-sidebar-card="chapters" role="region" aria-label="章节" hidden>
+                    <div class="section-heading reader-chapter-catalog-heading"><h3>章节</h3></div>
+                    <ol class="reader-chapter-catalog-items"></ol>
+                  </section>
                   <section class="reader-sidebar-card reader-visual-catalog" id="reader-visual-catalog" data-reader-sidebar-card="catalog" role="region" aria-label="图表目录" hidden>
                     <div class="section-heading reader-visual-catalog-heading"><h3>图表目录</h3></div>
                     <p class="reader-visual-catalog-status" role="status" aria-live="polite">请先打开文献</p>
@@ -208,6 +213,7 @@
     <script src="../js/reader.js"></script>
     <script src="../js/reader-content.js"></script>
     <script src="../js/reader-visual-catalog.js"></script>
+    <script src="../js/reader-outline.js"></script>
     <script src="../js/reader-search.js"></script>
     <script src="../js/shelf.js"></script>
     <script src="../js/documents.js"></script>

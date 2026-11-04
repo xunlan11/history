@@ -26,6 +26,7 @@ from service.extract import FileExtractionError, extract_file_content
 from service import scheduler as processing_scheduler
 from service import variant as variant_service
 from service import reader_index, reader_content
+from service import outline as outline_service
 from service import retrieval, uploads
 from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
 from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
@@ -2368,6 +2369,18 @@ def get_page_reader_content(document_id: str, page_id: str):
         rehydrate_document_assets(connection, {"id": document_id, "pages": [page]})
         layout = connection.execute("SELECT layout FROM page_reader_indexes WHERE page_id=? AND document_id=?", (page_id, document_id)).fetchone()
         return reader_content.build_reader_content(json_load(layout["layout"]) if layout else {}, page)
+
+
+@app.get("/api/documents/{document_id}/outline")
+def get_document_outline(document_id: str):
+    user = current_user()
+    with database() as connection:
+        row = connection.execute("SELECT payload FROM documents WHERE id=? AND deleted_at IS NULL AND (visibility='public' OR owner_id=?)", (document_id, user["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="文献不存在或不可见")
+        document = json_load(row["payload"])
+        document["pages"] = [json_load(p["payload"]) for p in connection.execute("SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number", (document_id,))]
+        return outline_service.build_outline(document)
 
 
 @app.get("/api/documents/{document_id}/visual-catalog")
