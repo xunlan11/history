@@ -360,6 +360,11 @@ class Scheduler:
         self.registration_progress: dict[str, dict] = {}
         self.progress_lock = threading.Lock()
         self.progress_watchers: dict[str, threading.Event] = {}
+        # 修改（续传）期间暂停该文献的新阶段启动，等已在飞的阶段落库后再改页序。
+        self.holds: set[str] = set()
+        self.hold_lock = threading.Lock()
+        # 让“加 hold”与“启动阶段”互斥：hold 建立之后不可能再有本轮的启动漏网。
+        self.tick_lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
         self.lock_file = None
@@ -473,7 +478,7 @@ class Scheduler:
                     page.setdefault(f"{stage}Done", False)
                 return page
         page = {
-            "id": f"{doc['id']}-page-{number}", "pageNumber": number,
+            "id": f"{doc['id']}-page-{uuid.uuid4().hex[:12]}", "pageNumber": number,
             "ocrText": "", "normalizedText": "", "punctuationDraftText": "",
             "punctuatedText": "", "notes": "",
             "stageStatus": {}, "status": "待整理",
@@ -731,6 +736,10 @@ class Scheduler:
                     save_job_state(self.data, connection, job, doc, cp, page_ids=[])
 
     def tick(self):
+        with self.tick_lock:
+            self._tick()
+
+    def _tick(self):
         for lane, (future, doc_id, operation, number) in list(self.running.items()):
             if future.done():
                 self._stop_progress_watcher(lane)
@@ -760,7 +769,9 @@ class Scheduler:
             return
         if "registration" in self.running:
             return
-        bodies = [job for job in jobs if job["phase"] == "body"]
+        with self.hold_lock:
+            held = set(self.holds)
+        bodies = [job for job in jobs if job["phase"] == "body" and job["document_id"] not in held]
         if not bodies:
             return
         job = bodies[0]  # 不能跳过正在等待的队首文献去处理另一份文献。
@@ -773,6 +784,9 @@ class Scheduler:
         if not loaded:
             return
         job, doc, cp = loaded
+        with self.hold_lock:
+            if doc["id"] in self.holds:
+                return
         if any(entry[1] != doc["id"] for entry in self.running.values()):
             return
         if job["retry_at"] > self.clock():
@@ -939,6 +953,26 @@ class Scheduler:
                 operations.append((f"{lane}:{number}", operation, number))
                 slots -= 1
         return operations
+
+    def hold_document(self, document_id, timeout=120.0):
+        """暂停该文献的新阶段启动，并等已在飞的阶段全部落库。"""
+        with self.tick_lock:
+            with self.hold_lock:
+                if document_id in self.holds:
+                    return False
+                self.holds.add(document_id)
+        deadline = time.monotonic() + timeout
+        while any(entry[1] == document_id for entry in list(self.running.values())):
+            if time.monotonic() >= deadline:
+                with self.hold_lock:
+                    self.holds.discard(document_id)
+                return False
+            time.sleep(0.05)
+        return True
+
+    def release_document(self, document_id):
+        with self.hold_lock:
+            self.holds.discard(document_id)
 
     def _acquire_worker_lock(self):
         # 进程生命周期内的操作系统锁可防止重复工作器，包括 uvicorn --workers。

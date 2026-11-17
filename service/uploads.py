@@ -234,24 +234,33 @@ def ready_uploads(connection, ids, user):
     return rows
 
 
-def merge_sources(rows, output):
+def merge_paths(sources, output):
+    """按给定顺序合并 PDF/图片为一个 PDF，返回每一段的页数。"""
     import pymupdf as fitz
+    counts = []
     with fitz.open() as merged:
-        for row in rows:
+        for path, name in sources:
             try:
-                with fitz.open(upload_root() / row["path"]) as source:
+                with fitz.open(path) as source:
                     if source.needs_pass:
                         raise ValueError("PDF 已加密")
                     if source.page_count < 1:
                         raise ValueError("文件没有可读取的页面")
+                    before = merged.page_count
                     if source.is_pdf:
                         merged.insert_pdf(source)
                     else:
                         with fitz.open(stream=source.convert_to_pdf(), filetype="pdf") as image_pdf:
                             merged.insert_pdf(image_pdf)
+                    counts.append(merged.page_count - before)
             except (RuntimeError, ValueError, OSError) as exc:
-                raise HTTPException(422, f'无法合并“{row["file_name"]}”：{exc}') from exc
+                raise HTTPException(422, f'无法合并“{name}”：{exc}') from exc
         merged.save(output)
+    return counts
+
+
+def merge_sources(rows, output):
+    return merge_paths([(upload_root() / row["path"], row["file_name"]) for row in rows], output)
 
 
 @router.post("/{registration_id}/register")

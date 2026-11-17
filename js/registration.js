@@ -10,7 +10,7 @@ function getStoredAuthToken() {
 }
 
 function hasActiveDocumentUpload() {
-  return Boolean(registrationBatch?.files.length);
+  return Boolean(registrationBatch?.files.some((state) => !state.existing));
 }
 
 function isCurrentUpload(state) {
@@ -95,7 +95,17 @@ function createUploadRow(state) {
   row.dataset.uploadId = state.id;
   row.querySelector(".file-picker-name").textContent = state.file.name;
   row.querySelector(".file-picker-name").title = state.file.name;
-  row.querySelector(".file-upload-remove").addEventListener("click", () => removeRegistrationUpload(state.id));
+  if (state.existing) {
+    // 已有原件只占一行，用来决定合并顺序，不能删除也不能重新上传。
+    row.classList.add("is-existing");
+    const badge = document.createElement("span");
+    badge.className = "file-upload-badge";
+    badge.textContent = "已有原件";
+    row.querySelector(".file-picker-name").after(badge);
+    row.querySelector(".file-upload-remove").remove();
+    row.querySelector(".file-upload-meter").classList.add("hidden");
+  }
+  row.querySelector(".file-upload-remove")?.addEventListener("click", () => removeRegistrationUpload(state.id));
   const handle = row.querySelector(".file-upload-drag");
   handle.addEventListener("dragstart", (event) => {
     if (registrationBatch?.status === "submitting") return event.preventDefault();
@@ -144,13 +154,15 @@ function renderRegistrationUploads() {
     if (!state.row) state.row = createUploadRow(state);
     if (state.row.parentNode !== list) list.append(state.row);
     const row = state.row;
-    const failed = state.status === "failed";
-    row.querySelector(".file-upload-meter").classList.toggle("hidden", failed);
-    row.querySelector(".file-upload-failed").classList.toggle("hidden", !failed);
-    row.querySelector(".file-upload-status").title = failed ? `${state.error}；请删除后重新上传` : "";
-    row.querySelector("progress").value = state.percent;
-    row.querySelector("progress").title = `${state.percent}%`;
-    row.querySelector(".file-upload-remove").disabled = Boolean(submitting);
+    if (!state.existing) {
+      const failed = state.status === "failed";
+      row.querySelector(".file-upload-meter").classList.toggle("hidden", failed);
+      row.querySelector(".file-upload-failed").classList.toggle("hidden", !failed);
+      row.querySelector(".file-upload-status").title = failed ? `${state.error}；请删除后重新上传` : "";
+      row.querySelector("progress").value = state.percent;
+      row.querySelector("progress").title = `${state.percent}%`;
+      row.querySelector(".file-upload-remove").disabled = Boolean(submitting);
+    }
     row.querySelector(".file-upload-drag").disabled = Boolean(submitting);
     row.querySelector(".file-upload-drag").draggable = !submitting;
   }
@@ -175,6 +187,10 @@ function moveRegistrationUpload(id, targetId, after = false) {
 }
 
 function cancelTemporaryUpload(state) {
+  if (state.existing) {
+    state.row?.remove();
+    return;
+  }
   state.controller.abort();
   fetch(uploadUrl(state.id), { method: "DELETE", keepalive: true }).catch(() => {});
   state.row?.remove();
@@ -184,7 +200,7 @@ function removeRegistrationUpload(id) {
   const batch = registrationBatch;
   if (!batch || batch.status === "submitting") return;
   const state = batch.files.find((entry) => entry.id === id);
-  if (!state) return;
+  if (!state || state.existing) return;
   batch.files = batch.files.filter((entry) => entry !== state);
   cancelTemporaryUpload(state);
   batch.error = "";
@@ -294,6 +310,9 @@ function acceptRegisteredDocument(payload) {
 async function registerSelectedUploads() {
   const batch = registrationBatch;
   if (!batch?.files.length || batch.status === "submitting" || batch.files.some((state) => state.status !== "ready")) return;
+  if (batch.existing && typeof submitDocumentRevision === "function") {
+    return submitDocumentRevision(batch);
+  }
   const fields = new FormData(form);
   const body = Object.fromEntries(["title", "author", "publisher", "year", "tags"].map((key) => [key, textValue(key)]));
   Object.assign(body, { uploadIds: batch.files.map((state) => state.id), coverVariant: getNextDocumentCoverVariant(), processingMode: normalizeProcessingMode(fields.get("processingMode")), processingChunkSize: clampChunkSize(fields.get("chunkSize")) });

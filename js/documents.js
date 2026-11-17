@@ -768,6 +768,7 @@ function renderReader() {
     readerNextPageButton.disabled = true;
     exportDocumentPdfButton.disabled = true;
     editDocumentButton.disabled = true;
+    if (typeof syncReviseDocumentButton === "function") syncReviseDocumentButton(null);
     readerOriginalPreview.classList.add("is-empty");
     readerText.classList.add("is-empty");
     readerOriginalPreview.append(readerEmptyState("请先在文献库打开一项文献"));
@@ -800,6 +801,7 @@ function renderReader() {
   readerNextPageButton.disabled = pageIndex >= sortedPages.length - 1;
   exportDocumentPdfButton.disabled = false;
   editDocumentButton.disabled = !page || !canEdit;
+  if (typeof syncReviseDocumentButton === "function") syncReviseDocumentButton(item);
 
   if (typeof recordReaderProgress === "function") {
     recordReaderProgress(item, page);

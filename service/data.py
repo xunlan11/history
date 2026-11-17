@@ -11,6 +11,7 @@ import secrets
 import shutil
 import sqlite3
 import sys
+import time
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1911,6 +1912,187 @@ def retry_document_processing(document_id: str):
             connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(document), stamp, document_id))
             bump_sync_version(connection)
         return {"document": public_processing_document(connection, document_id, user)}
+
+
+class DocumentRevision(BaseModel):
+    uploadIds: list[str] = Field(default_factory=list)
+    existingIndex: int = 0
+    title: str | None = None
+    author: str | None = None
+    publisher: str | None = None
+    year: str | None = None
+    tags: str | None = None
+    processingMode: str | None = None
+    processingChunkSize: int | None = None
+
+
+REVISION_METADATA_FIELDS = ("title", "author", "publisher", "year", "tags")
+
+
+def _apply_revision_metadata(document: dict[str, Any], payload: DocumentRevision) -> None:
+    for field in REVISION_METADATA_FIELDS:
+        value = getattr(payload, field)
+        if value is not None:
+            document[field] = str(value).strip()
+
+
+def _revision_page_needs_reproofreading(page: dict[str, Any]) -> bool:
+    if page.get("proofreadingDone"):
+        return True
+    return (page.get("stageStatus") or {}).get("proofreading") == "failed" or page.get("failureStage") == "proofreading"
+
+
+@app.post("/api/documents/{document_id}/revise")
+def revise_document(document_id: str, payload: DocumentRevision):
+    """把新上传的文件合并到现有原件的最前/最后，或只更新元数据与处理方式。"""
+    user = current_user()
+    if len(set(payload.uploadIds)) != len(payload.uploadIds):
+        raise HTTPException(status_code=422, detail="文件列表包含重复的上传编号")
+    if not 0 <= payload.existingIndex <= len(payload.uploadIds):
+        raise HTTPException(status_code=422, detail="文献位置无效")
+    if payload.processingMode is not None and payload.processingMode not in processing_scheduler.PROCESSING_MODES:
+        raise HTTPException(status_code=422, detail="处理方式必须是串行、并行或大串小并")
+    with database() as connection:
+        require_owned_document(connection, document_id, user)
+        upload_rows = uploads.ready_uploads(connection, payload.uploadIds, user)
+        source_row = connection.execute(
+            "SELECT * FROM document_files WHERE document_id=? AND role='source' AND deleted_at IS NULL "
+            "ORDER BY updated_at DESC LIMIT 1", (document_id,)).fetchone()
+    if not source_row:
+        raise HTTPException(status_code=409, detail="原件缺失，暂时无法修改")
+    source_path = (FILE_STORAGE_DIR / source_row["storage_path"]).resolve()
+    if not source_path.is_relative_to(FILE_STORAGE_DIR.resolve()) or not source_path.is_file():
+        raise HTTPException(status_code=409, detail="原件缺失，暂时无法修改")
+
+    worker = _scheduler_worker
+    held = False
+    merged_path = None
+    try:
+        if upload_rows:
+            # 正在执行的页结果会写回旧页码；先暂停该文献并等所有在飞阶段落库。
+            if worker is not None:
+                if not worker.hold_document(document_id):
+                    raise HTTPException(status_code=409, detail="文献正在处理当前页，请稍后再试")
+                held = True
+            merged_path = uploads.upload_root() / f"revise-{secrets.token_hex(16)}.part"
+            segments = []
+            for index, row in enumerate(upload_rows):
+                if index == payload.existingIndex:
+                    segments.append((source_path, source_row["original_name"] or "原件"))
+                segments.append((uploads.upload_root() / row["path"], row["file_name"]))
+            if payload.existingIndex == len(upload_rows):
+                segments.append((source_path, source_row["original_name"] or "原件"))
+            counts = uploads.merge_paths(segments, merged_path)
+            before_pages = sum(counts[:payload.existingIndex])
+            total_pages = sum(counts)
+            existing_pages = counts[payload.existingIndex]
+
+        with database() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            require_owned_document(connection, document_id, user)
+            job_row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+            if not job_row:
+                raise HTTPException(status_code=409, detail="文献没有后端任务，暂时无法修改")
+            if merged_path and job_row["phase"] == "registration":
+                raise HTTPException(status_code=409, detail="文献尚未完成登记准备，请稍后再试")
+            document = attach_document_pages(connection, json_load(
+                connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]))
+            checkpoint = json_load(job_row["checkpoint"])
+            task = document.setdefault("processingTask", {})
+            stamp = now_iso()
+            mode = payload.processingMode or job_row["mode"]
+            chunk_size = processing_scheduler.normalize_chunk_size(
+                payload.processingChunkSize if payload.processingChunkSize is not None else job_row["chunk_size"])
+            _apply_revision_metadata(document, payload)
+            document.update(processingMode=mode, processingChunkSize=chunk_size, updatedAt=stamp)
+            job = dict(job_row)
+            job.update(mode=mode, chunk_size=chunk_size)
+
+            if merged_path:
+                old_total = int(checkpoint.get("totalPages") or task.get("totalPages") or 0)
+                if old_total != existing_pages:
+                    raise HTTPException(status_code=409, detail="原件页数与处理记录不一致，暂时无法续传")
+                digest = hashlib.sha256()
+                size = 0
+                with merged_path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        digest.update(chunk)
+                        size += len(chunk)
+                digest_hex = digest.hexdigest()
+                base_name = document.get("fileName") or source_row["original_name"] or document_id
+                stem = Path(base_name).stem
+                for suffix in ("_合并", "-合并"):
+                    if stem.endswith(suffix):
+                        stem = stem[: -len(suffix)]
+                name = f"{stem}_合并.pdf"
+                relative = relative_storage_path(document_id, "source", digest_hex, "application/pdf", name)
+                target = FILE_STORAGE_DIR / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(merged_path, target)
+                asset = upsert_file_record(connection, document_id=document_id, role="source", timestamp=stamp, asset={
+                    "storagePath": relative.as_posix(), "sha256": digest_hex, "size": size,
+                    "mimeType": "application/pdf", "fileName": name})
+                apply_asset_to_document(document, asset)
+
+                pages = document.get("pages") or []
+                for page in pages:
+                    page["pageNumber"] = int(page.get("pageNumber") or 0) + before_pages
+                if before_pages:
+                    # 阅读进度按页 id 定位，页码跟着同一次重排一起后移。
+                    connection.execute("UPDATE reading_progress SET page_number = page_number + ? WHERE document_id = ?",
+                                       (before_pages, document_id))
+                checkpoint["omittedPages"] = [int(number) + before_pages for number in checkpoint.get("omittedPages") or []]
+                for key in ("attempts", "retries", "waiting", "errors"):
+                    checkpoint[key] = {}
+                checkpoint["totalPages"] = total_pages
+                if before_pages > 0:
+                    boundary = next((page for page in pages if int(page.get("pageNumber") or 0) == before_pages + 1), None)
+                    if boundary and _revision_page_needs_reproofreading(boundary):
+                        # 旧文件第一页的上一页换成了新内容，重新校对这一页即可。
+                        boundary["proofreadingDone"] = False
+                        boundary.setdefault("stageStatus", {}).pop("proofreading", None)
+                        boundary.pop("failureStage", None)
+                        boundary.pop("failureMessage", None)
+                        boundary["status"] = "已完成标点"
+                progress = processing_scheduler.Scheduler._stage_progress(document, checkpoint, total_pages)
+                task.update(
+                    mode=mode, chunkSize=chunk_size, totalPages=total_pages,
+                    completedPages=progress["ocr"]["done"], finalizedPages=progress["proofreading"]["done"],
+                    stageProgress=progress,
+                    failedPages=[{"pageNumber": page["pageNumber"], "stage": page.get("failureStage"),
+                                  "message": page.get("failureMessage", "")} for page in pages if page.get("failureStage")],
+                    status="排队中", message="已更新原件，等待处理", finishedAt="",
+                    activeStages={}, pausedForRegistration=False,
+                    currentPage=0, currentPageStage="", currentPageProgress=0,
+                )
+                document["status"] = "排队中"
+                connection.execute(
+                    "UPDATE processing_jobs SET phase='body',status='queued',retry_at=0,source_path=?,mode=?,chunk_size=?,updated_at=? WHERE document_id=?",
+                    (relative.as_posix(), mode, chunk_size, stamp, document_id))
+                job.update(phase="body", status="queued", retry_at=0, source_path=relative.as_posix())
+                processing_scheduler.save_job_state(sys.modules[__name__], connection, job, document, checkpoint)
+            else:
+                connection.execute("UPDATE processing_jobs SET mode=?,chunk_size=?,updated_at=? WHERE document_id=?",
+                                   (mode, chunk_size, stamp, document_id))
+                task.update(mode=mode, chunkSize=chunk_size, revision=int(task.get("revision") or 0) + 1,
+                            metadataSnapshot=processing_scheduler.metadata(document))
+                connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?",
+                                   (document_payload(document), stamp, document_id))
+                bump_sync_version(connection)
+
+            for row in upload_rows:
+                connection.execute(
+                    "UPDATE pending_uploads SET status='registered',document_id=?,path='',updated_at=? WHERE id=?",
+                    (document_id, time.time(), row["id"]))
+            result = {"document": public_processing_document(connection, document_id, user)}
+        for row in upload_rows:
+            uploads.remove_file(row)
+        return result
+    finally:
+        if merged_path:
+            merged_path.unlink(missing_ok=True)
+        if held:
+            worker.release_document(document_id)
 
 
 _scheduler_worker = None

@@ -309,6 +309,17 @@ button {
   background: #e8f1ed;
 }
 
+.file-upload-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .file-upload-controls {
   display: flex;
   align-items: center;
@@ -1814,6 +1825,16 @@ body {
   justify-content: flex-end;
   gap: 10px;
   align-items: center;
+}
+
+.reader-actions .ghost-link:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* .icon-text-button 的 display 规则在后面，必须用复合选择器才能隐藏。 */
+.reader-actions .ghost-link.hidden {
+  display: none;
 }
 
 .reader-topbar .ghost-link {
