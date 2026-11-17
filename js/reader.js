@@ -116,7 +116,7 @@ function applyReaderSidebarCards() {
     card.hidden = !expanded;
     const button = document.querySelector(`[data-reader-sidebar-tab="${key}"]`);
     if (button) button.setAttribute("aria-expanded", String(expanded));
-    // 图表目录卡片展开时才拉取目录，与旧浮动面板的懒加载行为一致。
+    // 图表目录卡片展开时才拉取目录。
     if (key === "catalog" && expanded && typeof syncReaderVisualCatalog === "function") {
       syncReaderVisualCatalog(typeof getSelectedDocument === "function" ? getSelectedDocument() : null);
     }

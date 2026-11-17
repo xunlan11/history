@@ -485,7 +485,7 @@ function bindReaderVisualEvents(container) {
   if (!container || readerVisualBoundContainers.has(container)) return;
   readerVisualBoundContainers.add(container);
   // 图表内带正文偏移的文字（如“注：”，含其外层 figcaption）由句子悬停/选中负责，
-  // 其余图表文字（题注）走这里的定位；两者样式一致，不再按“注 / 题注”分开处理。
+  // 其余图表文字（题注）走这里的定位；两者样式一致。
   const bodyLinked = (node) => Boolean(node?.closest?.("[data-reader-text-start]"));
   const target = (event) => {
     if (bodyLinked(event.target)) return null;

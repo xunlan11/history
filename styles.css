@@ -591,7 +591,7 @@ label {
   transition: border-color 0.15s ease;
 }
 .reader-search-field:hover { border-color: #bac7c0; }
-/* 焦点环画在容器上（与全局 input:focus 的三黄色描边一致），内层 input 不再画 */
+/* 焦点环画在容器上（与全局 input:focus 的三黄色描边一致），内层 input 不画 */
 .reader-search-field:focus-within { border-color: var(--focus); outline: 3px solid rgba(209, 154, 56, 0.28); outline-offset: 2px; }
 .reader-search-icon { flex: 0 0 auto; width: 15px; height: 15px; }
 .reader-search-field:focus-within .reader-search-icon { color: var(--primary); }
@@ -793,7 +793,7 @@ mark.reader-search-highlight.is-current { background: #c9adf0; box-shadow: inset
   font-size: 13px;
 }
 
-/* 末行不再画分隔线，也不留 8px 下内边距——否则「文献信息」框底部视觉留白
+/* 末行不画分隔线，也不留 8px 下内边距——否则「文献信息」框底部视觉留白
    会比另外两栏多 8px（卡片内边距 20px + 末行 8px）*/
 #reader-document-detail > div:last-child {
   border-bottom: 0;
@@ -4502,7 +4502,7 @@ body {
 
 @media (max-width: 980px) {
   .reader-layout { grid-template-rows: max-content max-content; overflow: auto; }
-  /* 单列时整页滚动，卡片区不再单独出滚动条 */
+  /* 单列时整页滚动，卡片区不单独出滚动条 */
   .reader-sidebar-cards { overflow: visible; }
   .reader-search-results { max-height: 320px; }
   .reader-visual-catalog-items { max-height: 320px; }

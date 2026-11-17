@@ -9,7 +9,7 @@ Type=simple
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=%h/history-service/models
 Environment=OLLAMA_KEEP_ALIVE=-1
-# 默认生成 Spark Q4_K_M / 16K，Qwen 保留为手动备选；数据端用 LLM_MODEL 选择。
+# 生成模型 Spark-X2.6-4B Q4_K_M（num_ctx=16384），标签由数据端 LLM_MODEL 指定。
 # 本实例一次只加载一个生成模型。
 # 嵌入使用 history-embedding.service 的 CPU 实例。
 # 生成允许 GPU/CPU 混合加载，其他模型服务不使用 GPU。

@@ -105,52 +105,9 @@ PROCESSING_QUEUE_INDEX_DDL = """
 """
 
 
-def ensure_current_schema(connection):
-    """把既有库的 processing_jobs 升级到支持分块链路；新库由 ensure_schema 建表。
-
-    每次 connect 都会调用，所以先用一次 sqlite_master 查询探底：已升级时只剩一句
-    幂等的 CREATE INDEX IF NOT EXISTS。
-    """
-    row = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='processing_jobs'").fetchone()
-    if row is None:
-        return  # 新库交给 ensure_schema 建表建索引
-    if "chunked" not in (row["sql"] or ""):
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            _upgrade_processing_jobs(connection)
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-    # 重建表会连带丢掉旧索引，这里补回来（已存在时是空操作）。
-    connection.execute(PROCESSING_QUEUE_INDEX_DDL)
-
-
-def _upgrade_processing_jobs(connection):
-    """把旧的 processing_jobs 重建成支持分块链路的形状。
-
-    SQLite 无法直接放宽 CHECK 约束，只能重建表。旧库里的任务按默认块大小继续处理，
-    已登记的串行/并行不受影响。
-    """
-    columns = {item[1] for item in connection.execute("PRAGMA table_info(processing_jobs)")}
-    chunk_expr = "chunk_size" if "chunk_size" in columns else str(CHUNK_SIZE_DEFAULT)
-    # 上一次升级若在中间失败，残留的临时表会挡住 RENAME。
-    connection.execute("DROP TABLE IF EXISTS processing_jobs_legacy")
-    connection.execute("ALTER TABLE processing_jobs RENAME TO processing_jobs_legacy")
-    # 索引名会跟着表走；先删掉，避免新表上 CREATE INDEX IF NOT EXISTS 变成空操作。
-    connection.execute("DROP INDEX IF EXISTS idx_processing_jobs_queue")
-    connection.execute(PROCESSING_JOBS_DDL)
-    connection.execute(f"""INSERT INTO processing_jobs
-            (sequence, document_id, mode, chunk_size, phase, status, source_path, checkpoint, retry_at, created_at, updated_at)
-        SELECT sequence, document_id, mode, {chunk_expr}, phase, status, source_path, checkpoint, retry_at, created_at, updated_at
-        FROM processing_jobs_legacy""")
-    connection.execute("DROP TABLE processing_jobs_legacy")
-
-
 def ensure_schema(connection):
     connection.execute(PROCESSING_JOBS_DDL)
-    ensure_current_schema(connection)
+    connection.execute(PROCESSING_QUEUE_INDEX_DDL)
 
 
 def metadata(document):
@@ -322,7 +279,7 @@ def preserve_server_fields(connection, document):
     if not row or not job:
         return document
     stored = json.loads(row["payload"])
-    # 页正文以 document_pages 为准，payload 里不再内嵌 pages。
+    # 页正文以 document_pages 为准，payload 里不内嵌 pages。
     stored["pages"] = [json.loads(page["payload"]) for page in connection.execute(
         "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
         (document["id"],))]
@@ -363,7 +320,7 @@ def save_job_state(data, connection, job, doc, cp, page_ids=None):
     """保存任务状态与页内容。
 
     `page_ids`：None = 全量对账（结构变化、浏览器推送）；[] = 只保存任务状态；
-    非空列表 = 只写这些页。阶段完成时只传当前页，不再重写整本文献的每一页。
+    非空列表 = 只写这些页。阶段完成时只传当前页，不重写整本文献的每一页。
     """
     stamp = data.now_iso()
     doc["updatedAt"] = stamp

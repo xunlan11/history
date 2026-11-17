@@ -19,7 +19,7 @@ SENTENCE_END = re.compile(r'[。！？!?]+[”’」』）】]*|\.(?=\s|$)')
 # 句末标点，只按标点切会把它们与下一段首句粘成一句，原文高亮/引用定位就会一次圈住
 # 好几个互不相干的部分。
 PARAGRAPH_BREAK = re.compile(r'\n[ \t]*\n')
-# 索引载荷版本：算法变化时递增，旧载荷在 reconcile 时重建。
+# 索引载荷版本：算法变化时递增，版本不符的载荷在 reconcile 时重建。
 INDEX_VERSION = 5
 
 
@@ -239,7 +239,7 @@ def pdf_line_char_boxes(pdf_path: Any, page_number: Any, lines: list[dict[str, A
 
     只有电子版（带文字层）的 PDF 才有：OCR 只能给出整行的多边形，行里混排数字/字母时
     按比例切会失准；文字层则能精确到字符。扫描件、页序错位、坐标对不上时一律返回空字典，
-    调用方继续走原来的整行/等宽比例兜底。
+    调用方用整行/等宽比例兜底。
     """
     if not pdf_path or not page_number or not lines or not _dimension(image_width):
         return {}
@@ -267,7 +267,7 @@ def pdf_line_char_boxes(pdf_path: Any, page_number: Any, lines: list[dict[str, A
                                 continue
                             raw_chars.append((char_text, float(char_box[0]), float(char_box[1]),
                                               float(char_box[2]), float(char_box[3])))
-    except Exception:  # 损坏/加密/非 PDF：保持旧行为即可。
+    except Exception:  # 损坏/加密/非 PDF：返回空字典。
         logger.debug("Cannot read PDF text layer for %s page %s", pdf_path, page_number, exc_info=True)
         return {}
     if not raw_chars or not math.isfinite(page_width) or page_width <= 0:
@@ -474,7 +474,7 @@ def reconcile_reader_index(connection, document_id, page, timestamp, *, source_p
     layout = json.loads(row["layout"])
     status, error, payload = row["status"], row["error"], row["payload"]
     changed = row["source_revision"] != revision or row["text_hash"] != digest
-    # 旧载荷没有坐标时必须重算，不能因为状态为 ready 就直接复用。
+    # 载荷缺少坐标时必须重算，不能因为状态为 ready 就直接复用。
     outdated = status == "ready" and _stored_index_version(payload) != INDEX_VERSION
     if not layout and status == "failed":
         pass

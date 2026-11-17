@@ -169,7 +169,7 @@ function renderReaderSearchPanel() {
   if (readerSearchMarkAll) readerSearchMarkAll.disabled = !filtered.length || readerEditing;
   for (const level of Object.keys(READER_SEARCH_LABELS)) {
     const node = document.querySelector(`[data-reader-search-count="${level}"]`);
-    // 嵌入检索失败时不显示 0（会被误读成「没有相近段落」），改为「失败」并悬停提示原因
+    // 嵌入检索失败时显示「失败」并悬停提示原因；不显示 0（会被误读成「没有相近段落」）
     const error = readerSearchState.searchError || (level === "semantic" ? readerSearchState.semanticError : "");
     const failed = Boolean(error);
     node.textContent = failed

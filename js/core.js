@@ -197,10 +197,18 @@ function renderResultState(container, message) {
   container.append(empty);
 }
 
+// 「无相关材料」是判定结果而非需要提示的异常：零命中的空列表、寒暄式回答
+// 已经说明了情况，再补一行文字只会让用户以为出错。其余警告照常显示。
+const HIDDEN_WARNING_TEXTS = new Set(["文献库中未检索到与问题足够相关的材料"]);
+
 function formatWarnings(warnings) {
+  const visible = (Array.isArray(warnings) ? warnings : [])
+    .map((warning) => String(warning).trim())
+    .filter((warning) => warning && !HIDDEN_WARNING_TEXTS.has(warning));
+  if (!visible.length) return document.createDocumentFragment();
   const node = document.createElement("p");
   node.className = "meta-line";
-  node.textContent = `提示：${warnings.join("；")}`;
+  node.textContent = `提示：${visible.join("；")}`;
   return node;
 }
 
@@ -333,7 +341,7 @@ function getDeletedConversationStorageKey() {
 }
 const SYNC_INTERVAL_MS = 30000;
 
-// 处理链路：串行 / 并行 / 大串小并（分块）。旧数据没有 mode 时按串行解释。
+// 处理链路：串行 / 并行 / 大串小并（分块）。数据里没有 mode 时按串行解释。
 // 注意：这两个常量与 clampChunkSize 会被 normalizeDocuments() 在脚本加载时（下方
 // `let documents = normalizeDocuments(...)`）立刻调用，必须声明在它之前，
 // 否则缓存里有文献时整页 TDZ 报错（ReferenceError），页面直接「死住」。

@@ -256,8 +256,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             raise RuntimeError(f"Database schema_version is invalid; only schema {SCHEMA_VERSION} is supported") from exc
         if schema_version != SCHEMA_VERSION:
             raise RuntimeError(f"Database schema {schema_version} is unsupported; only schema {SCHEMA_VERSION} is supported")
-        # 已有库也要升级处理任务表（新增大串小并链路），再校验列齐全。
-        processing_scheduler.ensure_current_schema(connection)
+        # 已有库也要补齐处理任务表与索引，再校验列齐全。
+        processing_scheduler.ensure_schema(connection)
         _require_current_schema(connection)
         uploads.ensure_schema(connection)
         return
@@ -954,7 +954,7 @@ def rehydrate_document_assets(connection: sqlite3.Connection, document: dict[str
 
 
 def load_document_pages(connection: sqlite3.Connection, document_id: str) -> list[dict[str, Any]]:
-    """页正文只存在 document_pages；documents.payload 不再内嵌 pages。"""
+    """页正文只存在 document_pages；documents.payload 不内嵌 pages。"""
     return [json_load(row["payload"]) for row in connection.execute(
         "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
         (str(document_id),))]
@@ -1734,7 +1734,7 @@ def preparation_percent(ready: int, total: int) -> int:
     if total <= 0:
         return PREPARATION_SYNC_PERCENT
     scaled = PREPARATION_SYNC_PERCENT + round((100 - PREPARATION_SYNC_PERCENT) * ready / total)
-    # 全部完成的任务不再汇报；仍报 100 只会让卡片在收尾时闪一下。
+    # 全部完成的任务不汇报；仍报 100 只会让卡片在收尾时闪一下。
     return min(99, scaled)
 
 

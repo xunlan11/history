@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 class ImageOnlyVisualPipeline:
-    """Keep native layout crops and accept callers still requesting table reconstruction."""
+    """只跑识别与版面：表格/图表区域输出原图，不重建单元格或 HTML。"""
 
     def __init__(self, target):
         self.target = target
@@ -31,7 +31,7 @@ class ImageOnlyVisualPipeline:
         return self._predict(self.target.predict, *args, **kwargs)
 
     def _predict(self, method, *args, **kwargs):
-        # 本机不再初始化表格模型；覆盖旧数据端参数，避免其请求不存在的模型。
+        # 本机不初始化表格模型；把表格相关参数覆盖为关闭，避免请求不存在的模型。
         kwargs.update(use_table_recognition=False, use_chart_recognition=False,
                       use_wired_table_cells_trans_to_html=False,
                       use_wireless_table_cells_trans_to_html=False)
@@ -86,7 +86,7 @@ def create_app(pipeline, config):
         observed = instrument_pipeline(pipeline)
         tracking = True
     except Exception:  # noqa: BLE001 - 进度只是观测层，不能连带打挂识别服务
-        log.exception("OCR 进度观测不可用：PaddleX 管线结构与预期不符，改为只提供识别")
+        log.exception("OCR 进度观测不可用：PaddleX 管线结构与预期不符，只提供识别")
         observed, tracking = pipeline, False
     # 在进度观测外覆盖参数，使进度按实际启用的模型统计。
     app = create_pipeline_app(ImageOnlyVisualPipeline(observed), config)

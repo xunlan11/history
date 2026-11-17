@@ -26,7 +26,7 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 # 详见 deploy/README.md；设为 1 可恢复思考模式。
 LLM_OLLAMA_THINK = os.getenv("LLM_OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
 # 整页标点 / 校对至少使用 16K 上下文，再按输入和输出预算扩展。
-# 旧 4K 预算曾导致长页截断和重复，不能随模型切换压低。
+# 预算不足会让长页截断和重复，换模型时不要压低。
 LLM_TEXT_CONTEXT_TOKENS = int(os.getenv("LLM_TEXT_CONTEXT_TOKENS", "16384"))
 # 超过这个字数的整页按段落/版面行切段分别标点，避免提示词和输出一起越过上下文。
 LLM_TEXT_CHUNK_CHARS = int(os.getenv("LLM_TEXT_CHUNK_CHARS", "6000"))
