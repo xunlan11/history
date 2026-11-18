@@ -44,25 +44,29 @@ function applyBackendProcessingDocument(documentId, payload) {
       const baseline = previous.processingTask?.metadataSnapshot;
       if (previous[key] !== undefined && (!baseline || !(key in baseline) || previous[key] !== baseline[key])) incoming[key] = previous[key];
     }
-    const localPages = new Map(previous.pages.map((page) => [page.id, page]));
-    for (const page of incoming.pages) {
-      const local = localPages.get(page.id);
-      if (!local) continue;
-      page.notes = local.notes || "";
-      if (local.proofreadingDone && local.processingRevision === page.processingRevision) {
-        page.punctuatedText = local.punctuatedText;
+    if (previous.__pagesLoaded !== false) {
+      const localPages = new Map(previous.pages.map((page) => [page.id, page]));
+      for (const page of incoming.pages) {
+        const local = localPages.get(page.id);
+        if (!local) continue;
+        page.notes = local.notes || "";
+        if (local.proofreadingDone && local.processingRevision === page.processingRevision) {
+          page.punctuatedText = local.punctuatedText;
+        }
       }
     }
   }
-  documents[index] = incoming;
+  documents[index] = mergeDocumentUpdate(previous, incoming);
   cacheCurrentState();
-  return incoming;
+  return documents[index];
 }
 
 async function requestBackendProcessing(documentId, options = {}) {
+  const headers = { "X-Pages-Mode": "index" };
+  if (options.body) headers["Content-Type"] = "application/json";
   const response = await fetch(`${DATA_PROCESSING_URL}/${encodeURIComponent(documentId)}/processing${options.suffix || ""}`, {
-    cache: "no-store", method: options.method || "GET",
-    ...(options.body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(options.body) } : {}),
+    cache: "no-store", method: options.method || "GET", headers,
+    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
   if (!response.ok) {
     let detail = "";
@@ -79,10 +83,12 @@ async function refreshProcessingDocument(item, options = {}) {
   processingPollInFlight.add(item.id);
   try {
     const result = await requestBackendProcessing(item.id);
+    const beforeTask = JSON.stringify(item.processingTask || {});
     const current = applyBackendProcessingDocument(item.id, result);
     if (!current) return;
     if (!isProcessingTaskPending(current)) stopProcessingPolling(current.id);
-    renderAll();
+    // 轮询只带任务状态；没有变化时不必重建整页 DOM。
+    if (JSON.stringify(current.processingTask || {}) !== beforeTask) renderAll();
   } catch (error) {
     // 浏览器或网络错误不能修改服务端负责的任务状态。
     if ([401, 403, 404].includes(error.status)) stopProcessingPolling(item.id);

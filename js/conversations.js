@@ -51,7 +51,7 @@ function getReferenceScopeReport(conversation = getSelectedConversation()) {
   for (const item of selectedDocuments) {
     let processedPages = 0;
     for (const page of item.pages) {
-      if (getPageProcessedText(page).trim()) processedPages += 1;
+      if (page.hasProcessedText === true || getPageProcessedText(page).trim()) processedPages += 1;
     }
     if (!processedPages) {
       emptyDocuments.push(item);

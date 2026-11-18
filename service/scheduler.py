@@ -337,6 +337,7 @@ def save_job_state(data, connection, job, doc, cp, page_ids=None):
         reader_index.reconcile_reader_index(connection, doc["id"], page, stamp, source_pdf=source_pdf)
     connection.execute("UPDATE documents SET payload=?, updated_at=?, version=version+1 WHERE id=? AND deleted_at IS NULL",
                        (data.document_payload(doc), stamp, doc["id"]))
+    data.record_change(connection, "document", doc["id"], timestamp=stamp)
     if allowed is None:
         data.upsert_document_pages(connection, doc["id"], pages, stamp)
     elif touched:

@@ -78,6 +78,11 @@ def _user_from_sso(request: Request) -> dict[str, Any] | None:
     return {"id": local["id"], "username": local["username"], "isAdmin": bool(local["is_admin"]), "role": "admin" if local["is_admin"] else "user"}
 
 
+def pages_index_requested(request: Request) -> bool:
+    """新前端用 X-Pages-Mode: index 拿页索引；未带头的旧前端仍拿整本页正文。"""
+    return (request.headers.get("x-pages-mode") or "").strip().lower() == "index"
+
+
 def _user_from_bearer(request: Request) -> dict[str, Any] | None:
     token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
     if not token:
@@ -261,6 +266,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         processing_scheduler.ensure_schema(connection)
         _require_current_schema(connection)
         uploads.ensure_schema(connection)
+        ensure_change_log(connection)
+        prune_change_log(connection)
         return
     connection.executescript(
         """
@@ -407,6 +414,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     processing_scheduler.ensure_schema(connection)
     reader_index.ensure_schema(connection)
     uploads.ensure_schema(connection)
+    ensure_change_log(connection)
     _require_current_schema(connection)
     connection.execute(
         "INSERT INTO app_meta(key, value) VALUES('sync_version', '0')"
@@ -499,6 +507,73 @@ def bump_sync_version(connection: sqlite3.Connection) -> int:
         (str(version),),
     )
     return version
+
+
+CHANGE_LOG_RETENTION_SECONDS = 30 * 86400
+
+
+def ensure_change_log(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS change_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            document_id TEXT,
+            op TEXT NOT NULL,
+            changed_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_change_log_document "
+        "ON change_log(document_id, seq)"
+    )
+
+
+def record_change(
+    connection: sqlite3.Connection,
+    entity: str,
+    entity_id: str,
+    *,
+    document_id: str | None = None,
+    op: str = "upsert",
+    timestamp: str | None = None,
+) -> None:
+    connection.execute(
+        "INSERT INTO change_log(entity, entity_id, document_id, op, changed_at) "
+        "VALUES(?, ?, ?, ?, ?)",
+        (entity, str(entity_id), document_id, op, timestamp or now_iso()),
+    )
+
+
+def change_cursor(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT COALESCE(MAX(seq), 0) AS cursor FROM change_log"
+    ).fetchone()
+    return int(row["cursor"] or 0) if row else 0
+
+
+def prune_change_log(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT value FROM app_meta WHERE key = 'change_log_pruned_at'"
+    ).fetchone()
+    now = time.time()
+    if row:
+        try:
+            if now - float(row["value"]) < 86400:
+                return
+        except (TypeError, ValueError):
+            pass
+    cutoff = datetime.fromtimestamp(
+        now - CHANGE_LOG_RETENTION_SECONDS, tz=timezone.utc
+    ).isoformat()
+    connection.execute("DELETE FROM change_log WHERE changed_at < ?", (cutoff,))
+    connection.execute(
+        "INSERT OR REPLACE INTO app_meta(key, value) VALUES('change_log_pruned_at', ?)",
+        (str(now),),
+    )
+    connection.commit()
 
 
 def json_dump(value: Any) -> str:
@@ -973,17 +1048,43 @@ def document_payload(document: dict[str, Any]) -> str:
     return json_dump({key: value for key, value in document.items() if key != "pages"})
 
 
-def active_payloads(connection: sqlite3.Connection, table: Literal["documents", "conversations"], user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+_PAGE_TEXT_FIELDS = ("ocrText", "normalizedText", "punctuationDraftText", "punctuatedText")
+_PAGE_BULK_FIELDS = (*_PAGE_TEXT_FIELDS, "visuals", "imageFile", "imageHash", "readerIndexTextHash")
+
+
+def page_index_entry(page: dict[str, Any]) -> dict[str, Any]:
+    """页索引：保留页码、状态、图片与进度，去掉正文与大体积图表数据。"""
+    entry = {key: value for key, value in page.items() if key not in _PAGE_BULK_FIELDS}
+    text = page.get("punctuatedText") or page.get("ocrText") or ""
+    entry["hasText"] = bool(text)
+    entry["textLength"] = len(text)
+    entry["hasProcessedText"] = bool(page.get("punctuatedText"))
+    return entry
+
+
+def active_payloads(
+    connection: sqlite3.Connection,
+    table: Literal["documents", "conversations"],
+    user: dict[str, Any] | None = None,
+    entity_ids: list[str] | None = None,
+    include_pages: bool = True,
+) -> list[dict[str, Any]]:
     where = f"{table}.deleted_at IS NULL"
-    params: tuple[Any, ...] = ()
+    params: list[Any] = []
     if table == "documents" and user:
         where += " AND (documents.visibility = 'public' OR documents.owner_id = ?)"
-        params = (user["id"],)
+        params.append(user["id"])
     if table == "conversations":
         if not user:
             return []
         where += " AND conversations.owner_id = ?"
-        params = (user["id"],)
+        params.append(user["id"])
+    if entity_ids is not None:
+        values = [str(value) for value in entity_ids if str(value)]
+        if not values:
+            return []
+        where += f" AND {table}.id IN ({','.join('?' for _ in values)})"
+        params.extend(values)
     columns = "payload, owner_id"
     if table == "documents":
         columns = "documents.payload, documents.owner_id, users.username AS owner_username"
@@ -999,19 +1100,20 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
         """, params).fetchall()
     payloads = [json_load(row["payload"]) for row in rows]
     if table == "documents":
-        ids = [str(payload.get("id") or "") for payload in payloads]
+        document_ids = [str(payload.get("id") or "") for payload in payloads]
         pages_by_document: dict[str, list[dict[str, Any]]] = {}
-        for start in range(0, len(ids), 400):
-            chunk = [value for value in ids[start:start + 400] if value]
-            if not chunk:
-                continue
-            placeholders = ",".join("?" for _ in chunk)
-            for page_row in connection.execute(
-                f"SELECT document_id,payload FROM document_pages WHERE deleted_at IS NULL "
-                f"AND document_id IN ({placeholders}) ORDER BY page_number", chunk):
-                pages_by_document.setdefault(page_row["document_id"], []).append(json_load(page_row["payload"]))
-        for payload in payloads:
-            payload["pages"] = pages_by_document.get(str(payload.get("id") or ""), [])
+        if include_pages:
+            for start in range(0, len(document_ids), 400):
+                chunk = [value for value in document_ids[start:start + 400] if value]
+                if not chunk:
+                    continue
+                placeholders = ",".join("?" for _ in chunk)
+                for page_row in connection.execute(
+                    f"SELECT document_id,payload FROM document_pages WHERE deleted_at IS NULL "
+                    f"AND document_id IN ({placeholders}) ORDER BY page_number", chunk):
+                    pages_by_document.setdefault(page_row["document_id"], []).append(json_load(page_row["payload"]))
+            for payload in payloads:
+                payload["pages"] = pages_by_document.get(str(payload.get("id") or ""), [])
         result = []
         for row, payload in zip(rows, payloads):
             provenance = payload.pop("provenance", {})
@@ -1051,6 +1153,42 @@ def active_payloads(connection: sqlite3.Connection, table: Literal["documents", 
         result.append(payload)
     return result
 
+def load_changed_pages(
+    connection: sqlite3.Connection,
+    page_ids: list[str],
+    user: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """按页 id 取变更页负载，可见性与文档列表保持一致。"""
+    values = [str(value) for value in page_ids if str(value)]
+    if not values:
+        return []
+    owner_id = user["id"] if user else -1
+    entries: list[dict[str, Any]] = []
+    for start in range(0, len(values), 400):
+        chunk = values[start:start + 400]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = connection.execute(
+            f"""
+            SELECT document_pages.document_id AS document_id, document_pages.payload AS payload
+            FROM document_pages
+            JOIN documents ON documents.id = document_pages.document_id
+            WHERE document_pages.id IN ({placeholders})
+              AND document_pages.deleted_at IS NULL
+              AND documents.deleted_at IS NULL
+              AND (documents.visibility = 'public' OR documents.owner_id = ?)
+            """,
+            (*chunk, owner_id),
+        ).fetchall()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(row["document_id"], []).append(json_load(row["payload"]))
+        for document_id, pages in grouped.items():
+            rehydrate_document_assets(connection, {"id": document_id, "pages": pages})
+            for page in pages:
+                entries.append({"documentId": document_id, "page": page})
+    return entries
+
+
 def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, Any]], timestamp: str, user: dict[str, Any]) -> None:
     for sort_order, document in enumerate(documents):
         document_id = str(document.get("id") or "").strip()
@@ -1065,6 +1203,8 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             continue
 
         stored_document = processing_scheduler.preserve_server_fields(connection, dict(document))
+        # 本地只持有页索引时不能拿空正文覆盖服务端页。
+        pages_loaded = stored_document.pop("__pagesLoaded", True) is not False
         # 创建者/修改者归属由服务端维护：同步请求不能新增、修改或清除。
         for field in ("creator", "modifier", "provenance"):
             stored_document.pop(field, None)
@@ -1072,7 +1212,7 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
             provenance = json_load(existing["payload"]).get("provenance")
             if provenance:
                 stored_document["provenance"] = provenance
-        if existing:
+        if existing and pages_loaded:
             server_pages = {page["id"]: page for page in load_document_pages(connection, document_id)}
             for page in stored_document.get("pages") or []:
                 old_page = server_pages.get(page.get("id"), {})
@@ -1081,10 +1221,13 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
                         page[key] = old_page[key]
         stored_document.pop("ownerId", None)
         stored_document.pop("canEdit", None)
-        materialize_document_assets(connection, document_id, stored_document, timestamp)
-        source_pdf = document_source_pdf(connection, document_id)
-        for page in stored_document.get("pages") or []:
-            reader_index.reconcile_reader_index(connection, document_id, page, timestamp, source_pdf=source_pdf)
+        if pages_loaded:
+            materialize_document_assets(connection, document_id, stored_document, timestamp)
+            source_pdf = document_source_pdf(connection, document_id)
+            for page in stored_document.get("pages") or []:
+                reader_index.reconcile_reader_index(connection, document_id, page, timestamp, source_pdf=source_pdf)
+        else:
+            stored_document.pop("pages", None)
         payload = document_payload(stored_document)
 
         visibility = "public" if stored_document.get("visibility") == "public" else "private"
@@ -1106,7 +1249,10 @@ def upsert_documents(connection: sqlite3.Connection, documents: list[dict[str, A
                 (document_id, payload, sort_order, timestamp, user["id"], visibility),
             )
 
-        upsert_document_pages(connection, document_id, stored_document.get("pages") or [], timestamp)
+        if existing is None or existing["payload"] != payload:
+            record_change(connection, "document", document_id, timestamp=timestamp)
+        if pages_loaded:
+            upsert_document_pages(connection, document_id, stored_document.get("pages") or [], timestamp)
 
 
 def upsert_document_pages(
@@ -1131,10 +1277,12 @@ def upsert_document_pages(
         page_number = int(page.get("pageNumber") or 0)
         payload = json_dump(page)
         existing = connection.execute(
-            "SELECT version, document_id FROM document_pages WHERE id = ?",
+            "SELECT version, document_id, payload, deleted_at FROM document_pages WHERE id = ?",
             (page_id,),
         ).fetchone()
         if existing and existing["document_id"] != document_id:
+            continue
+        if existing and existing["deleted_at"] is None and existing["payload"] == payload:
             continue
 
         if existing:
@@ -1156,6 +1304,10 @@ def upsert_document_pages(
             )
 
         retrieval.reconcile_page(connection, document_id, page, timestamp)
+        record_change(
+            connection, "page", page_id,
+            document_id=document_id, timestamp=timestamp,
+        )
 
     if not sweep:
         return
@@ -1171,6 +1323,10 @@ def upsert_document_pages(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?",
                 (timestamp, timestamp, page_id),
             )
+            record_change(
+                connection, "page", page_id,
+                document_id=document_id, op="delete", timestamp=timestamp,
+            )
 
     retrieval.cleanup_deleted(connection)
 
@@ -1182,7 +1338,7 @@ def upsert_conversations(connection: sqlite3.Connection, conversations: list[dic
             continue
 
         existing = connection.execute(
-            "SELECT version, owner_id FROM conversations WHERE id = ?",
+            "SELECT version, owner_id, payload FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
         if existing and existing["owner_id"] != user["id"]:
@@ -1209,6 +1365,9 @@ def upsert_conversations(connection: sqlite3.Connection, conversations: list[dic
                 """,
                 (conversation_id, user["id"], payload, sort_order, timestamp),
             )
+
+        if existing is None or existing["payload"] != payload:
+            record_change(connection, "conversation", conversation_id, timestamp=timestamp)
 
         attachments = conversation.get("attachments") if isinstance(conversation.get("attachments"), list) else []
         active_attachment_ids: set[str] = set()
@@ -1264,16 +1423,33 @@ def soft_delete_entities(
             continue
 
         if table == "documents":
+            record_change(
+                connection, "document", entity_id,
+                op="delete", timestamp=timestamp,
+            )
             connection.execute("UPDATE processing_jobs SET status='cancelled',updated_at=? WHERE document_id=?", (timestamp, entity_id))
+            removed_pages = connection.execute(
+                "SELECT id FROM document_pages WHERE document_id = ? AND deleted_at IS NULL",
+                (entity_id,),
+            ).fetchall()
             connection.execute(
                 "UPDATE document_pages SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE document_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
             )
+            for page_row in removed_pages:
+                record_change(
+                    connection, "page", page_row["id"],
+                    document_id=entity_id, op="delete", timestamp=timestamp,
+                )
             connection.execute(
                 "UPDATE document_files SET deleted_at = ?, updated_at = ? WHERE document_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
             )
         else:
+            record_change(
+                connection, "conversation", entity_id,
+                op="delete", timestamp=timestamp,
+            )
             connection.execute(
                 "UPDATE conversation_files SET deleted_at = ?, updated_at = ? WHERE conversation_id = ? AND deleted_at IS NULL",
                 (timestamp, timestamp, entity_id),
@@ -1367,19 +1543,35 @@ def owned_shelf_document_ids(connection: sqlite3.Connection, user: dict[str, Any
 
 def save_shelf(connection: sqlite3.Connection, user: dict[str, Any], value: dict[str, Any]) -> None:
     document_ids = owned_shelf_document_ids(connection, user)
+    key = f"shelf.user-{user['id']}"
+    normalized = json_dump(normalize_shelf(value, document_ids))
+    existing = connection.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    if existing and existing["value"] == normalized:
+        return
     connection.execute(
         "INSERT INTO app_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (f"shelf.user-{user['id']}", json_dump(normalize_shelf(value, document_ids))),
+        (key, normalized),
     )
+    record_change(connection, "shelf", f"user-{user['id']}")
 
 
-def build_snapshot(connection: sqlite3.Connection, user: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_snapshot(
+    connection: sqlite3.Connection,
+    user: dict[str, Any] | None = None,
+    indexed_pages: bool = False,
+) -> dict[str, Any]:
+    documents = active_payloads(connection, "documents", user)
+    if indexed_pages:
+        for document in documents:
+            document["pages"] = [page_index_entry(page) for page in document.get("pages") or []]
+            document["__pagesLoaded"] = False
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "documents": active_payloads(connection, "documents", user),
+        "documents": documents,
         "conversations": active_payloads(connection, "conversations", user),
         "shelf": load_shelf(connection, user),
         "syncCursor": str(get_sync_version(connection)),
+        "changeCursor": str(change_cursor(connection)),
     }
 
 
@@ -1628,6 +1820,7 @@ def enqueue_document(connection, document_id: str, mode: str | None = None, chun
         "failedPages": []}
     document.update(status="登记中", updatedAt=stamp)
     connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(document), stamp, document_id))
+    record_change(connection, "document", document_id, timestamp=stamp)
     return document
 
 
@@ -1639,9 +1832,21 @@ def require_owned_document(connection, document_id: str, user):
         raise HTTPException(status_code=403, detail="只有文献所有者可以修改文献")
 
 
-def public_processing_document(connection, document_id, user):
+def public_processing_document(
+    connection: sqlite3.Connection,
+    document_id: str,
+    user: dict[str, Any],
+    indexed_pages: bool = False,
+) -> dict[str, Any]:
     # 使用与初始化流程相同的可见性和资产投影。
-    return next(doc for doc in active_payloads(connection, "documents", user) if doc["id"] == document_id)
+    document = next(
+        doc for doc in active_payloads(connection, "documents", user)
+        if doc["id"] == document_id
+    )
+    if indexed_pages:
+        document["pages"] = [page_index_entry(page) for page in document.get("pages") or []]
+        document["__pagesLoaded"] = False
+    return document
 
 
 def copy_document_assets(connection, source_id, document, page_ids, timestamp, copied_paths):
@@ -1866,18 +2071,23 @@ def cancel_document_processing(document_id: str):
             task.update(status="已取消", activeStages={}, finishedAt=now_iso(), revision=int(task.get("revision") or 0) + 1)
             doc.update(status="已取消", processingTask=task)
             connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(doc), now_iso(), document_id))
+            record_change(connection, "document", document_id, timestamp=now_iso())
             bump_sync_version(connection)
         return {"status": "ok"}
 
 
 @app.get("/api/documents/{document_id}/processing")
-def document_processing_status(document_id: str):
+def document_processing_status(document_id: str, request: Request):
     user = current_user()
     with database() as connection:
         row = connection.execute("SELECT owner_id,visibility FROM documents WHERE id=? AND deleted_at IS NULL", (document_id,)).fetchone()
         if not row or (row["owner_id"] != user["id"] and row["visibility"] != "public"):
             raise HTTPException(status_code=404, detail="文献不存在")
         document = public_processing_document(connection, document_id, user)
+        if pages_index_requested(request):
+            # 进度轮询只回任务状态：页状态与正文走 /api/changes 增量。
+            document["pages"] = []
+            document["__pagesLoaded"] = False
     # 单页阶段进度只存在调度器内存里：读取时叠加到任务快照，避免为了刷进度频繁重写 payload。
     task = document.get("processingTask")
     if isinstance(task, dict) and _scheduler_worker is not None:
@@ -1910,6 +2120,7 @@ def retry_document_processing(document_id: str):
                 document["registration"].update(status="running", error="")
             document.update(status=document["processingTask"]["status"], updatedAt=stamp)
             connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?", (document_payload(document), stamp, document_id))
+            record_change(connection, "document", document_id, timestamp=stamp)
             bump_sync_version(connection)
         return {"document": public_processing_document(connection, document_id, user)}
 
@@ -2078,6 +2289,7 @@ def revise_document(document_id: str, payload: DocumentRevision):
                             metadataSnapshot=processing_scheduler.metadata(document))
                 connection.execute("UPDATE documents SET payload=?,updated_at=?,version=version+1 WHERE id=?",
                                    (document_payload(document), stamp, document_id))
+                record_change(connection, "document", document_id, timestamp=stamp)
                 bump_sync_version(connection)
 
             for row in upload_rows:
@@ -2541,6 +2753,27 @@ def require_visible_document_page(
         raise HTTPException(status_code=404, detail="文献页不存在或不可见")
 
 
+@app.get("/api/documents/{document_id}/pages")
+def get_document_pages(document_id: str) -> dict[str, Any]:
+    """整本页数据（含正文），供首屏按文档懒加载。"""
+    user = current_user()
+    with database() as connection:
+        row = connection.execute(
+            "SELECT updated_at FROM documents WHERE id=? AND deleted_at IS NULL "
+            "AND (visibility='public' OR owner_id=?)",
+            (document_id, user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="文献不存在或不可见")
+        pages = load_document_pages(connection, document_id)
+        rehydrate_document_assets(connection, {"id": document_id, "pages": pages})
+        return {
+            "documentId": document_id,
+            "documentUpdatedAt": row["updated_at"],
+            "pages": pages,
+        }
+
+
 @app.get("/api/documents/{document_id}/pages/{page_id}/reader-content")
 def get_page_reader_content(document_id: str, page_id: str):
     user = current_user()
@@ -2681,14 +2914,100 @@ def put_reading_progress(document_id: str, payload: ReadingProgressUpdate) -> di
 
 
 @app.get("/api/bootstrap")
-def bootstrap() -> dict[str, Any]:
+def bootstrap(request: Request) -> dict[str, Any]:
     user = current_user()
     with database() as connection:
-        return build_snapshot(connection, user)
+        return build_snapshot(connection, user, indexed_pages=pages_index_requested(request))
+
+
+@app.get("/api/changes")
+def changes(since: int = Query(default=0)) -> dict[str, Any]:
+    """返回 since 之后的页级变化。entity 粒度：document / page / conversation。"""
+    user = current_user()
+    with database() as connection:
+        cursor = change_cursor(connection)
+        if since < 0 or since > cursor:
+            return {"reset": True, "cursor": str(cursor)}
+        rows = connection.execute(
+            """
+            SELECT entity, entity_id, document_id, op, MAX(seq) AS seq
+            FROM change_log
+            WHERE seq > ?
+            GROUP BY entity, entity_id
+            ORDER BY seq ASC
+            """,
+            (since,),
+        ).fetchall()
+        if not rows:
+            return {
+                "reset": False,
+                "cursor": str(cursor),
+                "documents": [],
+                "pages": [],
+                "conversations": [],
+                "removed": {"documents": [], "pages": [], "conversations": []},
+            }
+
+        document_ids: list[str] = []
+        page_ids: list[str] = []
+        conversation_ids: list[str] = []
+        shelf_changed = False
+        removed: dict[str, list[str]] = {
+            "documents": [], "pages": [], "conversations": [],
+        }
+        for row in rows:
+            entity = row["entity"]
+            if entity == "shelf":
+                shelf_changed = True
+                continue
+            entity_id = str(row["entity_id"])
+            target = {
+                "document": document_ids,
+                "page": page_ids,
+                "conversation": conversation_ids,
+            }.get(entity)
+            if target is None:
+                continue
+            if row["op"] == "delete":
+                removed[entity + "s"].append(entity_id)
+            else:
+                target.append(entity_id)
+
+        documents = active_payloads(
+            connection, "documents", user, entity_ids=document_ids, include_pages=False
+        )
+        visible_document_ids = {str(item.get("id") or "") for item in documents}
+        removed["documents"].extend(
+            value for value in document_ids if value not in visible_document_ids
+        )
+
+        pages = load_changed_pages(connection, page_ids, user)
+        visible_page_ids = {str(entry["page"].get("id") or "") for entry in pages}
+        removed["pages"].extend(
+            value for value in page_ids if value not in visible_page_ids
+        )
+
+        conversations = active_payloads(
+            connection, "conversations", user, entity_ids=conversation_ids
+        )
+        visible_conversation_ids = {str(item.get("id") or "") for item in conversations}
+        removed["conversations"].extend(
+            value for value in conversation_ids if value not in visible_conversation_ids
+        )
+
+        return {
+            "reset": False,
+            "cursor": str(cursor),
+            "documents": documents,
+            "pages": pages,
+            "conversations": conversations,
+            "shelf": load_shelf(connection, user) if shelf_changed else None,
+            "removed": {key: sorted(set(values)) for key, values in removed.items()},
+        }
 
 
 @app.get("/api/sync")
-def sync(cursor: str = Query(default="")) -> dict[str, Any]:
+def sync(request: Request, cursor: str = Query(default="")) -> dict[str, Any]:
     user = current_user()
     with database() as connection:
         current_cursor = str(get_sync_version(connection))
@@ -2700,7 +3019,7 @@ def sync(cursor: str = Query(default="")) -> dict[str, Any]:
                 "conversations": [],
             }
 
-        snapshot = build_snapshot(connection, user)
+        snapshot = build_snapshot(connection, user, indexed_pages=pages_index_requested(request))
         snapshot["changed"] = True
         return snapshot
 
@@ -2734,9 +3053,13 @@ def push(payload: SyncPayload) -> dict[str, Any]:
                 if payload.shelf is not None:
                     save_shelf(connection, user, payload.shelf)
                 cursor = bump_sync_version(connection)
-                snapshot = build_snapshot(connection, user)
-        snapshot.update({"status": "ok", "syncCursor": str(cursor), "updatedAt": timestamp})
-        return snapshot
+                incremental_cursor = change_cursor(connection)
+        return {
+            "status": "ok",
+            "syncCursor": str(cursor),
+            "changeCursor": str(incremental_cursor),
+            "updatedAt": timestamp,
+        }
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"数据库保存失败：{exc}") from exc
 

@@ -780,6 +780,13 @@ function renderReader() {
   }
 
   ensureSelectedPage(item);
+  if (typeof ensureDocumentPages === "function" && !documentPagesReady(item)) {
+    ensureDocumentPages(item.id).then((loadedPages) => {
+      if (!loadedPages) return;
+      const current = getSelectedDocument();
+      if (current?.id === item.id) renderReader();
+    });
+  }
   const page = getSelectedPage();
   if (typeof syncReaderVisualCatalog === "function") syncReaderVisualCatalog(item);
   if (typeof syncReaderOutline === "function") syncReaderOutline(item);
@@ -799,8 +806,8 @@ function renderReader() {
   readerPageStatus.setAttribute("aria-label", page ? `第 ${pageIndex + 1} 页，共 ${sortedPages.length} 页` : "未选择页");
   readerPrevPageButton.disabled = pageIndex <= 0;
   readerNextPageButton.disabled = pageIndex >= sortedPages.length - 1;
-  exportDocumentPdfButton.disabled = false;
-  editDocumentButton.disabled = !page || !canEdit;
+  exportDocumentPdfButton.disabled = !documentPagesReady(item);
+  editDocumentButton.disabled = !page || !canEdit || !documentPagesReady(item);
   if (typeof syncReviseDocumentButton === "function") syncReviseDocumentButton(item);
 
   if (typeof recordReaderProgress === "function") {
@@ -848,7 +855,8 @@ function renderReader() {
 
 function setReaderEditing(editing) {
   const item = getSelectedDocument();
-  readerEditing = Boolean(editing && item && getSelectedPage() && canEditDocument(item));
+  readerEditing = Boolean(editing && item && getSelectedPage() && canEditDocument(item) &&
+    documentPagesReady(item));
   if (readerEditing) {
     resetReaderLink();
     // 清除句子节点再编辑，保存时始终读取普通正文。

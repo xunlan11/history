@@ -29,7 +29,8 @@ const OCR_STREAM_SERVICE_URL = endpoint("/ocr/ocr/stream");
 const OCR_HEALTH_URL = endpoint("/ocr/health");
 const EMBEDDING_HEALTH_URL = endpoint("/data/api/embedding/health");
 const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
-const DATA_SYNC_URL = endpoint("/data/api/sync");
+const DATA_CHANGES_URL = endpoint("/data/api/changes");
+const DATA_DOCUMENT_PAGES_URL = endpoint("/data/api/documents");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
 const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
 const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
@@ -323,6 +324,7 @@ const closeSettingsButton = document.querySelector("#close-settings");
 const DOCUMENT_COVER_VARIANT_COUNT = 6;
 const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.schema10`;
 const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema10`;
+const CHANGE_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.changeCursor.schema10`;
 const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema10`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema10`;
 const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema10`;
@@ -365,6 +367,7 @@ let selectedPageId = documents[0]?.pages?.[0]?.id || null;
 let conversations = [];
 let selectedConversationId = conversations[0]?.id || null;
 let syncCursor = localStorage.getItem(SYNC_CURSOR_STORAGE_KEY) || "";
+let syncChangeCursor = localStorage.getItem(CHANGE_CURSOR_STORAGE_KEY) || "";
 let syncReady = false;
 // 脏标记跨页面保留：若本地改动尚未成功推送就发生跳转（如登记后进入阅读页），
 // 下一页加载时会先把本地快照推送上去，而不是直接拉取服务端快照覆盖本地。
@@ -404,77 +407,91 @@ function isDocumentRegistrationPending(item) {
   return Boolean(item?.registration && item.registration.status !== "completed");
 }
 
+function normalizePageEntry(page) {
+  return {
+    id: page.id,
+    pageNumber: Number(page.pageNumber),
+    ocrText: page.ocrText || "",
+    normalizedText: page.normalizedText || "",
+    punctuationDraftText: page.punctuationDraftText || "",
+    punctuatedText: page.punctuatedText || "",
+    notes: page.notes || "",
+    status: page.status || "待整理",
+    imageDataUrl: page.imageDataUrl || "",
+    imageUrl: page.imageUrl || "",
+    imageName: page.imageName || "",
+    imageFile: page.imageFile || null,
+    imageHash: page.imageHash || "",
+    imageMimeType: page.imageMimeType || "",
+    imageSize: Number(page.imageSize) || 0,
+    ocr: normalizeStoredOcr(page.ocr),
+    visuals: Array.isArray(page.visuals) ? page.visuals : [],
+    visualsExtracted: page.visualsExtracted === true,
+    processingRevision: Number(page.processingRevision) || 0,
+    readerIndexStatus: page.readerIndexStatus || "",
+    readerIndexRevision: Number(page.readerIndexRevision) || 0,
+    readerIndexTextHash: page.readerIndexTextHash || "",
+    readerIndexUpdatedAt: page.readerIndexUpdatedAt || "",
+    stageStatus: page.stageStatus || {},
+    ocrDone: page.ocrDone === true,
+    variantDone: page.variantDone === true,
+    punctuationDone: page.punctuationDone === true,
+    proofreadingDone: page.proofreadingDone === true,
+    failureStage: page.failureStage || "",
+    failureMessage: page.failureMessage || "",
+    updatedAt: page.updatedAt || "",
+    hasText: page.hasText === true || Boolean(page.ocrText || page.punctuatedText),
+    textLength: Number(page.textLength) || 0,
+    hasProcessedText: page.hasProcessedText === true || Boolean(page.punctuatedText),
+  };
+}
+
+function normalizeDocumentMeta(item, fallbackIndex = 0) {
+  return {
+    id: item.id,
+    title: item.title || "",
+    author: item.author || "",
+    year: item.year || "",
+    publisher: item.publisher || "",
+    creator: item.creator && item.creator.username ? { username: String(item.creator.username) } : null,
+    modifier: item.modifier?.username ? { username: String(item.modifier.username) } : null,
+    ownerId: item.ownerId ?? null,
+    canEdit: item.canEdit === true,
+    tags: item.tags || "",
+    visibility: item.visibility === "public" ? "public" : "private",
+    fileName: item.fileName || "",
+    fileType: item.fileType || "unknown",
+    fileSize: Number(item.fileSize) || 0,
+    filePath: item.filePath || "",
+    fileUrl: item.fileUrl || "",
+    fileHash: item.fileHash || "",
+    fileMimeType: item.fileMimeType || "",
+    sourceFile: item.sourceFile || null,
+    registration: normalizeRegistration(item.registration),
+    processingMode: normalizeProcessingMode(item.processingMode),
+    processingChunkSize: clampChunkSize(item.processingChunkSize),
+    metadataStatus: item.metadataStatus || "待自动识别",
+    coverImageDataUrl: item.coverImageDataUrl || "",
+    coverImageUrl: item.coverImageUrl || "",
+    coverImageFile: item.coverImageFile || null,
+    coverVariant: normalizeCoverVariant(item.coverVariant, fallbackIndex),
+    processingTask: normalizeProcessingTask(item.processingTask),
+    createdAt: item.createdAt || "",
+    updatedAt: item.updatedAt || "",
+    status: item.status || "待整理",
+    __pagesLoaded: item.__pagesLoaded !== false,
+  };
+}
+
 function normalizeDocuments(items) {
   return items
     .filter((item) => item?.id && Array.isArray(item.pages))
     .map((item, index) => {
       const normalized = {
-        id: item.id,
-        title: item.title || "",
-        author: item.author || "",
-        year: item.year || "",
-        publisher: item.publisher || "",
-        creator: item.creator && item.creator.username ? { username: String(item.creator.username) } : null,
-        modifier: item.modifier?.username ? { username: String(item.modifier.username) } : null,
-        ownerId: item.ownerId ?? null,
-        canEdit: item.canEdit === true,
-        tags: item.tags || "",
-        visibility: item.visibility === "public" ? "public" : "private",
-        fileName: item.fileName || "",
-        fileType: item.fileType || "unknown",
-        fileSize: Number(item.fileSize) || 0,
-        filePath: item.filePath || "",
-        fileUrl: item.fileUrl || "",
-        fileHash: item.fileHash || "",
-        fileMimeType: item.fileMimeType || "",
-        sourceFile: item.sourceFile || null,
-        registration: normalizeRegistration(item.registration),
-        processingMode: normalizeProcessingMode(item.processingMode),
-        processingChunkSize: clampChunkSize(item.processingChunkSize),
-        metadataStatus: item.metadataStatus || "待自动识别",
-        coverImageDataUrl: item.coverImageDataUrl || "",
-        coverImageUrl: item.coverImageUrl || "",
-        coverImageFile: item.coverImageFile || null,
-        coverVariant: normalizeCoverVariant(item.coverVariant, index),
-        processingTask: normalizeProcessingTask(item.processingTask),
-        createdAt: item.createdAt || "",
-        updatedAt: item.updatedAt || "",
-        status: item.status || "待整理",
+        ...normalizeDocumentMeta(item, index),
         pages: item.pages
           .filter((page) => page?.id)
-          .map((page) => ({
-            id: page.id,
-            pageNumber: Number(page.pageNumber),
-            ocrText: page.ocrText || "",
-            normalizedText: page.normalizedText || "",
-            punctuationDraftText: page.punctuationDraftText || "",
-            punctuatedText: page.punctuatedText || "",
-            notes: page.notes || "",
-            status: page.status || "待整理",
-            imageDataUrl: page.imageDataUrl || "",
-            imageUrl: page.imageUrl || "",
-            imageName: page.imageName || "",
-            imageFile: page.imageFile || null,
-            imageHash: page.imageHash || "",
-            imageMimeType: page.imageMimeType || "",
-            imageSize: Number(page.imageSize) || 0,
-            ocr: normalizeStoredOcr(page.ocr),
-            visuals: Array.isArray(page.visuals) ? page.visuals : [],
-            visualsExtracted: page.visualsExtracted === true,
-            processingRevision: Number(page.processingRevision) || 0,
-            readerIndexStatus: page.readerIndexStatus || "",
-            readerIndexRevision: Number(page.readerIndexRevision) || 0,
-            readerIndexTextHash: page.readerIndexTextHash || "",
-            readerIndexUpdatedAt: page.readerIndexUpdatedAt || "",
-            stageStatus: page.stageStatus || {},
-            ocrDone: page.ocrDone === true,
-            variantDone: page.variantDone === true,
-            punctuationDone: page.punctuationDone === true,
-            proofreadingDone: page.proofreadingDone === true,
-            failureStage: page.failureStage || "",
-            failureMessage: page.failureMessage || "",
-            updatedAt: page.updatedAt || "",
-          }))
+          .map(normalizePageEntry)
           .sort((a, b) => a.pageNumber - b.pageNumber),
       };
 
@@ -515,7 +532,31 @@ function persist() {
 }
 
 function persistDocumentsCache() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
+    return;
+  } catch (error) {
+    // 配额不足时只存索引，正文在下次打开文献时按需重新获取。
+    try {
+      const indexOnly = documents.map((item) => ({
+        ...item,
+        __pagesLoaded: false,
+        pages: item.pages.map(pageIndexOnly),
+      }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(indexOnly));
+    } catch (fallbackError) {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }
+}
+
+function pageIndexOnly(page) {
+  const {
+    ocrText, normalizedText, punctuationDraftText, punctuatedText, visuals,
+    ...rest
+  } = page;
+  const text = punctuatedText || ocrText || "";
+  return { ...rest, hasText: Boolean(text), textLength: text.length };
 }
 
 function loadCachedConversations() {
@@ -579,7 +620,190 @@ function applyServerState(payload) {
 
   syncCursor = String(payload.syncCursor || "");
   localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+  if (Object.hasOwn(payload, "changeCursor")) {
+    syncChangeCursor = String(payload.changeCursor || "");
+    localStorage.setItem(CHANGE_CURSOR_STORAGE_KEY, syncChangeCursor);
+  }
   cacheCurrentState();
+}
+
+// 增量合并：按 id 替换变化的文档元数据与页，不动未变化的页正文。
+function applyServerChanges(payload) {
+  const documentsById = new Map(documents.map((item) => [item.id, item]));
+  let changed = false;
+
+  for (const raw of payload.documents || []) {
+    if (!raw?.id) continue;
+    const meta = normalizeDocumentMeta(raw, documents.length);
+    const existing = documentsById.get(meta.id);
+    if (existing) {
+      const pages = existing.pages;
+      const pagesLoaded = existing.__pagesLoaded;
+      Object.assign(existing, meta, { pages, __pagesLoaded: pagesLoaded });
+      existing.status = summarizeDocumentStatus(existing);
+    } else {
+      const created = { ...meta, pages: [] };
+      created.status = summarizeDocumentStatus(created);
+      documents.push(created);
+      documentsById.set(created.id, created);
+    }
+    changed = true;
+  }
+
+  for (const entry of payload.pages || []) {
+    const documentId = String(entry?.documentId || "");
+    const target = documentsById.get(documentId);
+    if (!target || !entry?.page?.id) continue;
+    const page = normalizePageEntry(entry.page);
+    const index = target.pages.findIndex((item) => item.id === page.id);
+    if (index >= 0) target.pages[index] = page;
+    else target.pages.push(page);
+    target.pages.sort((a, b) => a.pageNumber - b.pageNumber);
+    target.status = summarizeDocumentStatus(target);
+    changed = true;
+  }
+
+  for (const id of payload.removed?.documents || []) {
+    const index = documents.findIndex((item) => item.id === id);
+    if (index >= 0) {
+      documents.splice(index, 1);
+      documentsById.delete(id);
+      changed = true;
+    }
+  }
+
+  for (const id of payload.removed?.pages || []) {
+    for (const document of documents) {
+      const index = document.pages.findIndex((page) => page.id === id);
+      if (index >= 0) {
+        document.pages.splice(index, 1);
+        document.status = summarizeDocumentStatus(document);
+        changed = true;
+      }
+    }
+  }
+
+  const conversationsById = new Map(conversations.map((item) => [item.id, item]));
+  for (const raw of payload.conversations || []) {
+    if (!raw?.id) continue;
+    const normalized = normalizeConversations([raw])[0];
+    if (!normalized) continue;
+    if (conversationsById.has(normalized.id)) {
+      Object.assign(conversationsById.get(normalized.id), normalized);
+    } else {
+      conversations.push(normalized);
+      conversationsById.set(normalized.id, normalized);
+    }
+    changed = true;
+  }
+  for (const id of payload.removed?.conversations || []) {
+    const index = conversations.findIndex((item) => item.id === id);
+    if (index >= 0) {
+      conversations.splice(index, 1);
+      conversationsById.delete(id);
+      changed = true;
+    }
+  }
+
+  if (payload.shelf) applyShelfState(payload.shelf);
+
+  selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
+    ? selectedDocumentId
+    : documents[0]?.id || null;
+  const selectedDocument = getSelectedDocument();
+  selectedPageId = selectedDocument?.pages?.some((page) => page.id === selectedPageId)
+    ? selectedPageId
+    : selectedDocument?.pages?.[0]?.id || null;
+  selectedConversationId = conversations.some((item) => item.id === selectedConversationId)
+    ? selectedConversationId
+    : conversations[0]?.id || null;
+
+  syncChangeCursor = String(payload.cursor || syncChangeCursor);
+  localStorage.setItem(CHANGE_CURSOR_STORAGE_KEY, syncChangeCursor);
+  if (changed) cacheCurrentState();
+  return changed;
+}
+
+const documentPagesLoading = new Map();
+
+// 进度轮询返回的是页索引：服务端非空字段优先，空值时保留本地已加载的正文。
+function mergeDocumentUpdate(previous, incoming) {
+  if (!previous || !incoming) return incoming || previous;
+  if (incoming.__pagesLoaded !== false) return incoming;
+  if (!incoming.pages || !incoming.pages.length) {
+    return { ...previous, ...incoming, pages: previous.pages, __pagesLoaded: previous.__pagesLoaded };
+  }
+  const keepText = previous.__pagesLoaded !== false;
+  const localPages = new Map((previous.pages || []).map((page) => [page.id, page]));
+  const pages = (incoming.pages || []).map((page) => {
+    const local = localPages.get(page.id);
+    if (!local || !keepText) return page;
+    return {
+      ...local,
+      ...page,
+      ocrText: page.ocrText || local.ocrText,
+      normalizedText: page.normalizedText || local.normalizedText,
+      punctuationDraftText: page.punctuationDraftText || local.punctuationDraftText,
+      punctuatedText: page.punctuatedText || local.punctuatedText,
+      notes: page.notes || local.notes,
+      visuals: Array.isArray(page.visuals) && page.visuals.length ? page.visuals : local.visuals,
+      imageHash: local.imageHash || page.imageHash,
+      readerIndexTextHash: local.readerIndexTextHash || page.readerIndexTextHash,
+      readerIndexRevision: page.readerIndexRevision || local.readerIndexRevision,
+      readerIndexStatus: page.readerIndexStatus || local.readerIndexStatus,
+      readerIndexUpdatedAt: page.readerIndexUpdatedAt || local.readerIndexUpdatedAt,
+      hasText: page.hasText || local.hasText,
+      hasProcessedText: page.hasProcessedText || local.hasProcessedText,
+    };
+  });
+  return { ...previous, ...incoming, pages, __pagesLoaded: previous.__pagesLoaded };
+}
+
+function documentPagesReady(document) {
+  return !document || document.__pagesLoaded !== false;
+}
+
+// 首屏只下发页索引；打开文献时拉整本页正文（含图表数据）。
+async function ensureDocumentPages(documentId) {
+  const document = documents.find((item) => item.id === documentId);
+  if (!document || documentPagesReady(document)) {
+    return true;
+  }
+  if (documentPagesLoading.has(documentId)) {
+    return documentPagesLoading.get(documentId);
+  }
+
+  const promise = fetch(`${DATA_DOCUMENT_PAGES_URL}/${encodeURIComponent(documentId)}/pages`)
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`Pages failed: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then((payload) => {
+      const target = documents.find((item) => item.id === documentId);
+      if (!target || !Array.isArray(payload?.pages)) {
+        return false;
+      }
+      const pages = payload.pages
+        .filter((page) => page?.id)
+        .map(normalizePageEntry)
+        .sort((a, b) => a.pageNumber - b.pageNumber);
+      if (pages.length) {
+        target.pages = pages;
+      }
+      target.__pagesLoaded = true;
+      target.status = summarizeDocumentStatus(target);
+      cacheCurrentState();
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      documentPagesLoading.delete(documentId);
+    });
+
+  documentPagesLoading.set(documentId, promise);
+  return promise;
 }
 
 function normalizeConversations(items) {
@@ -689,7 +913,7 @@ async function initializeServerData() {
     deletedConversationIds = loadCachedIdSet(getDeletedConversationStorageKey());
   }
   try {
-    const response = await fetch(DATA_BOOTSTRAP_URL);
+    const response = await fetch(DATA_BOOTSTRAP_URL, { headers: { "X-Pages-Mode": "index" } });
     if (!response.ok) {
       throw new Error(`Bootstrap failed: ${response.status}`);
     }
@@ -760,17 +984,17 @@ async function pushServerSnapshot() {
       const result = await response.json();
       syncCursor = String(result.syncCursor || syncCursor);
       localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
+      if (!syncChangeCursor && result.changeCursor) {
+        syncChangeCursor = String(result.changeCursor);
+        localStorage.setItem(CHANGE_CURSOR_STORAGE_KEY, syncChangeCursor);
+      }
 
       if (syncRevision === pushedRevision) {
         syncDirty = false;
         localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
         deletedDocumentIds.clear();
         deletedConversationIds.clear();
-        if (Array.isArray(result.documents) || Array.isArray(result.conversations)) {
-          applyServerState(result);
-        } else {
-          cacheCurrentState();
-        }
+        cacheCurrentState();
       } else {
         scheduleServerPush();
       }
@@ -811,9 +1035,19 @@ async function syncFromServer(options = {}) {
     return false;
   }
 
+  // 没有增量游标时退回整库加载：首次、存储被清空、或后端尚未提供增量接口。
+  if (!syncChangeCursor) {
+    const restored = await initializeServerData();
+    if (restored && options.render) {
+      renderAll();
+      renderSmartModeButtons();
+    }
+    return restored;
+  }
+
   const requestedRevision = syncRevision;
-  const url = `${DATA_SYNC_URL}?cursor=${encodeURIComponent(syncCursor)}`;
-  syncPullInFlight = fetch(url)
+  const url = `${DATA_CHANGES_URL}?since=${encodeURIComponent(syncChangeCursor || "0")}`;
+  syncPullInFlight = fetch(url, { headers: { "X-Pages-Mode": "index" } })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(`Sync failed: ${response.status}`);
@@ -821,18 +1055,21 @@ async function syncFromServer(options = {}) {
 
       const payload = await response.json();
       if (syncDirty || syncRevision !== requestedRevision) return false;
-      if (payload.changed === false) {
-        syncCursor = String(payload.syncCursor || syncCursor);
-        localStorage.setItem(SYNC_CURSOR_STORAGE_KEY, syncCursor);
-        return false;
+      if (payload.reset) {
+        const restored = await initializeServerData();
+        if (restored && options.render) {
+          renderAll();
+          renderSmartModeButtons();
+        }
+        return restored;
       }
 
-      applyServerState(payload);
-      if (options.render) {
+      const changed = applyServerChanges(payload);
+      if (options.render && changed) {
         renderAll();
         renderSmartModeButtons();
       }
-      return true;
+      return changed;
     })
     .catch(() => false)
     .finally(() => {
@@ -1182,6 +1419,8 @@ function getPageImageSource(page) {
 }
 
 function hasPageText(page) {
+  if (!page) return false;
+  if (page.hasText === true) return true;
   return Boolean(page.ocrText || page.punctuatedText);
 }
 
