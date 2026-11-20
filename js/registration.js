@@ -150,12 +150,14 @@ function renderRegistrationUploads() {
   if (!list) return;
   const batch = registrationBatch;
   const submitting = batch?.status === "submitting";
+  const duplicated = duplicateNameKeys(batch);
   for (const state of batch?.files || []) {
     if (!state.row) state.row = createUploadRow(state);
     if (state.row.parentNode !== list) list.append(state.row);
     const row = state.row;
     if (!state.existing) {
       const failed = state.status === "failed";
+      row.querySelector(".file-upload-duplicate").classList.toggle("hidden", !duplicated.has(uploadNameKey(state.file.name)));
       row.querySelector(".file-upload-meter").classList.toggle("hidden", failed);
       row.querySelector(".file-upload-failed").classList.toggle("hidden", !failed);
       row.querySelector(".file-upload-status").title = failed ? `${state.error}；请删除后重新上传` : "";
@@ -221,14 +223,18 @@ function cancelRegistrationUpload() {
   renderRegistrationUploads();
 }
 
-// 判重只看文件名：忽略首尾空格和大小写。
+// 同名判定只看文件名：忽略首尾空格和大小写。同名文件照常上传，只在列表里提示。
 function uploadNameKey(name) {
   return String(name || "").trim().toLowerCase();
 }
 
-function duplicateUploadMessage(names) {
-  const list = names.map((name) => `「${name}」`).join("");
-  return `${list}已上传，取消重复操作`;
+function duplicateNameKeys(batch) {
+  const counts = new Map();
+  for (const state of batch?.files || []) {
+    const key = uploadNameKey(state.file?.name);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return new Set(Array.from(counts).filter(([, count]) => count > 1).map(([key]) => key));
 }
 
 function startRegistrationUploads(files) {
@@ -237,25 +243,10 @@ function startRegistrationUploads(files) {
   if (!selected.length) return;
   if (!registrationBatch) registrationBatch = { id: newId(), files: [], status: "editing", controller: new AbortController(), error: "" };
   const batch = registrationBatch;
-  // 同一次登记内只按文件名判重：后选的同名文件不上传，前面的文件不受影响。
-  const taken = new Set(batch.files.map((state) => uploadNameKey(state.file.name)));
-  const accepted = [];
-  const skipped = [];
-  for (const file of selected) {
-    const key = uploadNameKey(file.name);
-    if (taken.has(key)) {
-      skipped.push(file.name);
-      continue;
-    }
-    taken.add(key);
-    accepted.push(file);
-  }
-  const states = accepted.map((file) => ({ id: newId(), file, controller: new AbortController(), status: "uploading", percent: 0, error: "" }));
+  const states = selected.map((file) => ({ id: newId(), file, controller: new AbortController(), status: "uploading", percent: 0, error: "" }));
   batch.files.push(...states);
-  batch.error = skipped.length ? duplicateUploadMessage(skipped) : "";
-  if (skipped.length) showUploadToast(batch.error, 6000);
   renderRegistrationUploads();
-  return states.length ? Promise.all(states.map(uploadRegistrationFile)) : undefined;
+  return Promise.all(states.map(uploadRegistrationFile));
 }
 
 async function uploadRegistrationFile(state) {

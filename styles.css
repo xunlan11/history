@@ -339,12 +339,26 @@ button {
 }
 
 .file-upload-status {
+  position: relative;
   display: grid;
   place-items: center;
   width: 96px;
   height: 24px;
   flex: 0 0 96px;
   font-size: 13px;
+}
+
+/* 叠在进度条上，不改变行高与布局。 */
+.file-upload-duplicate {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #c43838;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .file-upload-meter {
