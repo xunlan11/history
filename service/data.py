@@ -33,6 +33,7 @@ from service import retrieval, uploads
 from service.embedding import EmbeddingClient, semantic_enabled, probe_embedding_health
 from service.retrieval_types import RetrievalRequest, EvidenceValidationRequest
 from service.retrieval_worker import SemanticWorker
+from service.task_progress import read_progress, set_progress
 from contextvars import ContextVar
 from service.wenqu_sso import SsoResolver, verify_service_token
 
@@ -1866,7 +1867,37 @@ def public_processing_document(
     return document
 
 
-def copy_document_assets(connection, source_id, document, page_ids, timestamp, copied_paths):
+class DownloadProgress:
+    """下载副本的进度：复制文件 → 复制阅览器索引 → 写入文献库，按已完成单元数换算百分比。"""
+
+    def __init__(self, key: str) -> None:
+        self.key = (key or "").strip()
+        self.total = 0
+        self.done = 0
+
+    def start(self, total: int) -> None:
+        if not self.key:
+            return
+        self.total = max(1, int(total))
+        set_progress(self.key, 1, status="running", stage="copy")
+
+    def advance(self, stage: str = "copy") -> None:
+        if not self.key:
+            return
+        self.done += 1
+        set_progress(self.key, min(99, max(1, round(self.done * 100 / self.total))),
+                     status="running", stage=stage)
+
+    def finish(self) -> None:
+        if self.key:
+            set_progress(self.key, 100, status="done", stage="done")
+
+    def fail(self) -> None:
+        if self.key:
+            set_progress(self.key, 0, status="failed", stage="failed")
+
+
+def copy_document_assets(connection, source_id, document, page_ids, timestamp, copied_paths, on_file=None):
     rows = connection.execute(
         "SELECT * FROM document_files WHERE document_id=? AND deleted_at IS NULL", (source_id,),
     ).fetchall()
@@ -1890,12 +1921,15 @@ def copy_document_assets(connection, source_id, document, page_ids, timestamp, c
                 "size": row["size_bytes"], "mimeType": row["mime_type"], "fileName": row["original_name"],
             })
         apply_asset_to_document(document, asset)
+        if on_file:
+            on_file()
 
 
 @app.post("/api/documents/{document_id}/download")
-def download_public_document(document_id: str) -> dict[str, Any]:
+def download_public_document(document_id: str, progressKey: str = "") -> dict[str, Any]:
     user = current_user()
     copied_paths: list[Path] = []
+    progress = DownloadProgress(progressKey)
     try:
         with database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1923,7 +1957,12 @@ def download_public_document(document_id: str) -> dict[str, Any]:
                 page["id"] = f"page-{secrets.token_hex(16)}"
                 page_ids[old_id] = page["id"]
             # 文件记录与页面标识独立于公开源文件。
-            copy_document_assets(connection, document_id, document, page_ids, timestamp, copied_paths)
+            files_total = connection.execute(
+                "SELECT count(*) FROM document_files WHERE document_id=? AND deleted_at IS NULL",
+                (document_id,)).fetchone()[0]
+            progress.start(files_total + len(document.get("pages") or []) + 1)
+            copy_document_assets(connection, document_id, document, page_ids, timestamp, copied_paths,
+                                 on_file=progress.advance)
             document["status"] = "已整理" if document.get("pages") and all(
                 page.get("punctuatedText") for page in document["pages"]) else "待整理"
             upsert_documents(connection, [document], timestamp, user)
@@ -1935,17 +1974,27 @@ def download_public_document(document_id: str) -> dict[str, Any]:
                 reader_index.copy_reader_index(connection, document_id, old_page_ids[page["id"]],
                                                document["id"], page, timestamp,
                                                source_pdf=copied_source_pdf)
+                progress.advance("index")
             upsert_document_pages(connection, document["id"], payload.get("pages") or [], timestamp)
             payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
                                      "sourceDocumentId": document_id}
             connection.execute("UPDATE documents SET payload=? WHERE id=?", (document_payload(payload), document["id"]))
             cursor = bump_sync_version(connection)
             result = public_processing_document(connection, document["id"], user)
+            progress.advance("save")
+        progress.finish()
         return {"document": result, "syncCursor": str(cursor)}
     except Exception:
+        progress.fail()
         for path in copied_paths:
             path.unlink(missing_ok=True)
         raise
+
+
+@app.get("/api/documents/download-progress/{key}")
+def download_progress(key: str) -> dict[str, Any]:
+    """公开文献下载副本的实时进度，供预览窗口按钮显示。"""
+    return {"key": key, **read_progress(key)}
 
 
 # 下载副本的同步阶段（复制文件、重建阅览器索引、建立语义分块）在下载请求返回时就已完成，

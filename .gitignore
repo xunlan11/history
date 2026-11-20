@@ -10,3 +10,4 @@ __pycache__/
 /docs
 /tests
 测试文件
+.ruff_cache
