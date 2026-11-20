@@ -14,10 +14,6 @@ function stopProcessingPolling(documentId) {
   processingPollTimers.delete(documentId);
 }
 
-function stopDocumentProcessing(documentId) {
-  stopProcessingPolling(documentId);
-}
-
 function startProcessingPolling(item) {
   if (!item?.id || !item.processingTask?.backendManaged) return;
   stopProcessingPolling(item.id);

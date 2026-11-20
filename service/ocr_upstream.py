@@ -38,7 +38,7 @@
       ],
       "lines": [...],                         # 展平的全部文本行
       "markdown": "…" | None,                 # 服务端整页 Markdown（PP-StructureV3 提供）
-      "upstream": {"style": "paddlex", "url": "…", "latencyMs": 1234},
+      "upstream": {"url": "…", "latencyMs": 1234},
       "warnings": [...],
     }
 """
@@ -172,12 +172,8 @@ def describe() -> dict[str, Any]:
     return {
         "configured": bool(upstream_url()),
         "url": upstream_url() or None,
-        "style": "paddlex",
         "model": model_name(),
         "geometryFix": geometry_fix_enabled(),
-        "geometryFixByMode": {
-            mode: geometry_fix_enabled(mode) for mode in ("formal", "quick")
-        },
         "healthPath": health_path(),
     }
 
@@ -248,7 +244,6 @@ def recognize_page_image(path: Path, page_number: int | None = None, mode: str =
     normalized = _normalize_paddlex(payload)
     normalized["coordinateSpace"] = "input" if mode in {"quick", "reader"} else "processed"
     normalized["upstream"] = {
-        "style": "paddlex",
         "url": base,
         "latencyMs": int((time.perf_counter() - started) * 1000),
     }

@@ -1,7 +1,7 @@
 """Shared, versioned contracts for retrieval and source anchors."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import quote, unquote
 
@@ -56,7 +56,17 @@ class Chunk:
     ordinal: int
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            "chunkId": self.chunkId,
+            "documentId": self.documentId,
+            "pageId": self.pageId,
+            "sourceLayer": self.sourceLayer,
+            "sourceHash": self.sourceHash,
+            "start": self.start,
+            "end": self.end,
+            "text": self.text,
+            "ordinal": self.ordinal,
+        }
 
 
 class AttachmentSource(BaseModel):

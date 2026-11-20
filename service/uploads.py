@@ -25,9 +25,6 @@ def ensure_schema(connection):
         file_name TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
         mime_type TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '',
         sha256 TEXT NOT NULL DEFAULT '', document_id TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)""")
-    columns = {row[1] for row in connection.execute('PRAGMA table_info(pending_uploads)')}
-    if 'document_id' not in columns:
-        connection.execute("ALTER TABLE pending_uploads ADD COLUMN document_id TEXT NOT NULL DEFAULT ''")
     connection.execute("""CREATE TABLE IF NOT EXISTS upload_registrations (
         id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL, created_at REAL NOT NULL)""")
 

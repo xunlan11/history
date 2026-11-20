@@ -18,9 +18,18 @@ def occurrences(text: str, query: str) -> list[tuple[int, int]]:
 def normalize_literal(text: str) -> tuple[str, list[int], list[int]]:
     value, starts, ends = [], [], []
     for offset, point in enumerate(text):
-        if not point.isspace() and not unicodedata.category(point).startswith("P"):
+        # 汉字/字母/数字一定不是空白或标点，先走这一步省掉逐字查 Unicode 类别。
+        if point.isalnum():
             folded = point.lower()
-            value.append(folded)
+        elif point.isspace() or unicodedata.category(point).startswith("P"):
+            continue
+        else:
+            folded = point.lower()
+        value.append(folded)
+        if len(folded) == 1:
+            starts.append(offset)
+            ends.append(offset + 1)
+        else:
             starts.extend([offset] * len(folded))
             ends.extend([offset + 1] * len(folded))
     return "".join(value), starts, ends
@@ -88,9 +97,9 @@ def sentence_excerpt(text: str, start: int, end: int, boundaries: list[int] | No
     return {"sentenceStart": first, "sentenceEnd": last, "sentenceText": text[first:last]}
 
 
-def match_text(text: str, query: str) -> list[dict]:
+def match_text(text: str, query: str, boundaries: list[int] | None = None) -> list[dict]:
     """Return every literal location, bounded model context and complete sentences."""
-    boundaries = sentence_boundaries(text)
+    boundaries = boundaries if boundaries is not None else sentence_boundaries(text)
     matches = []
     for match in literal_match_ranges(text, query):
         start, end = max(0, match["start"] - 160), min(len(text), match["end"] + 240)

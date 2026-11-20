@@ -680,7 +680,7 @@ def extract_metadata(payload: ExtractMetadataRequest) -> dict[str, Any]:
 
 @app.post("/llm/chronicle")
 def chronicle(payload: ChronicleRequest) -> dict[str, Any]:
-    return run_evidence_task(payload, "chronicle")
+    return run_evidence_task(payload, "chronicle", payload.topic)
 
 @app.post("/llm/chronicle/supplement")
 def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
@@ -745,11 +745,11 @@ def supplement_chronicle(payload: SupplementChronicleRequest) -> dict[str, Any]:
 
 @app.post("/llm/search")
 def search(payload: SearchRequest) -> dict[str, Any]:
-    return run_evidence_task(payload, "search")
+    return run_evidence_task(payload, "search", payload.query)
 
 @app.post("/llm/chat")
 def chat(payload: ChatRequest) -> dict[str, Any]:
-    return run_evidence_task(payload, "chat")
+    return run_evidence_task(payload, "chat", payload.prompt)
 
 def call_json_task(prompt: str, on_progress: Any = None,
                    context_tokens: int | None = None,
@@ -1106,8 +1106,7 @@ def conversational_reply(query: str, config: BudgetConfig) -> str:
     return re.sub(r"\[\d+\]", "", reply).strip() or fallback
 
 
-def run_evidence_task(payload, mode: str) -> dict[str, Any]:
-    query = getattr(payload, "query", getattr(payload, "prompt", getattr(payload, "topic", "")))
+def run_evidence_task(payload, mode: str, query: str) -> dict[str, Any]:
     try:
         evidence = payload.evidence or []
         for item in evidence:

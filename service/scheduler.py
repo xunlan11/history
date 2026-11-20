@@ -296,7 +296,7 @@ def preserve_server_fields(connection, document):
         if key in stored:
             document[key] = stored[key]
     document["processingMode"] = job["mode"]
-    # job 是 sqlite3.Row（没有 .get），列名直接取；升级过的表一定有 chunk_size。
+    # job 是 sqlite3.Row（没有 .get），列名直接取；chunk_size 由建表 DDL 定义。
     document["processingChunkSize"] = normalize_chunk_size(job["chunk_size"])
     # 备注仍可编辑。调度器运行期间负责正文、状态和页列表；普通元数据仍可编辑。
     active = connection.execute("SELECT status FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()["status"] not in TERMINAL
@@ -520,17 +520,18 @@ class Scheduler:
     def _stage_progress(cls, doc, cp, total):
         omitted = set(cp.get("omittedPages", []))
         pages = {int(page.get("pageNumber")): page for page in doc.get("pages", []) if page.get("pageNumber")}
-        progress = {}
-        for stage in PROCESSING_STAGES:
-            done = len(omitted)
-            for number in range(1, total + 1):
-                if number in omitted:
-                    continue
-                page = pages.get(number)
-                if page and cls._stage_terminal(page, stage):
-                    done += 1
-            progress[stage] = {"done": min(total, done), "total": total}
-        return progress
+        done = {stage: len(omitted) for stage in PROCESSING_STAGES}
+        # 一页只查一次，四个阶段共用这次页面定位。
+        for number in range(1, total + 1):
+            if number in omitted:
+                continue
+            page = pages.get(number)
+            if not page:
+                continue
+            for stage in PROCESSING_STAGES:
+                if cls._stage_terminal(page, stage):
+                    done[stage] += 1
+        return {stage: {"done": min(total, done[stage]), "total": total} for stage in PROCESSING_STAGES}
 
     def _record(self, document_id, operation, number, future, lane=None):
         with self.data.database() as connection, connection:
@@ -779,6 +780,9 @@ class Scheduler:
         # 原件归档保留先进先出顺序，即使登记仍在等待服务。后续登记可以准备，
         # 但其正文不能越过这份真实且尚未完成的文献。
         if any(entry["phase"] == "registration" and entry["sequence"] < job["sequence"] for entry in jobs):
+            return
+        # 等候重试期间不必每轮都载入整本文献。
+        if job["retry_at"] > self.clock():
             return
         with self.data.database() as connection:
             loaded = self._load(connection, job["document_id"])

@@ -11,6 +11,7 @@ import os
 import re
 from copy import deepcopy
 from difflib import SequenceMatcher
+from functools import cache
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -276,14 +277,21 @@ def extract_visuals(result):
     return visuals, blocks
 
 
+@cache
+def _folded_char(char: str) -> str:
+    """单字的检索归一形式：繁→简、casefold，只保留字母数字。"""
+    return "".join(value for value in to_simplified(char).casefold() if value.isalnum())
+
+
 def _normalized(text):
     chars, positions = [], []
-    # OpenCC 转换可能改变长度，逐字维护原文偏移以保证锚点。
+    # OpenCC 转换可能改变长度，逐字维护原文偏移以保证锚点；单字结果按字缓存。
     for index, char in enumerate(text):
-        for value in to_simplified(char).casefold():
-            if value.isalnum():
-                chars.append(value)
-                positions.append(index)
+        folded = _folded_char(char)
+        if not folded:
+            continue
+        chars.append(folded)
+        positions.extend([index] * len(folded))
     return "".join(chars), positions
 
 

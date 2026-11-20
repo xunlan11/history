@@ -861,7 +861,7 @@ function setReaderEditing(editing) {
     resetReaderLink();
     // 清除句子节点再编辑，保存时始终读取普通正文。
     readerText.textContent = getPagePrimaryText(getSelectedPage());
-    if (typeof clearReaderVisualActive === "function") clearReaderVisualActive();
+    if (typeof clearReaderVisualSelection === "function") clearReaderVisualSelection();
     readerOriginalPreview?.querySelectorAll(".reader-visual-overlay").forEach((overlay) => overlay.remove());
     readerOriginalPreview?.querySelector(".reader-image-overlay")?.remove();
   }

@@ -534,7 +534,6 @@ function persist() {
 function persistDocumentsCache() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
-    return;
   } catch (error) {
     // 配额不足时只存索引，正文在下次打开文献时按需重新获取。
     try {
@@ -630,7 +629,18 @@ function applyServerState(payload) {
 // 增量合并：按 id 替换变化的文档元数据与页，不动未变化的页正文。
 function applyServerChanges(payload) {
   const documentsById = new Map(documents.map((item) => [item.id, item]));
+  const pagePositions = new Map();
   let changed = false;
+
+  // 同一次增量里可能带上千个页，位置表只在首次用到时建一次，避免逐页重扫整本文献。
+  function positionsFor(document) {
+    let positions = pagePositions.get(document.id);
+    if (!positions) {
+      positions = new Map(document.pages.map((page, index) => [page.id, index]));
+      pagePositions.set(document.id, positions);
+    }
+    return positions;
+  }
 
   for (const raw of payload.documents || []) {
     if (!raw?.id) continue;
@@ -650,17 +660,27 @@ function applyServerChanges(payload) {
     changed = true;
   }
 
+  const pagesChanged = new Set();
   for (const entry of payload.pages || []) {
     const documentId = String(entry?.documentId || "");
     const target = documentsById.get(documentId);
     if (!target || !entry?.page?.id) continue;
     const page = normalizePageEntry(entry.page);
-    const index = target.pages.findIndex((item) => item.id === page.id);
-    if (index >= 0) target.pages[index] = page;
-    else target.pages.push(page);
+    const positions = positionsFor(target);
+    const index = positions.get(page.id);
+    if (index === undefined) {
+      positions.set(page.id, target.pages.length);
+      target.pages.push(page);
+    } else {
+      target.pages[index] = page;
+    }
+    pagesChanged.add(target);
+    changed = true;
+  }
+  // 批量更新的页统一排序并只算一次状态，避免每页都重排整本、重扫全部页。
+  for (const target of pagesChanged) {
     target.pages.sort((a, b) => a.pageNumber - b.pageNumber);
     target.status = summarizeDocumentStatus(target);
-    changed = true;
   }
 
   for (const id of payload.removed?.documents || []) {
@@ -672,14 +692,14 @@ function applyServerChanges(payload) {
     }
   }
 
-  for (const id of payload.removed?.pages || []) {
+  const removedPages = new Set(payload.removed?.pages || []);
+  if (removedPages.size) {
     for (const document of documents) {
-      const index = document.pages.findIndex((page) => page.id === id);
-      if (index >= 0) {
-        document.pages.splice(index, 1);
-        document.status = summarizeDocumentStatus(document);
-        changed = true;
-      }
+      const kept = document.pages.filter((page) => !removedPages.has(page.id));
+      if (kept.length === document.pages.length) continue;
+      document.pages = kept;
+      document.status = summarizeDocumentStatus(document);
+      changed = true;
     }
   }
 
@@ -1248,7 +1268,7 @@ function deleteDocument(id) {
   }
 
   cancelDocumentProcessing(id);
-  stopDocumentProcessing(id);
+  stopProcessingPolling(id);
   persist();
 }
 

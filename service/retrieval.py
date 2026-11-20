@@ -14,6 +14,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from functools import lru_cache
 
 from service.embedding import EmbeddingError, semantic_enabled
 from service.evidence import NO_RELEVANT_MATERIAL
@@ -204,13 +205,22 @@ def normalized(text: str) -> str:
     return re.sub(r"\s+", "", to_simplified(text).casefold())
 
 
+@lru_cache(maxsize=32)
+def _query_features(query: str) -> tuple[str, frozenset[str], tuple[str, ...]]:
+    """同一问题的归一文本、词项与二字片段；一次检索里会被上千个切片复用。"""
+    normalized_query = normalized(query)
+    terms = frozenset(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]{1,2}", normalized_query))
+    grams = (tuple({normalized_query[i:i + 2] for i in range(len(normalized_query) - 1)})
+             if len(normalized_query) > 1 else (normalized_query,))
+    return normalized_query, terms, grams
+
+
 def literal_score(text: str, query: str) -> float:
-    text, query = normalized(text), normalized(query)
+    query, terms, grams = _query_features(query)
+    text = normalized(text)
     if not query or not text:
         return 0.0
     exact = 5.0 if query in text else 0.0
-    terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]{1,2}", query))
-    grams = {query[i:i + 2] for i in range(len(query) - 1)} if len(query) > 1 else {query}
     matched_grams = sum(gram in text for gram in grams)
     # 长查询里只重合一个二字片段是噪声：查询里的“18”会撞上文献年份“1898”，
     # 据此判定命中会让无关提问也拿到材料。短查询片段本就少，维持原行为以免损失词面召回。
@@ -237,7 +247,9 @@ def _evidence(chunk, row, metadata):
         "chunkId": chunk["chunk_id"], "documentId": chunk["document_id"], "pageId": chunk["page_id"],
         "sourceLayer": chunk["source_layer"], "sourceHash": chunk["source_hash"], "start": chunk["start"],
         "end": chunk["end"], "text": chunk["text"], "ordinal": chunk["ordinal"]}
-    item.update(parse_visual_source_layer(item["sourceLayer"]) or {})
+    visual = parse_visual_source_layer(item["sourceLayer"])
+    if visual:
+        item.update(visual)
     return item | {"sourceType": "document-page", "pageNumber": row["page_number"],
                    "title": metadata.get("title") or metadata.get("fileName") or "未命名文献",
                    "author": metadata.get("author", ""), "year": metadata.get("year", ""),
@@ -255,7 +267,6 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
       (SELECT 1 FROM document_pages p WHERE p.document_id=d.id AND {scope})""", params):
         document = json.loads(row["payload"])
         metadata_by_document[row["id"]] = {key: document.get(key, "") for key in ("title", "fileName", "author", "year", "publisher", "tags")}
-        del document
     rows = connection.execute(f"""SELECT p.id,p.document_id,p.page_number,p.payload
       FROM document_pages p JOIN documents d ON d.id=p.document_id WHERE {scope}
       ORDER BY d.sort_order,p.page_number,p.id""", params)
@@ -287,7 +298,10 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
             # 语义切片。
             if primary is not None:
                 sources = {primary.sourceLayer: primary, **sources}
-            layer_matches = {source.sourceLayer: match_text(source.text, request.query)
+            layer_boundaries = {source.sourceLayer: sentence_boundaries(source.text)
+                                for source in sources.values()}
+            layer_matches = {source.sourceLayer: match_text(source.text, request.query,
+                                                            layer_boundaries[source.sourceLayer])
                              for source in sources.values()}
             for source in sources.values():
                 literal_ranges[(source.pageId, source.sourceLayer)] = layer_matches[source.sourceLayer]
@@ -314,7 +328,7 @@ def retrieve(connection, user: dict, request: RetrievalRequest, embedding_client
         metadata_text = "\n".join(str(metadata.get(k) or "") for k in ("title", "author", "year", "publisher", "tags", "fileName"))
         metadata_score = 0.0 if reader_mode else 0.3 * literal_score(metadata_text, request.query)
         for source in sources.values():
-            boundaries = sentence_boundaries(source.text) if full_mode else None
+            boundaries = layer_boundaries[source.sourceLayer] if full_mode else None
             stored = connection.execute("SELECT * FROM semantic_chunks WHERE page_id=? AND source_layer=? AND source_hash=? ORDER BY ordinal", (row["id"], source.sourceLayer, source.sourceHash)).fetchall()
             chunks = stored or chunk_source(source)
             for chunk in chunks:

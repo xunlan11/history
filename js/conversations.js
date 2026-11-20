@@ -1113,10 +1113,6 @@ async function generateConversationTurn(conversationId, turnId, scrollToTurn = f
   }
 }
 
-function retryConversationTurn(conversationId, turnId) {
-  return generateConversationTurn(conversationId, turnId);
-}
-
 function startConversationPromptEdit(conversationId, turnId) {
   const { turn } = getConversationTurn(conversationId, turnId);
   if (!turn || conversationTurnRequests.has(conversationId)) return;
@@ -1279,7 +1275,7 @@ function renderConversationTurns() {
     }
     const footer = document.createElement("div");
     footer.className = "conversation-answer-actions";
-    footer.append(createConversationTurnAction("重新生成", "refresh", () => retryConversationTurn(conversation.id, turn.id), busy));
+    footer.append(createConversationTurnAction("重新生成", "refresh", () => generateConversationTurn(conversation.id, turn.id), busy));
     if (turn.result) {
       const sources = document.createElement("span");
       sources.className = "conversation-turn-meta";

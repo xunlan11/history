@@ -11,6 +11,7 @@ import secrets
 import shutil
 import sqlite3
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
@@ -182,10 +183,9 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA foreign_keys=ON")
     try:
-        ensure_schema(connection)
+        _ensure_ready(connection, str(DB_PATH))
+        connection.execute("PRAGMA foreign_keys=ON")
     except Exception:
         connection.close()
         raise
@@ -199,6 +199,23 @@ def database():
         yield connection
     finally:
         connection.close()
+
+
+# 建表、WAL 与列齐全校验每进程对同一个库只做一次：WAL 记在库文件里，表结构运行期不变。
+# 运行中替换库文件需重启服务。
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[str] = set()
+
+
+def _ensure_ready(connection: sqlite3.Connection, key: str) -> None:
+    if key in _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if key in _SCHEMA_READY:
+            return
+        connection.execute("PRAGMA journal_mode=WAL")
+        ensure_schema(connection)
+        _SCHEMA_READY.add(key)
 
 
 
@@ -1049,7 +1066,7 @@ def document_payload(document: dict[str, Any]) -> str:
 
 
 _PAGE_TEXT_FIELDS = ("ocrText", "normalizedText", "punctuationDraftText", "punctuatedText")
-_PAGE_BULK_FIELDS = (*_PAGE_TEXT_FIELDS, "visuals", "imageFile", "imageHash", "readerIndexTextHash")
+_PAGE_BULK_FIELDS = frozenset(_PAGE_TEXT_FIELDS) | {"visuals", "imageFile", "imageHash", "readerIndexTextHash"}
 
 
 def page_index_entry(page: dict[str, Any]) -> dict[str, Any]:
@@ -1838,9 +1855,9 @@ def public_processing_document(
     user: dict[str, Any],
     indexed_pages: bool = False,
 ) -> dict[str, Any]:
-    # 使用与初始化流程相同的可见性和资产投影。
+    # 使用与初始化流程相同的可见性和资产投影；只取这一篇，不遍历整个文献库。
     document = next(
-        doc for doc in active_payloads(connection, "documents", user)
+        doc for doc in active_payloads(connection, "documents", user, entity_ids=[document_id])
         if doc["id"] == document_id
     )
     if indexed_pages:
@@ -2186,13 +2203,14 @@ def revise_document(document_id: str, payload: DocumentRevision):
                     raise HTTPException(status_code=409, detail="文献正在处理当前页，请稍后再试")
                 held = True
             merged_path = uploads.upload_root() / f"revise-{secrets.token_hex(16)}.part"
+            existing_segment = (source_path, source_row["original_name"] or "原件")
             segments = []
             for index, row in enumerate(upload_rows):
                 if index == payload.existingIndex:
-                    segments.append((source_path, source_row["original_name"] or "原件"))
+                    segments.append(existing_segment)
                 segments.append((uploads.upload_root() / row["path"], row["file_name"]))
             if payload.existingIndex == len(upload_rows):
-                segments.append((source_path, source_row["original_name"] or "原件"))
+                segments.append(existing_segment)
             counts = uploads.merge_paths(segments, merged_path)
             before_pages = sum(counts[:payload.existingIndex])
             total_pages = sum(counts)

@@ -384,8 +384,6 @@ function clearReaderVisualSelection() {
   notifyReaderVisualSelected(null);
 }
 
-function clearReaderVisualActive() { clearReaderVisualSelection(); }
-
 function setReaderVisualSentenceActive(active) {
   readerVisualState.sentenceActive = Boolean(active);
   if (active) readerVisualState.hovered = null;

@@ -11,10 +11,6 @@ function versionRefreshBlocked() {
   return hasActiveDocumentUpload();
 }
 
-function refreshPageWithFreshAssets() {
-  reloadWithFreshAssets();
-}
-
 // 发布版本变了：先广播给同一浏览器的其它页面，再刷新本页。
 // 本页后台标签页、或没有未保存内容时立即刷新；可见且正在编辑则挂起，
 // 等编辑结束（下次轮询，≤30s）或页面转到后台时再刷。
@@ -25,7 +21,7 @@ function applyVersionRefresh() {
   if (document.visibilityState !== "hidden" && versionRefreshBlocked()) {
     return;
   }
-  refreshPageWithFreshAssets();
+  reloadWithFreshAssets();
 }
 
 function requestVersionRefresh() {
@@ -186,7 +182,7 @@ async function refreshVersionStatus() {
       }
       // 先通知其它已打开的页面刷新，再刷新本页
       broadcastPlatformReload();
-      refreshPageWithFreshAssets();
+      reloadWithFreshAssets();
       return;
     }
 
