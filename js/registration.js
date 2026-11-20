@@ -97,11 +97,7 @@ function createUploadRow(state) {
   row.querySelector(".file-picker-name").title = state.file.name;
   if (state.existing) {
     // 已有原件只占一行，用来决定合并顺序，不能删除也不能重新上传。
-    row.classList.add("is-existing");
-    const badge = document.createElement("span");
-    badge.className = "file-upload-badge";
-    badge.textContent = "已有原件";
-    row.querySelector(".file-picker-name").after(badge);
+    row.querySelector(".file-upload-existing").classList.remove("hidden");
     row.querySelector(".file-upload-remove").remove();
     row.querySelector(".file-upload-meter").classList.add("hidden");
   }

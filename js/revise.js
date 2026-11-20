@@ -99,7 +99,6 @@ function acceptRevisedDocument(payload) {
   ensureSelectedPage(incoming);
   startProcessingPolling(incoming);
   renderAll();
-  showUploadToast("已提交修改，处理进度将按新的页序刷新。", 5000);
 }
 
 async function submitDocumentRevision(batch) {

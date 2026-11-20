@@ -309,17 +309,6 @@ button {
   background: #e8f1ed;
 }
 
-.file-upload-badge {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
-  white-space: nowrap;
-}
-
 .file-upload-controls {
   display: flex;
   align-items: center;
@@ -348,14 +337,13 @@ button {
   font-size: 13px;
 }
 
-/* 叠在进度条上，不改变行高与布局。 */
+/* 叠在进度条上，不改变行高与布局；与「上传失败」同一配色。 */
 .file-upload-duplicate {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  color: #c43838;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1;
   white-space: nowrap;
   pointer-events: none;
@@ -372,7 +360,8 @@ button {
   appearance: none;
   display: block;
   width: 100%;
-  height: 8px;
+  /* 高度容纳 13px 的同名提示文字，提示整体落在进度条内。 */
+  height: 16px;
   border: 0;
   border-radius: 999px;
   overflow: hidden;
@@ -395,7 +384,7 @@ button {
   background: var(--primary);
 }
 
-.file-upload-failed, .registration-error {
+.file-upload-failed, .registration-error, .file-upload-duplicate, .file-upload-existing {
   color: #c43838;
 }
 
