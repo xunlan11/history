@@ -2239,7 +2239,10 @@ def revise_document(document_id: str, payload: DocumentRevision):
 
             if merged_path:
                 old_total = int(checkpoint.get("totalPages") or task.get("totalPages") or 0)
-                if old_total != existing_pages:
+                pages = document.get("pages") or []
+                # 还没拆出页（排队/准备中）的文献没有页数记录，以合并结果为准；
+                # 已经开始处理时必须与已有记录一致，否则重排页码会错位。
+                if (old_total and old_total != existing_pages) or (not old_total and pages):
                     raise HTTPException(status_code=409, detail="原件页数与处理记录不一致，暂时无法续传")
                 digest = hashlib.sha256()
                 size = 0
@@ -2263,7 +2266,6 @@ def revise_document(document_id: str, payload: DocumentRevision):
                     "mimeType": "application/pdf", "fileName": name})
                 apply_asset_to_document(document, asset)
 
-                pages = document.get("pages") or []
                 for page in pages:
                     page["pageNumber"] = int(page.get("pageNumber") or 0) + before_pages
                 if before_pages:
