@@ -17,10 +17,10 @@ AMBIGUOUS_MAX_CHARS = 24
 TOC_TITLE = re.compile(r"^(?:目\s*录|目\s*錄|contents|table\s+of\s+contents)$", re.I)
 # 书名 + 目录：「山东义和团案卷目录」也算目录页首行。
 TOC_TITLE_SUFFIX = re.compile(r"(?:目\s*录|目\s*錄)$")
-# 目录页常见「标题……/123」「标题…………91」的行尾页码，识别标题时要排除。
-TOC_PAGE_REF = re.compile(r"(?:[／/]|[.·…]{2,})\s*\d{1,4}\s*$")
+# 目录页常见「标题……/123」「标题…………91」「标题……(246)」的行尾页码，识别标题时要排除。
+TOC_PAGE_REF = re.compile(r"(?:[／/]|[.·…．]{2,})\s*[（(]?\s*\d{1,4}\s*[）)]?\s*$")
 # 目录页条目：行尾用点线引导页面号。
-TOC_ENTRY_REF = re.compile(r"[.·…]{2,}\s*\d{1,4}\s*$")
+TOC_ENTRY_REF = re.compile(r"[.·…．]{2,}\s*[（(]?\s*\d{1,4}\s*[）)]?\s*$")
 SENTENCE_BREAK = re.compile(r"[。！？!?；;，,]")
 
 # 明确的层级标记：卷/编/篇/部分 > 章 > 节。
