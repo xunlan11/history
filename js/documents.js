@@ -1140,6 +1140,37 @@ async function saveReaderDetailEdits(documentId) {
   showUploadToast("文献信息保存失败：尚未同步到服务器，请稍后重试", 4200);
 }
 
+// 整理文本只提交这一页；服务端是权威，回包直接覆盖本地页。
+async function saveReaderPageText(documentId, pageId, text) {
+  const response = await fetch(
+    `${DATA_DOCUMENT_PAGES_URL}/${encodeURIComponent(documentId)}/pages/${encodeURIComponent(pageId)}/text`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof payload?.detail === "string" && payload.detail
+      ? payload.detail
+      : `保存失败（${response.status}）`);
+  }
+  if (!payload?.page?.id) {
+    throw new Error("服务端未返回页面数据，请刷新后重试。");
+  }
+  const item = getLiveDocument(documentId);
+  const page = item?.pages.find((entry) => entry.id === pageId);
+  if (!item || !page) {
+    throw new Error("文献已变化，请刷新后重试。");
+  }
+  Object.assign(page, normalizePageEntry(payload.page));
+  item.updatedAt = new Date().toISOString();
+  item.status = summarizeDocumentStatus(item);
+  cacheCurrentState();
+  return page;
+}
+
 function renderReaderSidebar() {
   if (!readerDetailNode) {
     return;

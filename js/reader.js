@@ -628,12 +628,6 @@ function resetReaderLink() {
   return readerLinkRenderRevision;
 }
 
-function markReaderIndexStale(documentId, pageId) {
-  const page = documents.find((item) => item.id === documentId)?.pages.find((entry) => entry.id === pageId);
-  if (page?.readerIndexStatus) page.readerIndexStatus = "stale";
-  resetReaderLink();
-}
-
 function scrollReaderRegionIntoView(element, container) {
   if (!element || !container || container.clientHeight === 0) return;
   const box = element.getBoundingClientRect();

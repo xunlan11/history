@@ -147,6 +147,10 @@ class PageAnnotationUpdate(BaseModel):
     content: str = Field(default="", max_length=100_000)
 
 
+class PageTextPayload(BaseModel):
+    text: str = Field(default="", max_length=500_000)
+
+
 class ReadingProgressUpdate(BaseModel):
     pageId: str = Field(min_length=1, max_length=200)
 
@@ -2961,6 +2965,48 @@ def get_reading_progress(document_id: str) -> dict[str, Any]:
         "pageNumber": row["page_number"] if row else None,
         "updatedAt": row["updated_at"] if row else "",
     }
+
+
+@app.put("/api/documents/{document_id}/pages/{page_id}/text")
+def put_page_text(document_id: str, page_id: str, payload: PageTextPayload) -> dict[str, Any]:
+    """保存一页的整理文本。
+
+    只写这一页并标记 `manualText`：自动处理阶段与整库 push 都不会再覆盖它，
+    回包是服务端权威的整页数据（含重建后的阅览器索引状态）。
+    """
+    user = current_user()
+    timestamp = now_iso()
+    with database() as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            require_owned_document(connection, document_id, user)
+            row = connection.execute(
+                "SELECT payload FROM document_pages WHERE id=? AND document_id=? AND deleted_at IS NULL",
+                (page_id, document_id),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="页面不存在")
+            page = json_load(row["payload"])
+            text = payload.text
+            if text == (page.get("punctuatedText") or ""):
+                return {"page": page, "updatedAt": page.get("updatedAt") or timestamp}
+            page["punctuatedText"] = text
+            page["status"] = "已保存文字" if text else "待整理"
+            page["manualText"] = True
+            page["manualTextAt"] = timestamp
+            page["updatedAt"] = timestamp
+            page["hasText"] = bool(text or page.get("ocrText"))
+            page["textLength"] = len(text or page.get("ocrText") or "")
+            page["hasProcessedText"] = bool(text)
+            source_pdf = document_source_pdf(connection, document_id)
+            reader_index.reconcile_reader_index(connection, document_id, page, timestamp, source_pdf=source_pdf)
+            upsert_document_pages(connection, document_id, [page], timestamp, sweep=False)
+            connection.execute(
+                "UPDATE documents SET updated_at=?, version=version+1 WHERE id=? AND deleted_at IS NULL",
+                (timestamp, document_id),
+            )
+            bump_sync_version(connection)
+    return {"page": page, "updatedAt": timestamp}
 
 
 @app.put("/api/documents/{document_id}/reading-progress")

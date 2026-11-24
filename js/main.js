@@ -190,23 +190,30 @@ editDocumentButton?.addEventListener("click", async () => {
     return;
   }
 
-  if (readerEditing) {
-    const editedText = readerText.innerText.trim();
-    if (editedText !== getPagePrimaryText(page)) markReaderIndexStale(item.id, page.id);
-    page.punctuatedText = editedText;
-    page.status = page.punctuatedText ? "已保存文字" : "待整理";
-    page.updatedAt = new Date().toISOString();
-    item.status = summarizeDocumentStatus(item);
-    item.updatedAt = new Date().toISOString();
-    persist();
-    setReaderEditing(false);
-    renderAll();
-    await flushPendingSync();
-    if (!readerEditing && getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id) renderReader();
+  if (!readerEditing) {
+    setReaderEditing(true);
     return;
   }
 
-  setReaderEditing(true);
+  const editedText = readerText.innerText.trim();
+  if (editedText === getPagePrimaryText(page)) {
+    setReaderEditing(false);
+    renderAll();
+    return;
+  }
+
+  editDocumentButton.disabled = true;
+  try {
+    await saveReaderPageText(item.id, page.id, editedText);
+    setReaderEditing(false);
+    renderAll();
+    if (getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id) renderReader();
+    window.showUploadToast?.("整理文本已保存");
+  } catch (error) {
+    // 保存失败保留编辑态与输入内容，明确报错。
+    editDocumentButton.disabled = false;
+    window.showUploadToast?.(`整理文本保存失败：${error.message}`, 4200);
+  }
 });
 
 document.querySelector("#smart-send")?.addEventListener("click", runSelectedSmartMode);

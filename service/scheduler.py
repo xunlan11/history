@@ -273,47 +273,64 @@ class HttpServices:
 
 
 def preserve_server_fields(connection, document):
-    """过期的浏览器同步绝不能覆盖调度器检查点。"""
+    """整库 push 落库前的服务端权威字段合并。
+
+    页正文与页结构只由服务端维护（人工整理文本走
+    `PUT /api/documents/{id}/pages/{page_id}/text`），push 只把 `notes` 合进服务端页；
+    有处理任务时，任务状态与元数据同样以服务端为准。
+    """
     row = connection.execute("SELECT payload FROM documents WHERE id=?", (document["id"],)).fetchone()
-    job = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
-    if not row or not job:
+    if not row:
         return document
     stored = json.loads(row["payload"])
     # 页正文以 document_pages 为准，payload 里不内嵌 pages。
     stored["pages"] = [json.loads(page["payload"]) for page in connection.execute(
         "SELECT payload FROM document_pages WHERE document_id=? AND deleted_at IS NULL ORDER BY page_number",
         (document["id"],))]
-    current_revision = (stored.get("processingTask") or {}).get("revision", 0)
-    client_revision = (document.get("processingTask") or {}).get("revision", -1)
-    baseline = (document.get("processingTask") or {}).get("metadataSnapshot") or {}
-    if client_revision != current_revision:
-        for key in ("title", "author", "year", "publisher"):
-            if key not in baseline or document.get(key, "") == baseline[key]:
-                document[key] = stored.get(key, "")
-    for key in ("processingTask", "registration", "status", "metadataStatus",
-                "coverImageDataUrl", "coverImageUrl", "coverImageFile", "sourceFile", "fileUrl", "filePath",
-                "fileHash", "fileMimeType", "fileSize", "fileName"):
-        if key in stored:
-            document[key] = stored[key]
-    document["processingMode"] = job["mode"]
-    # job 是 sqlite3.Row（没有 .get），列名直接取；chunk_size 由建表 DDL 定义。
-    document["processingChunkSize"] = normalize_chunk_size(job["chunk_size"])
-    # 备注仍可编辑。调度器运行期间负责正文、状态和页列表；普通元数据仍可编辑。
-    active = connection.execute("SELECT status FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()["status"] not in TERMINAL
-    incoming = {p.get("id"): p for p in document.get("pages", [])}
+    job = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document["id"],)).fetchone()
+    if job:
+        current_revision = (stored.get("processingTask") or {}).get("revision", 0)
+        client_revision = (document.get("processingTask") or {}).get("revision", -1)
+        baseline = (document.get("processingTask") or {}).get("metadataSnapshot") or {}
+        if client_revision != current_revision:
+            for key in ("title", "author", "year", "publisher"):
+                if key not in baseline or document.get(key, "") == baseline[key]:
+                    document[key] = stored.get(key, "")
+        for key in ("processingTask", "registration", "status", "metadataStatus",
+                    "coverImageDataUrl", "coverImageUrl", "coverImageFile", "sourceFile", "fileUrl", "filePath",
+                    "fileHash", "fileMimeType", "fileSize", "fileName"):
+            if key in stored:
+                document[key] = stored[key]
+        document["processingMode"] = job["mode"]
+        # job 是 sqlite3.Row（没有 .get），列名直接取；chunk_size 由建表 DDL 定义。
+        document["processingChunkSize"] = normalize_chunk_size(job["chunk_size"])
+    incoming = {page.get("id"): page for page in document.get("pages") or []}
     pages = []
     for page in stored.get("pages", []):
         edit = incoming.get(page["id"])
         merged = dict(page)
         if edit:
             merged["notes"] = edit.get("notes", page.get("notes", ""))
-            if (not active or page.get("proofreadingDone")) and "punctuatedText" in edit:
-                # 过期的未处理快照不能删除刚生成的文本；显式文本编辑仍予以保留。
-                if edit.get("processingRevision", -1) == page.get("processingRevision", 0):
-                    merged["punctuatedText"] = edit["punctuatedText"]
         pages.append(merged)
     document["pages"] = pages
     return document
+
+
+def preserve_manual_page_text(connection, document_id, pages):
+    """人工整理过的页保留用户文本，自动阶段只更新其余字段。"""
+    for page in pages:
+        row = connection.execute(
+            "SELECT payload FROM document_pages WHERE id=? AND document_id=? AND deleted_at IS NULL",
+            (page["id"], document_id),
+        ).fetchone()
+        if not row:
+            continue
+        stored = json.loads(row["payload"])
+        if not stored.get("manualText"):
+            continue
+        page["punctuatedText"] = stored.get("punctuatedText", "")
+        page["manualText"] = True
+        page["manualTextAt"] = stored.get("manualTextAt", "")
 
 
 def save_job_state(data, connection, job, doc, cp, page_ids=None):
@@ -332,6 +349,7 @@ def save_job_state(data, connection, job, doc, cp, page_ids=None):
     data.materialize_document_assets(connection, doc["id"], doc, stamp, page_ids=allowed)
     pages = doc.get("pages") or []
     touched = pages if allowed is None else [page for page in pages if page.get("id") in allowed]
+    preserve_manual_page_text(connection, doc["id"], touched)
     source_pdf = data.document_source_pdf(connection, doc["id"])
     for page in touched:
         reader_index.reconcile_reader_index(connection, doc["id"], page, stamp, source_pdf=source_pdf)
