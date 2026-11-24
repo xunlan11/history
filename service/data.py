@@ -2046,7 +2046,8 @@ def document_preparation_state(connection, document_id: str, fingerprint: str) -
     if counts.get("running"):
         stage = "running"
     elif counts.get("pending"):
-        stage = "queued"
+        # 逐页领取任务，队列里必然还有 pending；已有完成页就说明在跑，不能一直报排队。
+        stage = "running" if ready else "queued"
     elif counts.get("waiting"):
         stage = "waiting"
     elif counts.get("failed"):

@@ -14,9 +14,13 @@ OUTLINE_VERSION = 1
 HEADING_MAX_CHARS = 40
 # 纯序号型（一、/（一）/1./①）最容易和正文里的有序列表混淆，额外限长。
 AMBIGUOUS_MAX_CHARS = 24
-TOC_TITLE = re.compile(r"^(?:目\s*录|contents|table\s+of\s+contents)$", re.I)
-# 目录页常见「标题……/123」的行尾页码，识别标题时要排除。
-TOC_PAGE_REF = re.compile(r"[／/]\s*\d{1,4}\s*$")
+TOC_TITLE = re.compile(r"^(?:目\s*录|目\s*錄|contents|table\s+of\s+contents)$", re.I)
+# 书名 + 目录：「山东义和团案卷目录」也算目录页首行。
+TOC_TITLE_SUFFIX = re.compile(r"(?:目\s*录|目\s*錄)$")
+# 目录页常见「标题……/123」「标题…………91」的行尾页码，识别标题时要排除。
+TOC_PAGE_REF = re.compile(r"(?:[／/]|[.·…]{2,})\s*\d{1,4}\s*$")
+# 目录页条目：行尾用点线引导页面号。
+TOC_ENTRY_REF = re.compile(r"[.·…]{2,}\s*\d{1,4}\s*$")
 SENTENCE_BREAK = re.compile(r"[。！？!?；;，,]")
 
 # 明确的层级标记：卷/编/篇/部分 > 章 > 节。
@@ -47,7 +51,8 @@ SHORT_TITLE = re.compile(r"^(?:记|论|谈|说)[一-龥A-Za-z0-9·《》〔〕�
 SHORT_TITLE_ENDING = re.compile(r"^[一-龥A-Za-z0-9·《》〔〕（）()—\-]{2,20}(?:记|碑|铭|表|志)$")
 SHORT_TITLE_STOP = {"得", "着", "住", "载", "录", "者", "述"}
 BARE_UNIT_HEADING = re.compile(r"^第[〇零一二三四五六七八九十百千0-9]+(?:部分|编|篇|卷|章|节)$")
-
+# 「朱红灯卷」「各防营卷」「济南府卷」这类以「卷」结尾的独立卷名（不带「第X卷」）。
+VOLUME_TITLE = re.compile(r"^[一-龥A-Za-z0-9·《》〔〕（）()—\-]{2,12}卷$")
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -56,6 +61,15 @@ def digest(text: str) -> str:
 def page_text(page: dict[str, Any]) -> str:
     """与前端 `getPagePrimaryText` 保持一致：整理文本优先，其次 OCR 文本。"""
     return str(page.get("punctuatedText") or page.get("ocrText") or "")
+
+
+# 处理任务结束后，缺文字的页不会再补，不能一直当作"目录仍在生成"。
+PROCESSING_FINISHED_STATUSES = {"已完成", "处理失败", "已取消"}
+
+
+def processing_active(document: dict[str, Any]) -> bool:
+    task = document.get("processingTask") or {}
+    return bool(task.get("backendManaged")) and task.get("status") not in PROCESSING_FINISHED_STATUSES
 
 
 def utf16_prefix(text: str) -> list[int]:
@@ -98,6 +112,8 @@ def classify(title: str) -> tuple[int, str, bool] | None:
             return level, family, False
     if SIGNED_PREFACE.fullmatch(text):
         return 0, "signed_preface", False
+    if VOLUME_TITLE.fullmatch(text):
+        return 0, "volume_name", False
     if SHORT_TITLE.fullmatch(text) and text[1] not in SHORT_TITLE_STOP:
         return 2, "short_title", False
     if SHORT_TITLE_ENDING.fullmatch(text):
@@ -139,7 +155,16 @@ def _merge_subtitle(entry: dict[str, Any], entries: list[dict[str, Any]]) -> dic
 
 
 def _looks_like_toc_page(entries: list[dict[str, Any]], candidates: list[dict[str, Any]]) -> bool:
-    if entries and TOC_TITLE.fullmatch(" ".join(entries[0]["title"].split())):
+    if not entries:
+        return False
+    first = " ".join(entries[0]["title"].split())
+    if TOC_TITLE.fullmatch(first):
+        return True
+    # 「书名 + 目录」开头的页也整页略过。
+    if len(first) <= 20 and TOC_TITLE_SUFFIX.search(first):
+        return True
+    # 多条「标题……页码」行：目录页（可能没有「目录」二字）。
+    if sum(1 for entry in entries if TOC_ENTRY_REF.search(entry["title"])) >= 3:
         return True
     # 整页大部分行都是序号行（目录/索引页），整页略过，避免把目录当成正文标题。
     return len(candidates) >= 5 and len(candidates) * 2 >= len(entries)
@@ -147,6 +172,8 @@ def _looks_like_toc_page(entries: list[dict[str, Any]], candidates: list[dict[st
 
 def build_outline(document: dict[str, Any]) -> dict[str, Any]:
     pages = sorted(document.get("pages") or [], key=lambda page: page.get("pageNumber", 0))
+    # 封面/版权页会把书名当行首文字，书名不是章节标题。
+    document_title = " ".join(str(document.get("title") or "").split())
     items: list[dict[str, Any]] = []
     text_pages = 0
     for page in pages:
@@ -172,6 +199,8 @@ def build_outline(document: dict[str, Any]) -> dict[str, Any]:
             if _is_list_run(candidates, index):
                 continue
             title = " ".join(candidate["title"].split())
+            if document_title and title == document_title:
+                continue
             # 页眉会把章节名带在续页顶端，相邻页同名条目只保留第一条。
             if items and items[-1]["title"] == title and page_number - items[-1]["pageNumber"] <= 1:
                 continue
@@ -202,5 +231,5 @@ def build_outline(document: dict[str, Any]) -> dict[str, Any]:
         "total": len(items),
         "textPages": text_pages,
         "totalPages": total_pages,
-        "complete": bool(pages) and text_pages == len(pages),
+        "complete": bool(pages) and (text_pages == len(pages) or not processing_active(document)),
     }

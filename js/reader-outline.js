@@ -63,14 +63,19 @@ function renderReaderOutline() {
   const heading = readerOutlineNode("div", "section-heading reader-chapter-catalog-heading");
   heading.append(readerOutlineNode("h3", "", "章节"));
   panel.append(heading);
-  const status = readerOutlineNode("p", "reader-chapter-catalog-status");
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  panel.append(status);
-  if (!state.documentId) { status.textContent = "请先打开文献"; return; }
-  if (state.loading) { status.textContent = "正在识别章节标题…"; return; }
+  // 提示只在没有目录可看时出现；有目录就直接给结构。
+  const addStatus = (text) => {
+    const status = readerOutlineNode("p", "reader-chapter-catalog-status");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.textContent = text;
+    panel.append(status);
+    return status;
+  };
+  if (!state.documentId) { addStatus("请先打开文献"); return; }
+  if (state.loading) { addStatus("正在识别章节标题…"); return; }
   if (state.error) {
-    status.textContent = state.error;
+    addStatus(state.error);
     const retry = readerOutlineNode("button", "reader-chapter-catalog-retry", "重试");
     retry.type = "button";
     retry.addEventListener("click", () => {
@@ -83,11 +88,9 @@ function renderReaderOutline() {
   const outline = state.outline;
   if (!outline) return;
   if (!outline.items.length) {
-    status.textContent = outline.complete ? "未识别到章节标题" : "尚未识别到章节标题，目录仍在生成";
+    addStatus(outline.complete ? "未识别到章节标题" : "尚未识别到章节标题，目录仍在生成");
     return;
   }
-  status.textContent = `${outline.total} 个标题 · 已识别 ${outline.textPages}/${outline.totalPages} 页` +
-    (outline.complete ? "" : " · 目录仍在生成");
   const list = readerOutlineNode("ol", "reader-chapter-catalog-items");
   for (const entry of outline.items) {
     const li = document.createElement("li");
