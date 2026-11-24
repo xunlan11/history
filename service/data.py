@@ -3001,6 +3001,9 @@ def put_page_text(document_id: str, page_id: str, payload: PageTextPayload) -> d
             if text == (page.get("punctuatedText") or ""):
                 return {"page": page, "updatedAt": page.get("updatedAt") or timestamp}
             page["punctuatedText"] = text
+            # 人工改了正文，模型标注的段落号与题名不再对应，清空后由下一次处理重算。
+            page.pop("outlineItems", None)
+            page.pop("punctuationDraftOutline", None)
             page["status"] = "已保存文字" if text else "待整理"
             page["manualText"] = True
             page["manualTextAt"] = timestamp

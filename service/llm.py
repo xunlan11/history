@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
+from service import outline_tags
 from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, fit_prompt_budget, normalize_chronicle_dates, validate_result_citations
 from service.task_progress import progress_reporter, read_progress
 
@@ -74,6 +75,8 @@ class FinalizePageRequest(LlmTaskRequest):
     ocrText: str = ""
     normalizedText: str = ""
     punctuationDraftText: str = ""
+    # 标点阶段识别出的题名：校对稿改写段落时用来重新定位。
+    punctuationOutline: list[dict[str, Any]] = Field(default_factory=list)
     previousPages: list[PreviousPageContext] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
@@ -441,7 +444,8 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
     if chunk_total > 1:
         chunk_note = (
             f"\n本页较长，已按版面切成 {chunk_total} 段，本次只处理第 {chunk_index} 段。"
-            "只输出这一段的结果：不要补写其它段的内容，也不要在段首或段尾添加说明。\n"
+            "只输出这一段的结果：不要补写其它段的内容，也不要在段首或段尾添加说明。"
+            "段落的编号按本段自己的自然段从 1 数起。\n"
         )
     return f"""
 /no_think
@@ -455,7 +459,11 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
 4. 输入已经由 OpenCC 完成简体转换；输出必须使用简体中文，不得混入繁体字。保持输入字词及顺序，不要再次做简繁转换，也不要改写字形。
 5. 输出里不要残留版面换行：接起来的句子直接相连，只在自然段之间空一行（JSON 字符串中写作 \\n\\n）。
 6. 按语义分段，每段通常 2 至 5 句；不要把整页压成一段，也不要按 OCR 的行分组分段、逐行成段。每段必须至少是一个完整句子：只有几个字、一个称谓或半句话的内容绝不能单独成段，要并进它所属的那一句和那一段。
-   章节标题（含各级编号标题）是独立段落，单独成行：不要并入上一段或下一段，也不要把相邻的两级标题合并成一段。
+   下面这些题名都是独立段落，单独成行：既不并入上一段或下一段，也不与另一级题名合成一段。
+   - 各级章节题名：卷、编、篇、章、节、目（含各级编号标题）。
+   - 公牍单篇题名：编号、具文者、事由、收文日期连写在一行而未用标点断开的那一类题名，其后的“敬禀者”“为札饬事”“窃…”等是正文，另起一段。题名本身照原样断在一处，不要拆成两段。
+   - 独立成篇的附属题名：序、跋、前言、凡例、附录、后记、参考文献等。
+   只有称谓、几个字或半句话的残行（如“钦此”“等因”）不是题名，要并回它所在的那一句。
 7. 人名、地名、官署名、机构名、部队番号、职务、年号、日期、档案号等专名原样保留，不要把专名拆开。
 
 标点用法（统一使用中文全角标点，标点前后不加英文空格）：
@@ -479,9 +487,17 @@ def build_punctuation_prompt(source_text: str, metadata: DocumentMetadata,
 只输出一个 JSON 对象（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段，也不要复述上面的任何要求）：
 {{
   "punctuatedText": "已完成断句和标点的文本",
+  "outlineItems": [
+    {{"paragraph": 1, "type": "chapter", "title": "照抄该段开头的题名原文"}}
+  ],
   "uncertainItems": ["不确定处"],
   "warnings": ["处理提示"]
 }}
+
+outlineItems 列出本段文本里出现的每一个题名，没有题名就给空数组：
+- paragraph 是该题名所在自然段的序号，按 "punctuatedText" 自己的空行分段，第一段记作 1。
+- type 只能是 volume（卷/编/篇）、chapter（章）、section（节）、subsection（目/小标题）、entry（公牍单篇题名等最底层的件名）、front（序跋、前言、凡例、目录）、back（附录、后记、参考文献）。
+- title 照抄该段开头的题名原文：不要带后面的正文，不要改写、不要补字、不要加书名号；题名与正文同段时也一样，只取题名。
 """.strip()
 
 
@@ -496,6 +512,8 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
     warnings: list[Any] = []
     punctuated_text = ""
     processed = 0
+    raw_outline: list[dict[str, Any]] = []
+    paragraph_offset = 0
     try:
         for index, chunk in enumerate(chunks, start=1):
             prompt = build_punctuation_prompt(chunk, payload.metadata, index, len(chunks))
@@ -503,23 +521,35 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
             result = call_text_task(
                 prompt, "punctuatedText", "标点",
                 offset_reporter(report, processed),
-                extra_keys=("uncertainItems",),
+                extra_keys=("uncertainItems", "outlineItems"),
                 context_tokens=context_tokens,
                 output_tokens=output_tokens,
             )
-            punctuated_parts.append(normalize_generated_text(result.get("punctuatedText")))
+            part = normalize_generated_text(result.get("punctuatedText"))
+            punctuated_parts.append(part)
             uncertain_items.extend(list_value(result.get("uncertainItems")))
             warnings.extend(list_value(result.get("warnings")))
+            # 分块各自从 1 数段落，合并后要加上前面各块的段数。
+            for entry in list_value(result.get("outlineItems")):
+                if isinstance(entry, dict):
+                    try:
+                        number = int(entry.get("paragraph"))
+                    except (TypeError, ValueError):
+                        continue
+                    raw_outline.append({**entry, "paragraph": number + paragraph_offset})
+            paragraph_offset += len(outline_tags.paragraph_spans(part))
             processed += len(content_characters(chunk))
         punctuated_text = "\n\n".join(part for part in punctuated_parts if part)
         # 整页校验通过才算完成：生成流结束、结果被校验拒绝时不能先报 100。
         validate_punctuation_result(source_text, punctuated_text)
+        outline_items = outline_tags.normalize_items(punctuated_text, raw_outline, warnings)
         if report:
             report(expected_units, True)
         response = base_response("punctuate", ready=True)
     except LlmServiceError as exc:
         punctuated_text = ""
         uncertain_items = []
+        outline_items = []
         warnings = [str(exc)]
         response = failure_response("punctuate", exc)
 
@@ -532,6 +562,7 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
             "sourceText": payload.sourceText,
             "joinedSourceText": source_text,
             "punctuatedText": punctuated_text,
+            "outlineItems": outline_items,
             "uncertainItems": uncertain_items,
             "warnings": warnings,
         }
@@ -560,7 +591,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 3. 结果必须使用简体中文，专名、年代、档案号原样保留。
 4. 保留自然段：段落之间用两个换行字符（JSON 字符串中写作 \\n\\n），不要按行分组，也不要每句单独成段；输出里不要残留逐行换行。
    不得让只有称谓或几个字的残句单独成段：抬格称谓属于它所在的那一句，遇到单独成行的就并回该句。
-   章节标题（含各级编号标题）保持独立段落，不要并入相邻正文或另一个标题。
+   题名保持独立段落：各级章节题名、公牍单篇题名（编号+具文者+事由+收文日期连写的那种）、序跋附录类题名都不要并入相邻正文或另一个题名；标点稿里题名后面紧跟的“敬禀者”“为札饬事”等正文另起一段。
 5. 无法确定的字词保留原样或用 `□` 表示，不在正文中加入解释。
 6. 上一页末尾只用于判断本页开头的续句、承接关系和简称，不得把上一页文字重复写入本页。
 7. 只输出 JSON，不要输出解释文字。
@@ -568,8 +599,16 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
 返回格式（只能包含这些键；不要输出 title、authors、abstract、keywords、references 等文献信息字段）：
 {{
   "punctuatedText": "整理后的简体正文",
+  "outlineItems": [
+    {{"paragraph": 1, "type": "chapter", "title": "照抄该段开头的题名原文"}}
+  ],
   "warnings": ["处理提示"]
 }}
+
+outlineItems 是这一页题名的清单，没有就给空数组：
+- paragraph 按 "punctuatedText" 自己的空行分段计数，第一段记作 1。
+- type 只能是 volume（卷/编/篇）、chapter（章）、section（节）、subsection（目/小标题）、entry（公牍单篇题名等最底层的件名）、front（序跋、前言、凡例、目录）、back（附录、后记、参考文献）。
+- title 照抄该段开头的题名原文，不要带后面的正文，不要改写、不要补字。
 
 页码：{payload.pageNumber or ""}
 文献信息：
@@ -587,15 +626,21 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
     context_tokens, output_tokens = text_task_budget(prompt, source_units)
     try:
         result = call_text_task(prompt, "punctuatedText", "校对", offset_reporter(report, 0),
+                                extra_keys=("outlineItems",),
                                 context_tokens=context_tokens, output_tokens=output_tokens)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
         punctuated_text, repair_warnings = repair_finalize_result(source_text, punctuated_text)
         if report:
             report(source_units, True)
         warnings = list_value(result.get("warnings")) + repair_warnings
+        outline_items = outline_tags.normalize_items(punctuated_text, result.get("outlineItems"), warnings)
+        if not outline_items:
+            # 校对稿重排过段落时，标点稿的段落号会失效，退回按题名文本重新定位。
+            outline_items = outline_tags.remap_items(punctuated_text, payload.punctuationOutline)
         response = base_response("finalize-page", ready=True)
     except LlmServiceError as exc:
         punctuated_text = ""
+        outline_items = []
         warnings = [str(exc)]
         response = failure_response("finalize-page", exc)
 
@@ -607,6 +652,7 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
             "normalizedText": normalized_text,
             "punctuationDraftText": punctuation_draft,
             "punctuatedText": punctuated_text,
+            "outlineItems": outline_items,
             "warnings": warnings,
         }
     )

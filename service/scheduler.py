@@ -264,6 +264,7 @@ class HttpServices:
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
                 "metadata": metadata(document),
                 "punctuationDraftText": draft,
+                "punctuationOutline": page.get("punctuationDraftOutline") or [],
                 "options": {"progressKey": job.get("llm_progress_key") or progress_key(document["id"], "proofreading", page_number)},
                 "previousPages": previous_page_tail(document, page_number)})
             if not result.get("punctuatedText"):
@@ -641,12 +642,14 @@ class Scheduler:
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page["punctuationDraftText"] = str(result.get("punctuatedText") or "").strip()
+                    page["punctuationDraftOutline"] = [item for item in result.get("outlineItems") or [] if isinstance(item, dict)]
                     page["status"] = "已完成标点"
                     self._set_stage(page, "punctuation", "done")
                 elif operation == "proofreading":
                     page = self._page(doc, number)
                     page["processingRevision"] = int(page.get("processingRevision") or 0) + 1
                     page.update(punctuatedText=str(result.get("punctuatedText") or "").strip(),
+                                outlineItems=[item for item in result.get("outlineItems") or [] if isinstance(item, dict)],
                                 status="已生成整理稿")
                     self._set_stage(page, "proofreading", "done")
             self._update_status(job, doc, cp)

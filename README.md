@@ -24,8 +24,8 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 ## 提示词索引
 
-- [页面标点](service/llm.py#L435-L485)
-- [页面校对](service/llm.py#L553-L583)
+- [页面标点](service/llm.py#L438-L501)
+- [页面校对](service/llm.py#L573-L622)
 - [元数据识别](service/llm.py#L618-L643)
 - [编年补充](service/llm.py#L687-L722)
 - [证据回答](service/evidence.py#L101-L109)
@@ -38,11 +38,13 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 1. 失败恢复。
 2. 补充上传。
-3. 图表目录。
-4. 自动备份。
-5. 页码优化。
+3. 自动备份。
+4. 自适应框、可调节。
+5. 下载文献继续登记。
+6. 重新处理按钮。
 
 ### 测试
 
 1. 编年。
 2. 水印。
+3. 检索。
