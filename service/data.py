@@ -1935,6 +1935,75 @@ def copy_document_assets(connection, source_id, document, page_ids, timestamp, c
             on_file()
 
 
+def seed_completed_processing_job(connection: sqlite3.Connection, document: dict[str, Any],
+                                  timestamp: str) -> bool:
+    """给下载副本补一条已完成的后端任务记录。
+
+    副本的页都处理完了，但没有 `processing_jobs` 行；补上之后「修改」才能把新页
+    续传进这本文献（`revise_document` 以任务为单位重排页码并只处理新页）。
+    四阶段没有全部终结、或缺原件时不留记录，避免续传与页状态不一致。
+    """
+    stages = processing_scheduler.PROCESSING_STAGES
+    pages = [page for page in document.get("pages") or [] if int(page.get("pageNumber") or 0) > 0]
+    total = max((int(page["pageNumber"]) for page in pages), default=0)
+    if not total:
+        return False
+    for page in pages:
+        status = page.get("stageStatus") or {}
+        for stage in stages:
+            if not (page.get(f"{stage}Done") or status.get(stage) in {"done", "failed", "skipped"}):
+                return False
+    source = connection.execute(
+        "SELECT storage_path FROM document_files WHERE document_id=? AND role='source' "
+        "AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", (document["id"],)).fetchone()
+    if not source or not source["storage_path"]:
+        return False
+    mode = str(document.get("processingMode") or "")
+    if mode not in processing_scheduler.PROCESSING_MODES:
+        mode = "serial"
+    chunk_size = processing_scheduler.normalize_chunk_size(document.get("processingChunkSize"))
+    checkpoint = {"totalPages": total, "stageNext": {stage: total + 1 for stage in stages},
+                  "omittedPages": [], "renderedPage": total,
+                  "attempts": {}, "retries": {}, "waiting": {}, "errors": {}}
+    connection.execute(
+        "INSERT INTO processing_jobs(document_id,mode,chunk_size,phase,status,source_path,"
+        "checkpoint,retry_at,created_at,updated_at) "
+        "VALUES(?,?,?,'body','completed',?,?,0,?,?) ON CONFLICT(document_id) DO NOTHING",
+        (document["id"], mode, chunk_size, str(source["storage_path"]),
+         json_dump(checkpoint), timestamp, timestamp))
+    progress = processing_scheduler.Scheduler._stage_progress(document, checkpoint, total)
+    document["processingMode"] = mode
+    document["processingChunkSize"] = chunk_size
+    document["processingTask"] = {
+        "backendManaged": True, "mode": mode, "chunkSize": chunk_size, "totalPages": total,
+        "completedPages": progress["ocr"]["done"], "finalizedPages": progress["proofreading"]["done"],
+        "stageProgress": progress,
+        "failedPages": [{"pageNumber": int(page["pageNumber"]), "stage": page.get("failureStage"),
+                         "message": page.get("failureMessage", "")}
+                        for page in pages if page.get("failureStage")],
+        "status": "已完成", "message": "正文处理及结果保存完成", "finishedAt": timestamp,
+        "activeStages": {}, "pausedForRegistration": False, "currentPage": 0,
+        "currentPageStage": "已完成", "currentPageProgress": 100, "revision": 1,
+        "metadataSnapshot": processing_scheduler.metadata(document),
+    }
+    return True
+
+
+def copy_creator(document: dict[str, Any], owner_username: str) -> dict[str, Any]:
+    """下载副本的原作者：源文献的最后一手修改者，其次创建者，再次所有者。
+
+    C 下载 B 修改过的 A 的文献时，这一份署 B；否则二手副本会把署名倒退回最早的提供者。
+    """
+    provenance = document.get("provenance") or {}
+    modifier = provenance.get("modifier")
+    if isinstance(modifier, dict) and str(modifier.get("username") or "").strip():
+        return {"username": str(modifier["username"])}
+    creator = provenance.get("creator")
+    if isinstance(creator, dict) and str(creator.get("username") or "").strip():
+        return {"username": str(creator["username"])}
+    return {"username": owner_username or "创建者信息不可用"}
+
+
 @app.post("/api/documents/{document_id}/download")
 def download_public_document(document_id: str, progressKey: str = "") -> dict[str, Any]:
     user = current_user()
@@ -1954,8 +2023,7 @@ def download_public_document(document_id: str, progressKey: str = "") -> dict[st
             if row["owner_id"] == user["id"]:
                 raise HTTPException(status_code=409, detail="这篇文献已属于你的文献库")
             document = attach_document_pages(connection, json_load(row["payload"]))
-            provenance = document.get("provenance") or {}
-            creator = provenance.get("creator") or {"username": row["owner_username"] or "创建者信息不可用"}
+            creator = copy_creator(document, row["owner_username"])
             timestamp = now_iso()
             document.update(id=f"doc-{secrets.token_hex(16)}", visibility="private",
                             createdAt=timestamp, updatedAt=timestamp, processingTask=None, registration=None)
@@ -1986,6 +2054,9 @@ def download_public_document(document_id: str, progressKey: str = "") -> dict[st
                                                source_pdf=copied_source_pdf)
                 progress.advance("index")
             upsert_document_pages(connection, document["id"], payload.get("pages") or [], timestamp)
+            # 副本是成品快照：补一条已完成任务记录，之后「修改」才能把新页续传进来。
+            if seed_completed_processing_job(connection, payload, timestamp):
+                payload["status"] = "已完成"
             payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
                                      "sourceDocumentId": document_id}
             connection.execute("UPDATE documents SET payload=? WHERE id=?", (document_payload(payload), document["id"]))

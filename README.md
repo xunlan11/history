@@ -37,14 +37,14 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 ### 待做
 
 1. 失败恢复。
-2. 补充上传。
+2. 补充上传、下载文献继续登记。
 3. 自动备份。
 4. 自适应框、可调节。
-5. 下载文献继续登记。
-6. 重新处理按钮。
+5. 重新处理按钮。
 
 ### 测试
 
 1. 编年。
 2. 水印。
 3. 检索。
+4. 章节目录、图表目录。
