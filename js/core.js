@@ -32,6 +32,7 @@ const DATA_BOOTSTRAP_URL = endpoint("/data/api/bootstrap");
 const DATA_CHANGES_URL = endpoint("/data/api/changes");
 const DATA_DOCUMENT_PAGES_URL = endpoint("/data/api/documents");
 const DATA_PUSH_URL = endpoint("/data/api/sync/push");
+const DATA_SHELF_URL = endpoint("/data/api/shelf");
 const DOCUMENT_ANNOTATION_API_URL = endpoint("/data/api/documents");
 const CONVERSATION_FILE_UPLOAD_URL = endpoint("/data/api/conversation-files/upload");
 const CONVERSATION_FILE_API_URL = endpoint("/data/api/conversation-files");
@@ -326,6 +327,7 @@ const CONVERSATION_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.conversations.sc
 const SYNC_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncCursor.schema10`;
 const CHANGE_CURSOR_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.changeCursor.schema10`;
 const SYNC_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.syncDirty.schema10`;
+const SHELF_DIRTY_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.shelfDirty.schema1`;
 const DELETED_DOCUMENT_IDS_STORAGE_KEY = `${SITE_STORAGE_PREFIX}.deletedDocuments.schema10`;
 const DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX = `${SITE_STORAGE_PREFIX}.deletedConversations.schema10`;
 // 待向数据端确认的“删除文献 → 终止处理”请求（成功后从队列里移除）
@@ -376,6 +378,13 @@ let syncPushTimer = null;
 let syncPushInFlight = null;
 let syncPullInFlight = null;
 let syncRevision = 0;
+// 书架（文件夹与排序）有自己的保存通道：拖拽只提交书架 JSON，不重传文献与对话。
+// 脏标记同样跨页面保留，下一页加载时先补推，避免被服务端旧书架盖掉。
+let shelfDirty = localStorage.getItem(SHELF_DIRTY_STORAGE_KEY) === "1";
+let shelfPushTimer = null;
+let shelfPushInFlight = null;
+let shelfRevision = 0;
+let shelfPushFailureNotified = false;
 let deletedDocumentIds = loadCachedIdSet(DELETED_DOCUMENT_IDS_STORAGE_KEY);
 let deletedConversationIds = new Set();
 
@@ -602,7 +611,7 @@ function applyServerState(payload) {
 
   documents = nextDocuments;
   conversations = nextConversations;
-  if (Object.hasOwn(payload, "shelf")) applyShelfState(payload.shelf);
+  if (Object.hasOwn(payload, "shelf") && !shelfDirty) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -725,7 +734,7 @@ function applyServerChanges(payload) {
     }
   }
 
-  if (payload.shelf) applyShelfState(payload.shelf);
+  if (payload.shelf && !shelfDirty) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -942,11 +951,14 @@ async function initializeServerData() {
     syncReady = true;
     if (syncDirty) {
       await pushServerSnapshot();
+      if (shelfDirty) await pushShelfState();
       return true;
     }
 
     applyServerState(payload);
     syncDirty = false;
+    // 服务端快照里的书架已被跳过（shelfDirty），这里把本地书架补推上去。
+    if (shelfDirty) await pushShelfState();
     return true;
   } catch (error) {
     syncReady = false;
@@ -980,6 +992,8 @@ async function pushServerSnapshot() {
   }
 
   const pushedRevision = syncRevision;
+  // 整库快照里也带着书架：推送成功且期间书架没再改动，就不用再单独推一次书架。
+  const pushedShelfRevision = shelfRevision;
   const payload = {
     schemaVersion: DATA_SCHEMA_VERSION,
     shelf: getShelfState(),
@@ -1018,6 +1032,10 @@ async function pushServerSnapshot() {
       } else {
         scheduleServerPush();
       }
+      if (shelfDirty && shelfRevision === pushedShelfRevision) {
+        shelfDirty = false;
+        localStorage.removeItem(SHELF_DIRTY_STORAGE_KEY);
+      }
 
       return true;
     })
@@ -1029,6 +1047,77 @@ async function pushServerSnapshot() {
   return syncPushInFlight;
 }
 
+// 书架单独保存：只提交文件夹与排序（几 KB），不重传文献与对话。
+function scheduleShelfPush() {
+  shelfDirty = true;
+  shelfRevision += 1;
+  localStorage.setItem(SHELF_DIRTY_STORAGE_KEY, "1");
+
+  if (!syncReady) {
+    return;
+  }
+
+  window.clearTimeout(shelfPushTimer);
+  shelfPushTimer = window.setTimeout(() => {
+    pushShelfState();
+  }, 600);
+}
+
+// 服务端会按当前账号拥有的文献重新规范化书架；与本地不一致时以服务端为准。
+function applyShelfServerEcho(value) {
+  if (!value || shelfDirty || typeof normalizeShelfState !== "function") return;
+  const next = normalizeShelfState(value);
+  if (JSON.stringify(next) === JSON.stringify(getShelfState())) return;
+  applyShelfState(next);
+  if (typeof renderDocumentList === "function") renderDocumentList();
+}
+
+async function pushShelfState() {
+  if (!syncReady) {
+    return false;
+  }
+
+  if (shelfPushInFlight) {
+    return shelfPushInFlight;
+  }
+
+  const pushedRevision = shelfRevision;
+  shelfPushInFlight = fetch(DATA_SHELF_URL, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shelf: getShelfState() }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Shelf push failed: ${response.status}`);
+      }
+
+      const result = await response.json().catch(() => ({}));
+      shelfPushFailureNotified = false;
+      if (shelfRevision === pushedRevision) {
+        shelfDirty = false;
+        localStorage.removeItem(SHELF_DIRTY_STORAGE_KEY);
+        applyShelfServerEcho(result.shelf);
+      } else {
+        scheduleShelfPush();
+      }
+
+      return true;
+    })
+    .catch(() => {
+      if (!shelfPushFailureNotified) {
+        shelfPushFailureNotified = true;
+        window.showUploadToast?.("文件夹移动尚未同步到服务器，稍后会自动重试", 3600);
+      }
+      return false;
+    })
+    .finally(() => {
+      shelfPushInFlight = null;
+    });
+
+  return shelfPushInFlight;
+}
+
 // 立即把本地改动推送到服务端并等待完成（取消防抖）。
 // 用于跳转前确保数据已落服务端，避免下一页拉取快照时覆盖本地未同步内容。
 // 注意：pushServerSnapshot() 在有在途请求时会直接返回那个请求（它带的可能是旧快照），
@@ -1036,9 +1125,16 @@ async function pushServerSnapshot() {
 async function flushPendingSync() {
   window.clearTimeout(syncPushTimer);
   syncPushTimer = null;
+  window.clearTimeout(shelfPushTimer);
+  shelfPushTimer = null;
+
+  let shelfPushed = false;
+  if (shelfDirty) {
+    shelfPushed = (await pushShelfState()) || shelfPushed;
+  }
 
   if (!syncReady || !syncDirty) {
-    return false;
+    return shelfPushed;
   }
 
   let pushed = false;
@@ -1051,6 +1147,7 @@ async function flushPendingSync() {
 }
 
 async function syncFromServer(options = {}) {
+  // 书架脏时照常拉取文献/对话，只是 applyServerState / applyServerChanges 会跳过服务端书架。
   if (!syncReady || syncDirty || syncPullInFlight) {
     return false;
   }
@@ -1110,6 +1207,10 @@ function startPeriodicSync() {
       return;
     }
 
+    // 之前没推上去的书架改动在这里补推，不必等用户下一次操作。
+    if (shelfDirty) {
+      await pushShelfState();
+    }
     syncFromServer({ render: true });
   };
 

@@ -111,6 +111,11 @@ class SyncPayload(BaseModel):
     shelf: dict[str, Any] | None = None
 
 
+class ShelfSavePayload(BaseModel):
+    """书架单独保存：只带文件夹与排序，不含文献正文或对话。"""
+    shelf: dict[str, Any]
+
+
 class ConversationFileTextPayload(BaseModel):
     extractedText: str = ""
     status: str = "ready"
@@ -3131,6 +3136,22 @@ def push(payload: SyncPayload) -> dict[str, Any]:
         }
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"数据库保存失败：{exc}") from exc
+
+
+@app.put("/api/shelf")
+def put_shelf(payload: ShelfSavePayload) -> dict[str, Any]:
+    """书架单写：移动、排序、新建/改名/删除文件夹只提交书架本身。
+
+    拖拽一次只发几 KB 的书架 JSON（文件夹 id 与排序），不再连带重传整库文献；
+    返回按当前账号拥有的文献重新规范化后的书架。
+    """
+    user = current_user()
+    with database() as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            save_shelf(connection, user, payload.shelf)
+            shelf = load_shelf(connection, user)
+    return {"shelf": shelf}
 
 
 @app.get("/api/embedding/health")

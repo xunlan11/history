@@ -103,7 +103,7 @@ function applyShelfState(value) {
 
 function saveShelfState() {
   cacheShelfState();
-  scheduleServerPush();
+  scheduleShelfPush();
 }
 
 function getShelfContainerOrder(state, folderId = "") {
