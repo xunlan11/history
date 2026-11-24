@@ -3,6 +3,8 @@ const readerOutlineCache = new Map();
 const readerOutlineState = {
   documentId: null, snapshot: "", loading: false, error: "", outline: null,
   revision: 0, navigationRevision: 0, activeId: "", button: null, panel: null, bound: false,
+  // 展开的条目 id；目录重新生成（快照变化）时清空，一开始只显示顶层。
+  expanded: new Set(),
 };
 
 function readerOutlinePageText(page) {
@@ -35,11 +37,37 @@ function ensureReaderOutline() {
   if (!state.bound) {
     state.bound = true;
     panel.addEventListener("click", (event) => {
+      const toggle = event.target?.closest?.("[data-outline-toggle]");
+      if (toggle && panel.contains(toggle)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const id = toggle.dataset.outlineToggle;
+        if (state.expanded.has(id)) state.expanded.delete(id);
+        else state.expanded.add(id);
+        renderReaderOutline();
+        return;
+      }
       const row = event.target?.closest?.("[data-outline-id]");
       if (row && panel.contains(row)) navigateReaderOutline(row.dataset.outlineId);
     });
   }
   return true;
+}
+
+// 按层级把平铺条目组织成父子关系：只把直接下一层挂到当前标题下。
+function readerOutlineTree(items) {
+  const children = new Map();
+  const stack = [];
+  for (const item of items) {
+    while (stack.length && stack[stack.length - 1].level >= item.level) stack.pop();
+    const parent = stack[stack.length - 1];
+    if (parent) {
+      if (!children.has(parent.id)) children.set(parent.id, []);
+      children.get(parent.id).push(item);
+    }
+    stack.push(item);
+  }
+  return children;
 }
 
 function isReaderOutlineValid(outline, item) {
@@ -58,6 +86,7 @@ function renderReaderOutline() {
   const focused = document.activeElement;
   const focusedRow = focused?.closest?.("[data-outline-id]");
   const restoreId = focusedRow && panel.contains(focusedRow) ? focusedRow.dataset.outlineId : "";
+  const focusedToggle = focused?.closest?.("[data-outline-toggle]")?.dataset.outlineToggle || "";
   panel.setAttribute("aria-busy", String(state.loading));
   panel.replaceChildren();
   const heading = readerOutlineNode("div", "section-heading reader-chapter-catalog-heading");
@@ -92,23 +121,46 @@ function renderReaderOutline() {
     return;
   }
   const list = readerOutlineNode("ol", "reader-chapter-catalog-items");
-  for (const entry of outline.items) {
+  const children = readerOutlineTree(outline.items);
+  const expanded = state.expanded;
+  const appendEntry = (entry) => {
+    const kids = children.get(entry.id) || [];
+    const open = expanded.has(entry.id);
     const li = document.createElement("li");
+    li.className = "reader-chapter-catalog-row";
+    li.dataset.outlineLevel = String(entry.level);
+    li.style.paddingLeft = `${(entry.level - 1) * 14}px`;
+    if (kids.length) {
+      const toggle = readerOutlineNode("button", "reader-chapter-catalog-toggle", open ? "▾" : "▸");
+      toggle.type = "button";
+      toggle.dataset.outlineToggle = entry.id;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", `${open ? "收起" : "展开"}：${entry.title}`);
+      li.append(toggle);
+    } else {
+      const spacer = readerOutlineNode("span", "reader-chapter-catalog-toggle");
+      spacer.setAttribute("aria-hidden", "true");
+      li.append(spacer);
+    }
     const button = readerOutlineNode("button", "reader-chapter-catalog-item");
     button.type = "button";
     button.dataset.outlineId = entry.id;
     button.dataset.level = String(entry.level);
-    button.style.paddingLeft = `${8 + (entry.level - 1) * 14}px`;
     button.append(readerOutlineNode("span", "reader-chapter-catalog-title", entry.title));
     button.append(readerOutlineNode("span", "reader-chapter-catalog-page", `第 ${entry.pageNumber} 页`));
     if (entry.id === state.activeId) button.setAttribute("aria-current", "true");
     li.append(button);
     list.append(li);
-  }
+    if (open) kids.forEach(appendEntry);
+  };
+  outline.items.filter((entry) => entry.level === 1).forEach(appendEntry);
   panel.append(list);
   if (restoreId) {
     Array.from(list.querySelectorAll("[data-outline-id]"))
       .find((row) => row.dataset.outlineId === restoreId)?.focus();
+  } else if (focusedToggle) {
+    Array.from(list.querySelectorAll("[data-outline-toggle]"))
+      .find((row) => row.dataset.outlineToggle === focusedToggle)?.focus();
   }
 }
 
@@ -123,6 +175,7 @@ async function syncReaderOutline(item) {
     state.error = "";
     state.loading = false;
     state.activeId = "";
+    state.expanded.clear();
     state.revision++;
   }
   if (!ensureReaderOutline()) return;

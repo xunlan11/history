@@ -10,14 +10,14 @@ import re
 from typing import Any
 
 OUTLINE_VERSION = 1
-# 标题一般很短；超过这个长度基本是正文（含以「第三章」开头的叙述句）。
+# 标题一般很短；超过这个长度基本是正文。
 HEADING_MAX_CHARS = 40
 # 纯序号型（一、/（一）/1./①）最容易和正文里的有序列表混淆，额外限长。
 AMBIGUOUS_MAX_CHARS = 24
 TOC_TITLE = re.compile(r"^(?:目\s*录|目\s*錄|contents|table\s+of\s+contents)$", re.I)
-# 书名 + 目录：「山东义和团案卷目录」也算目录页首行。
+# 书名 + 「目录」这种首行也算目录页。
 TOC_TITLE_SUFFIX = re.compile(r"(?:目\s*录|目\s*錄)$")
-# 目录页常见「标题……/123」「标题…………91」「标题……(246)」的行尾页码，识别标题时要排除。
+# 行尾的点线或斜杠页码（可带括号）不属于标题内容。
 TOC_PAGE_REF = re.compile(r"(?:[／/]|[.·…．]{2,})\s*[（(]?\s*\d{1,4}\s*[）)]?\s*$")
 # 目录页条目：行尾用点线引导页面号。
 TOC_ENTRY_REF = re.compile(r"[.·…．]{2,}\s*[（(]?\s*\d{1,4}\s*[）)]?\s*$")
@@ -33,7 +33,7 @@ STRONG_RULES = (
 AMBIGUOUS_RULES = (
     ("cn_dunhao", re.compile(r"^[一二三四五六七八九十百]+、"), 3),
     ("cn_paren", re.compile(r"^[（(][一二三四五六七八九十百]+[）)]"), 4),
-    # 多级编号（1.1 / 2.3.4）几乎不会出现在正文列表里，允许紧跟标题文字。
+    # 多级编号几乎不会出现在正文列表里，允许紧跟标题文字。
     ("multi_level", re.compile(r"^[0-9]+(?:\.[0-9]+)+[.、]?"), 4),
     ("cn_bracket", re.compile(r"^[（(][0-9]+[）)]"), 5),
     ("number_dot", re.compile(r"^[0-9]+[.、](?:\s|$)"), 5),
@@ -44,15 +44,20 @@ KEYWORD_HEADINGS = re.compile(
     r"^(?:序|自序|代序|原序|序言|弁言|引言|前言|绪言|绪论|导言|导论|结语|结论|后记|跋|题记|"
     r"附录|参考文献|致谢|凡例|出版说明|内容提要|内容简介|编者的话|目\s*录)$"
 )
-# 「张序」「吴跋」这类署名序跋，以及「《…》（代序）」这类带括号的序名。
+# 姓氏 + 序/跋 的署名序跋，以及带括号标注体裁的序名。
 SIGNED_PREFACE = re.compile(r"^(?:[一-龥]{1,2}(?:序|跋)|.{1,34}[（(](?:代序|序言|序|跋)[）)])$")
-# 「记贾宣之」「论人才」「…碑」这类短篇小标题：限长且不含句读，避免吞掉正文句子。
+# 短篇小标题：以记/论/谈/说开头，或以记/碑/铭/表/志结尾；限长且不含句读，避免吞掉正文句子。
 SHORT_TITLE = re.compile(r"^(?:记|论|谈|说)[一-龥A-Za-z0-9·《》〔〕（）()—\-]{1,12}$")
 SHORT_TITLE_ENDING = re.compile(r"^[一-龥A-Za-z0-9·《》〔〕（）()—\-]{2,20}(?:记|碑|铭|表|志)$")
 SHORT_TITLE_STOP = {"得", "着", "住", "载", "录", "者", "述"}
 BARE_UNIT_HEADING = re.compile(r"^第[〇零一二三四五六七八九十百千0-9]+(?:部分|编|篇|卷|章|节)$")
-# 「朱红灯卷」「各防营卷」「济南府卷」这类以「卷」结尾的独立卷名（不带「第X卷」）。
+# 不带「第X卷」编号、以「卷」结尾的独立卷名。
 VOLUME_TITLE = re.compile(r"^[一-龥A-Za-z0-9·《》〔〕（）()—\-]{2,12}卷$")
+# 公牍类资料的单篇条目：短标题 + 行尾公历日期。编号常被 OCR 丢掉，所以不依赖编号。
+ENTRY_TITLE = re.compile(r"^\S.{1,44}[（(]\s*(?:18|19|20)\d{2}\s*年[^（()）]{0,14}[）)]$")
+# 条目是最底层，比章节和各层编号都深。
+ENTRY_LEVEL = 7
+
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -114,6 +119,8 @@ def classify(title: str) -> tuple[int, str, bool] | None:
         return 0, "signed_preface", False
     if VOLUME_TITLE.fullmatch(text):
         return 0, "volume_name", False
+    if ENTRY_TITLE.fullmatch(text):
+        return ENTRY_LEVEL, "entry_title", False
     if SHORT_TITLE.fullmatch(text) and text[1] not in SHORT_TITLE_STOP:
         return 2, "short_title", False
     if SHORT_TITLE_ENDING.fullmatch(text):
@@ -160,7 +167,7 @@ def _looks_like_toc_page(entries: list[dict[str, Any]], candidates: list[dict[st
     first = " ".join(entries[0]["title"].split())
     if TOC_TITLE.fullmatch(first):
         return True
-    # 「书名 + 目录」开头的页也整页略过。
+    # 首行是书名加「目录」时，整页当作目录页。
     if len(first) <= 20 and TOC_TITLE_SUFFIX.search(first):
         return True
     # 多条「标题……页码」行：目录页（可能没有「目录」二字）。

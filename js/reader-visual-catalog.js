@@ -62,14 +62,19 @@ function renderReaderVisualCatalog() {
   const heading = readerVisualCatalogNode("div", "section-heading reader-visual-catalog-heading");
   heading.append(readerVisualCatalogNode("h3", "", "图表目录"));
   panel.append(heading);
-  const status = readerVisualCatalogNode("p", "reader-visual-catalog-status");
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  panel.append(status);
-  if (!state.documentId) { status.textContent = "请先打开文献"; return; }
-  if (state.loading) { status.textContent = "正在加载图表目录…"; return; }
+  // 提示只在没有图表可看时出现；有图表就直接给列表。
+  const addStatus = (text) => {
+    const status = readerVisualCatalogNode("p", "reader-visual-catalog-status");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.textContent = text;
+    panel.append(status);
+    return status;
+  };
+  if (!state.documentId) { addStatus("请先打开文献"); return; }
+  if (state.loading) { addStatus("正在加载图表目录…"); return; }
   if (state.error) {
-    status.textContent = state.error;
+    addStatus(state.error);
     const retry = readerVisualCatalogNode("button", "reader-visual-catalog-retry", "重试");
     retry.type = "button";
     retry.addEventListener("click", () => {
@@ -82,8 +87,10 @@ function renderReaderVisualCatalog() {
   const catalog = state.catalog;
   if (!catalog) return;
   const entries = catalog.items.slice().sort((a, b) => a.pageNumber - b.pageNumber || a.blockOrder - b.blockOrder);
-  status.textContent = !entries.length ? (catalog.complete ? "暂无图表" : "已索引页面暂无图表，目录仍在生成") :
-    `${catalog.total} 项图表 · 已索引 ${catalog.indexedPages}/${catalog.totalPages} 页${catalog.complete ? "" : " · 目录仍在生成"}`;
+  if (!entries.length) {
+    addStatus(catalog.complete ? "暂无图表" : "已索引页面暂无图表，目录仍在生成");
+    return;
+  }
   const list = readerVisualCatalogNode("ol", "reader-visual-catalog-items");
   for (const entry of entries) {
     const li = document.createElement("li");
@@ -91,8 +98,10 @@ function renderReaderVisualCatalog() {
     button.type = "button";
     button.dataset.catalogPageId = entry.pageId;
     button.dataset.catalogVisualId = entry.visualId;
-    const kindLabel = ({ figure: "插图", chart: "统计图", table: "表格", caption: "图注" })[entry.kind] || "图表";
-    const title = entry.title || `未题名${kindLabel} · 页内第 ${entries.filter((row) => row.pageId === entry.pageId).indexOf(entry) + 1} 项`;
+    // 目录只分三类：图（插图、统计图）、表、未归类（图注及其他）。
+    const kindLabel = entry.kind === "table" ? "表"
+      : entry.kind === "figure" || entry.kind === "chart" ? "图" : "未归类";
+    const title = entry.title || "未题名";
     const stateLabel = entry.status === "missing" ? " · 图像待提取" : entry.status === "unassigned" ? " · 待核对" : "";
     button.append(readerVisualCatalogNode("span", "reader-visual-catalog-title", `${kindLabel} · ${title}${stateLabel}`));
     button.append(readerVisualCatalogNode("span", "reader-visual-catalog-page", `第 ${entry.pageNumber} 页`));
