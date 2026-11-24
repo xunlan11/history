@@ -39,7 +39,6 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 1. 失败恢复。
 2. 自动备份。
 3. 自适应框、可调节。
-4. 重新处理按钮。
 
 ### 测试
 
