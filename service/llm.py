@@ -181,9 +181,12 @@ def validate_punctuation_result(source: str, output: str) -> None:
     if not output.strip():
         raise LlmServiceError("标点服务没有返回正文。")
     source_content = content_characters(source)
-    if not source_content:
-        return
     output_content = content_characters(output)
+    if not source_content:
+        # 空白页（OCR 只扫到零星符号）：结果只能是空，出现正文说明模型把别的页内容补了进来。
+        if output_content:
+            raise LlmServiceError("标点结果出现了原文没有的正文，已放弃本次结果。")
+        return
     ratio = difflib.SequenceMatcher(None, source_content, output_content).ratio()
     if ratio < 0.95:
         raise LlmServiceError(
@@ -286,6 +289,40 @@ def repair_finalize_result(source: str, output: str) -> tuple[str, list[str]]:
             f"校对结果有 {len(extras)} 段内容在标点稿中找不到（可能是上一页串入或扩写），请核对。"
         )
     return "\n\n".join(output_paragraphs), warnings
+
+
+def drop_previous_page_paragraphs(source: str, output: str, previous_text: str) -> tuple[str, list[str]]:
+    """删掉校对结果里整段照抄上一页的段落。
+
+    上一页末尾只用来判断本页开头的续句和简称，不能变成这一页的正文；模型偶尔会把它
+    整段拄回来。只有「在本页标点稿里找不到、却几乎都在上一页里」的段落才算照抄，
+    本页自己的续句段落因为含本页正文，不会被删。
+    """
+    paragraphs = split_paragraphs(output)
+    previous_content = content_characters(previous_text)
+    if not paragraphs or not previous_content:
+        return output, []
+    source_content = content_characters(source)
+    source_shingles = _shingles(source_content)
+    previous_shingles = _shingles(previous_content)
+    kept: list[str] = []
+    dropped = 0
+    for paragraph in paragraphs:
+        copied = (
+            len(content_characters(paragraph)) >= FINALIZE_PARAGRAPH_MIN_CHARS
+            and paragraph_coverage(paragraph, previous_content, previous_shingles) >= FINALIZE_PARAGRAPH_MIN_COVERAGE
+            and paragraph_coverage(paragraph, source_content, source_shingles) < FINALIZE_PARAGRAPH_MIN_COVERAGE
+        )
+        if copied:
+            dropped += 1
+        else:
+            kept.append(paragraph)
+    if not dropped:
+        return output, []
+    if not kept:
+        # 整页结果都是上一页内容：退回标点稿原文，本页至少不会写成别的页。
+        kept = split_paragraphs(source)
+    return "\n\n".join(kept), [f"已删除 {dropped} 段与上一页相同的正文，请核对。"]
 
 
 def text_task_budget(prompt: str, source_length: int) -> tuple[int, int]:
@@ -506,6 +543,26 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
     source_text = normalize_layout_text(payload.sourceText)
     expected_units = len(content_characters(source_text))
     report = progress_reporter(payload.options, expected_units)
+    if not expected_units:
+        # 没有正文：结果只能是空。交给模型会被它用别页内容补齐。
+        if report:
+            report(0, True)
+        response = base_response("punctuate", ready=True)
+        response.update(
+            {
+                "documentId": payload.documentId,
+                "pageId": payload.pageId,
+                "pageNumber": payload.pageNumber,
+                "sourceLayer": payload.sourceLayer,
+                "sourceText": payload.sourceText,
+                "joinedSourceText": source_text,
+                "punctuatedText": "",
+                "outlineItems": [],
+                "uncertainItems": [],
+                "warnings": [],
+            }
+        )
+        return response
     chunks = split_text_chunks(source_text, LLM_TEXT_CHUNK_CHARS)
     punctuated_parts: list[str] = []
     uncertain_items: list[Any] = []
@@ -578,9 +635,29 @@ def finalize_page(payload: FinalizePageRequest) -> dict[str, Any]:
     normalized_text = normalize_layout_text(payload.normalizedText or payload.ocrText)
     punctuation_draft = normalize_layout_text(payload.punctuationDraftText)
     source_text = punctuation_draft or normalized_text or normalize_layout_text(payload.ocrText)
-    previous_pages = "\n\n".join(
+    if not content_characters(source_text):
+        # 没有正文：结果只能是空。交给模型会被它用上一页末尾补出整段正文。
+        report = progress_reporter(payload.options, 0)
+        if report:
+            report(0, True)
+        response = base_response("finalize-page", ready=True)
+        response.update(
+            {
+                "documentId": payload.documentId,
+                "pageId": payload.pageId,
+                "pageNumber": payload.pageNumber,
+                "normalizedText": normalized_text,
+                "punctuationDraftText": punctuation_draft,
+                "punctuatedText": "",
+                "outlineItems": [],
+                "warnings": [],
+            }
+        )
+        return response
+    previous_page_text = "\n\n".join(
         normalize_layout_text(page.text) for page in payload.previousPages if page.text.strip()
-    ) or "无"
+    )
+    previous_pages = previous_page_text or "无"
     prompt = f"""
 /no_think
 请把这一页近代军史文献的标点稿整理成可继续人工编辑的正文。
@@ -629,10 +706,13 @@ outlineItems 是这一页题名的清单，没有就给空数组：
                                 extra_keys=("outlineItems",),
                                 context_tokens=context_tokens, output_tokens=output_tokens)
         punctuated_text = normalize_generated_text(result.get("punctuatedText"))
+        punctuated_text, previous_page_warnings = drop_previous_page_paragraphs(
+            source_text, punctuated_text, previous_page_text
+        )
         punctuated_text, repair_warnings = repair_finalize_result(source_text, punctuated_text)
         if report:
             report(source_units, True)
-        warnings = list_value(result.get("warnings")) + repair_warnings
+        warnings = list_value(result.get("warnings")) + previous_page_warnings + repair_warnings
         outline_items = outline_tags.normalize_items(punctuated_text, result.get("outlineItems"), warnings)
         if not outline_items:
             # 校对稿重排过段落时，标点稿的段落号会失效，退回按题名文本重新定位。

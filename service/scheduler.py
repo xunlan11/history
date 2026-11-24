@@ -15,6 +15,7 @@ import os
 import socket
 import threading
 import time
+import unicodedata
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -57,6 +58,14 @@ def normalize_chunk_size(value, default=CHUNK_SIZE_DEFAULT):
     except (TypeError, ValueError):
         return default
     return max(1, min(CHUNK_SIZE_MAX, size))
+
+
+def has_body_text(text: str) -> bool:
+    """是否还有可处理的正文：只有空白和标点（空白页 OCR 扫到的零星符号）不算。"""
+    return any(
+        not char.isspace() and unicodedata.category(char)[:1] not in {"P", "Z"}
+        for char in text or ""
+    )
 
 
 # 渲染页既用于阅读回显，也是 OCR 的输入图；JPEG q90 在 1.5 倍缩放下肉眼无损，
@@ -243,7 +252,8 @@ class HttpServices:
             return {"normalizedText": to_simplified(str(page.get("ocrText") or ""))}
         if operation == "punctuation":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
-            if not page.get("normalizedText", "").strip():
+            if not has_body_text(page.get("normalizedText", "")):
+                # 空白页没有可断句的正文，不占用模型调用。
                 return {"punctuatedText": "", "warnings": []}
             result = self._llm("punctuate", {
                 "documentId": document["id"], "pageId": page["id"], "pageNumber": page_number,
@@ -256,8 +266,9 @@ class HttpServices:
         if operation == "proofreading":
             page = next(page for page in document["pages"] if page["pageNumber"] == page_number)
             draft = str(page.get("punctuationDraftText") or page.get("normalizedText") or page.get("ocrText") or "").strip()
-            if not draft:
-                return {"punctuatedText": "", "warnings": []}
+            if not has_body_text(draft):
+                # 空白页：不把标点稿交给模型，否则它会用上一页末尾补出整段正文。
+                return {"punctuatedText": "", "outlineItems": [], "warnings": []}
             # 只提交标点稿和上一页末尾：OCR 原文、简体稿和各页整页上下文都交给模型，
             # 会让提示词超出模型上下文被截断，反而更容易触发校验失败重试。
             result = self._llm("finalize-page", {

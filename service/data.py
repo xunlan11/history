@@ -2184,8 +2184,22 @@ def submit_document_processing(document_id: str, payload: ProcessingSubmission):
         return {"document": public_processing_document(connection, document_id, user)}
 
 
+def page_status_after_clearing_failure(page: dict[str, Any]) -> str:
+    """去掉失败标记后的页状态：按已有内容写处理到哪一步。"""
+    if str(page.get("punctuatedText") or "").strip():
+        return "已生成整理稿"
+    if str(page.get("punctuationDraftText") or "").strip():
+        return "已完成标点"
+    if str(page.get("normalizedText") or "").strip():
+        return "已完成简繁转换"
+    if str(page.get("ocrText") or "").strip():
+        return "已识别"
+    return "待整理"
+
+
 @app.delete("/api/documents/{document_id}/processing/failed-pages/{page_number}")
-def remove_failed_processing_page(document_id: str, page_number: int):
+def clear_failed_processing_page(document_id: str, page_number: int):
+    """清除一页的失败标记：页、页序与已保存的正文都不动。"""
     user = current_user()
     with database() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -2196,17 +2210,26 @@ def remove_failed_processing_page(document_id: str, page_number: int):
         document = attach_document_pages(connection, json_load(connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]))
         page = next((p for p in document.get("pages", []) if p.get("pageNumber") == page_number), None)
         if not page or not page.get("failureStage"):
-            raise HTTPException(status_code=409, detail="只能删除已标注的失败页")
-        document["pages"] = [p for p in document["pages"] if p["pageNumber"] != page_number]
+            raise HTTPException(status_code=409, detail="这一页没有失败标记")
+        stage = page.pop("failureStage")
+        page.pop("failureMessage", None)
+        # 该阶段按「跳过」终结：调度器不会自动重跑，已有正文不会被覆盖。
+        page.setdefault("stageStatus", {})[stage] = "skipped"
+        page["status"] = page_status_after_clearing_failure(page)
         task = document["processingTask"]
         task["failedPages"] = [p for p in task.get("failedPages", []) if p["pageNumber"] != page_number]
+        if not task["failedPages"] and task.get("status") == "已完成":
+            task["message"] = "正文处理及结果保存完成"
         checkpoint = json_load(row["checkpoint"])
-        omitted = checkpoint.setdefault("omittedPages", [])
-        if page_number not in omitted:
-            omitted.append(page_number)
-        # 此事务不会与页面结果提交发生竞争。只有失败且已终止的页面阶段可以删除，
-        # 已归档原件保持不变。
-        processing_scheduler.save_job_state(sys.modules[__name__], connection, dict(row), document, checkpoint)
+        # 只清这一页这一阶段的失败记录；页内容与省略页列表都不动。
+        key_prefixes = {stage, "render"} if stage == "ocr" else {stage}
+        for bucket in ("errors", "attempts", "retries", "waiting"):
+            records = checkpoint.get(bucket) or {}
+            for key in [key for key in records
+                        if key.rsplit(":", 1)[-1] == str(page_number) and key.rsplit(":", 1)[0] in key_prefixes]:
+                records.pop(key, None)
+        processing_scheduler.save_job_state(sys.modules[__name__], connection, dict(row), document, checkpoint,
+                                            page_ids=[page["id"]])
         return {"document": public_processing_document(connection, document_id, user)}
 
 
