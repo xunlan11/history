@@ -246,7 +246,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
     "semantic_sources": {"document_id", "page_id", "policy", "source_layer", "source_hash", "updated_at"},
     "semantic_chunks": {"chunk_id", "document_id", "page_id", "source_layer", "source_hash", "ordinal", "start", "end", "text", "chunker_version"},
     "semantic_vectors": {"chunk_id", "model_fingerprint", "dimensions", "vector"},
-    "semantic_jobs": {"id", "page_id", "source_layer", "source_hash", "model_fingerprint", "status", "attempts", "retry_at", "lease_until", "lease_token", "error"},
+    "semantic_jobs": {"id", "page_id", "source_layer", "source_hash", "model_fingerprint", "status", "attempts", "retry_at", "lease_until", "lease_token", "error", "priority"},
     "processing_jobs": {"sequence", "document_id", "mode", "chunk_size", "phase", "status", "source_path", "checkpoint", "retry_at", "created_at", "updated_at"},
 }
 
@@ -290,6 +290,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         if schema_version != SCHEMA_VERSION:
             raise RuntimeError(f"Database schema {schema_version} is unsupported; only schema {SCHEMA_VERSION} is supported")
         # 已有库也要补齐处理任务表与索引，再校验列齐全。
+        retrieval.ensure_schema(connection)
         processing_scheduler.ensure_schema(connection)
         _require_current_schema(connection)
         uploads.ensure_schema(connection)
@@ -1988,10 +1989,18 @@ def download_public_document(document_id: str, progressKey: str = "") -> dict[st
             payload["provenance"] = {"creator": creator, "modifier": {"username": user["username"]},
                                      "sourceDocumentId": document_id}
             connection.execute("UPDATE documents SET payload=? WHERE id=?", (document_payload(payload), document["id"]))
+            # 副本的语义重建插队：先把索引任务建好并提权，提交后再叫醒索引 worker。
+            if semantic_enabled():
+                model_row = connection.execute(
+                    "SELECT fingerprint FROM semantic_models ORDER BY created_at DESC LIMIT 1").fetchone()
+                if model_row:
+                    retrieval.enqueue_document(connection, document["id"], model_row["fingerprint"])
             cursor = bump_sync_version(connection)
             result = public_processing_document(connection, document["id"], user)
             progress.advance("save")
         progress.finish()
+        if _semantic_worker:
+            _semantic_worker.wake()
         return {"document": result, "syncCursor": str(cursor)}
     except Exception:
         progress.fail()

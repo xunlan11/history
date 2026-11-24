@@ -128,6 +128,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
       status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
       retry_at REAL NOT NULL DEFAULT 0, lease_until REAL NOT NULL DEFAULT 0,
       lease_token TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+      priority INTEGER NOT NULL DEFAULT 0,
       UNIQUE(page_id, source_layer, source_hash, model_fingerprint));
     CREATE INDEX IF NOT EXISTS idx_semantic_chunks_source
       ON semantic_chunks(page_id, source_layer, source_hash);
@@ -136,6 +137,11 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_semantic_jobs_ready
       ON semantic_jobs(status, retry_at, lease_until);
     """)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(semantic_jobs)")}
+    if "priority" not in columns:
+        connection.execute("ALTER TABLE semantic_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_semantic_jobs_priority "
+                       "ON semantic_jobs(status, retry_at, lease_until, priority)")
 
 
 def reconcile_page(connection: sqlite3.Connection, document_id: str, page: dict, timestamp: str) -> None:
@@ -185,12 +191,31 @@ def enqueue_model(connection: sqlite3.Connection, identity) -> None:
       WHERE p.deleted_at IS NULL AND d.deleted_at IS NULL""", (identity.fingerprint,))
 
 
+def enqueue_document(connection: sqlite3.Connection, document_id: str, fingerprint: str,
+                     priority: int = 1) -> None:
+    """为一篇文献的页立即建索引任务，并按优先级排到队头（下载副本用）。
+
+    已存在的同源任务一并提权，避免它们还排在旧任务后面。
+    """
+    connection.execute("""INSERT OR IGNORE INTO semantic_jobs
+      (page_id,source_layer,source_hash,model_fingerprint,priority)
+      SELECT DISTINCT s.page_id,s.source_layer,s.source_hash,?,? FROM semantic_sources s
+      JOIN document_pages p ON p.id=s.page_id
+      WHERE s.document_id=? AND p.deleted_at IS NULL""",
+      (fingerprint, priority, document_id))
+    connection.execute("""UPDATE semantic_jobs SET priority=?
+      WHERE model_fingerprint=? AND priority<? AND page_id IN
+        (SELECT s.page_id FROM semantic_sources s JOIN document_pages p ON p.id=s.page_id
+         WHERE s.document_id=? AND p.deleted_at IS NULL)""",
+      (priority, fingerprint, priority, document_id))
+
+
 def claim_job(connection: sqlite3.Connection, fingerprint: str, lease_seconds: float, token: str) -> dict | None:
     now = time.time()
     connection.execute("BEGIN IMMEDIATE")
     row = connection.execute("""SELECT * FROM semantic_jobs WHERE model_fingerprint=? AND
       ((status IN ('pending','waiting') AND retry_at<=?) OR (status='running' AND lease_until<?))
-      ORDER BY id LIMIT 1""", (fingerprint, now, now)).fetchone()
+      ORDER BY priority DESC, id LIMIT 1""", (fingerprint, now, now)).fetchone()
     if row is None:
         connection.commit()
         return None

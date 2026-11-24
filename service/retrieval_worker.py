@@ -22,8 +22,20 @@ class SemanticWorker:
         self.interval = max(1, float(os.getenv("SEMANTIC_SCAN_INTERVAL_SECONDS", "30")))
         self.batch_size = max(1, min(64, int(os.getenv("EMBEDDING_BATCH_SIZE", "8"))))
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread = None
         self._last_scan = 0.0
+
+    def wake(self) -> None:
+        """有新任务入队时立即干活，不必等下一次轮询。"""
+        self._wake.set()
+
+    def _runnable_priority_job(self, connection) -> bool:
+        now = time.time()
+        return bool(connection.execute(
+            "SELECT 1 FROM semantic_jobs WHERE priority>0 AND "
+            "((status IN ('pending','waiting') AND retry_at<=?) OR (status='running' AND lease_until<?)) "
+            "LIMIT 1", (now, now)).fetchone())
 
     def scan(self, identity) -> None:
         after = ""
@@ -47,12 +59,17 @@ class SemanticWorker:
 
     def run_once(self) -> bool:
         import numpy as np
+        has_priority = False
         if self.pause_when_processing:
             with self.connection_factory() as connection:
-                if connection.execute("SELECT 1 FROM processing_jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
+                # 优先队列（下载副本的重建）不因正文处理而停。
+                has_priority = self._runnable_priority_job(connection)
+                if not has_priority and connection.execute(
+                        "SELECT 1 FROM processing_jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
                     return False
         identity = self.client.describe()
-        if time.monotonic() - self._last_scan >= self.interval:
+        # 有抢占任务时跳过全库扫描，先把它跑完。
+        if not has_priority and time.monotonic() - self._last_scan >= self.interval:
             self.scan(identity)
         token = uuid.uuid4().hex
         lease = max(300, float(getattr(self.client, "timeout", 60)) * 2)
@@ -128,7 +145,8 @@ class SemanticWorker:
                 logger.exception("Semantic indexing paused; durable tasks will retry")
                 did_work = False
             if not did_work:
-                self._stop.wait(self.interval)
+                self._wake.wait(self.interval)
+                self._wake.clear()
 
     def start(self):
         if not self._thread:
