@@ -42,8 +42,6 @@ function normalizePreparationState(item) {
     documentId: item.documentId,
     stage: PREPARATION_STAGE_TEXT[item.stage] ? item.stage : "running",
     percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : 0,
-    ready: Number(item.ready) || 0,
-    total: Number(item.total) || 0,
     message: typeof item.message === "string" ? item.message : "",
   };
 }

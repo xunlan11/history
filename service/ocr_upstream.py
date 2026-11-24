@@ -6,8 +6,8 @@
 
 环境变量（systemd unit 里写 `Environment=`）：
 
-- `OCR_UPSTREAM_URL`：服务端基地址，例如 `http://10.0.0.5:8080`。
-  未设置即视为「服务端未部署」，所有识别接口返回 503。
+- `OCR_UPSTREAM_URL`：服务端基地址。未设置即视为「服务端未部署」，
+  所有识别接口返回 503。
 - `OCR_UPSTREAM_TOKEN`：可选，按 `Authorization: Bearer <token>` 发送。
 - `OCR_UPSTREAM_TIMEOUT`：单页识别超时秒数，默认 180。
 - `OCR_UPSTREAM_HEALTH_TIMEOUT`：健康检查超时秒数，默认 5。
@@ -18,29 +18,9 @@
 两种模式均关闭公式识别、印章识别和图表转表格，与模型端精简配置一致。
 正式识别返回的坐标以矫正后的图像为准（数据端不保存矫正图）。
 
-输出统一为内部结构（供 `service/ocr.py` 组对外响应）：
-
-    {
-      "engine": "remote:paddleocr-pp-structurev3",
-      "width": 1654, "height": 2339,          # 像素，可为 None
-      "blocks": [                             # 按阅读顺序
-        {
-          "type": "text",                     # 归一化后的版面角色
-          "label": "paragraph_title",         # 服务端原始标签，便于排查
-          "bbox": [x1, y1, x2, y2],
-          "order": 1,
-          "confidence": 0.94,
-          "text": "整块文本",
-          "lines": [
-            {"text": "…", "confidence": 0.95, "bbox": [...], "polygon": [[x, y], ...]}
-          ],
-        }
-      ],
-      "lines": [...],                         # 展平的全部文本行
-      "markdown": "…" | None,                 # 服务端整页 Markdown（PP-StructureV3 提供）
-      "upstream": {"url": "…", "latencyMs": 1234},
-      "warnings": [...],
-    }
+输出统一为内部结构（供 `service/ocr.py` 组对外响应），含整页尺寸、按阅读顺序的版面块
+（角色、原始标签、坐标、置信度、整块文本与逐行文本）、展平后的全部文本行、整页 Markdown、
+上游地址与耗时、警告列表。
 """
 
 from __future__ import annotations

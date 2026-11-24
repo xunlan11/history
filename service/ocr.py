@@ -361,7 +361,7 @@ def recover_pending_tasks() -> None:
         if cancel_marker_path(task_id).exists():
             delete_task_storage(task_id)
             continue
-        if task.get("status") not in {"排队中", "处理中", "准备中"}:
+        if task.get("status") not in {"排队中", "处理中"}:
             continue
         task.update(status="排队中", message="服务已恢复，任务等待处理。")
         save_task(task)

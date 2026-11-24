@@ -498,7 +498,7 @@ async function renderReaderAnnotation(item, page) {
 
   readerAnnotation.value = "";
   readerAnnotation.disabled = true;
-  setReaderAnnotationStatus("加载中");
+  setReaderAnnotationStatus("");
 
   try {
     const response = await fetch(getReaderAnnotationUrl(item.id, page.id));

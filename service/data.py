@@ -81,7 +81,7 @@ def _user_from_sso(request: Request) -> dict[str, Any] | None:
 
 
 def pages_index_requested(request: Request) -> bool:
-    """新前端用 X-Pages-Mode: index 拿页索引；未带头的旧前端仍拿整本页正文。"""
+    """请求带 X-Pages-Mode: index 时只返回页索引，否则返回整本页正文。"""
     return (request.headers.get("x-pages-mode") or "").strip().lower() == "index"
 
 
@@ -579,7 +579,7 @@ def change_cursor(connection: sqlite3.Connection) -> int:
     row = connection.execute(
         "SELECT COALESCE(MAX(seq), 0) AS cursor FROM change_log"
     ).fetchone()
-    return int(row["cursor"] or 0) if row else 0
+    return int(row["cursor"])
 
 
 def prune_change_log(connection: sqlite3.Connection) -> None:
@@ -1064,10 +1064,8 @@ def load_document_pages(connection: sqlite3.Connection, document_id: str) -> lis
         (str(document_id),))]
 
 
-def attach_document_pages(connection: sqlite3.Connection, document: dict[str, Any], rehydrate: bool = False) -> dict[str, Any]:
+def attach_document_pages(connection: sqlite3.Connection, document: dict[str, Any]) -> dict[str, Any]:
     document["pages"] = load_document_pages(connection, document.get("id"))
-    if rehydrate:
-        rehydrate_document_assets(connection, document)
     return document
 
 
@@ -1147,8 +1145,6 @@ def active_payloads(
             provenance = payload.pop("provenance", {})
             payload.pop("creator", None)
             payload.pop("modifier", None)
-            payload.pop("ownerId", None)
-            payload.pop("canEdit", None)
             is_owner = bool(user and row["owner_id"] == user.get("id"))
             payload["ownerId"] = row["owner_id"] if is_owner else None
             payload["canEdit"] = is_owner
@@ -1823,7 +1819,7 @@ def enqueue_document(connection, document_id: str, mode: str | None = None, chun
     if not source:
         raise HTTPException(status_code=409, detail="原件尚未归档")
     selected = mode or document.get("processingMode") or processing_scheduler.DEFAULT_PROCESSING_MODE
-    if not isinstance(selected, str) or selected not in processing_scheduler.PROCESSING_MODES:
+    if selected not in processing_scheduler.PROCESSING_MODES:
         raise HTTPException(status_code=422, detail="处理方式必须是串行、并行或大串小并")
     # 块大小是登记参数，1..CHUNK_SIZE_MAX；只对分块链路有意义，但一并保存方便重试时复用。
     size = processing_scheduler.normalize_chunk_size(
@@ -1832,8 +1828,6 @@ def enqueue_document(connection, document_id: str, mode: str | None = None, chun
     if not source_path.is_relative_to(FILE_STORAGE_DIR) or not source_path.is_file():
         raise HTTPException(status_code=409, detail="归档原件不存在或路径无效")
     stamp = now_iso()
-    if existing:
-        connection.execute("DELETE FROM processing_jobs WHERE document_id=?", (document_id,))
     result = connection.execute("""INSERT INTO processing_jobs(document_id,mode,chunk_size,source_path,checkpoint,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?)""", (document_id, selected, size, source["storage_path"], json_dump({"registrationStep": "metadata_candidate"}), stamp, stamp))
     document["processingMode"] = selected
@@ -1864,17 +1858,12 @@ def public_processing_document(
     connection: sqlite3.Connection,
     document_id: str,
     user: dict[str, Any],
-    indexed_pages: bool = False,
 ) -> dict[str, Any]:
     # 使用与初始化流程相同的可见性和资产投影；只取这一篇，不遍历整个文献库。
-    document = next(
+    return next(
         doc for doc in active_payloads(connection, "documents", user, entity_ids=[document_id])
         if doc["id"] == document_id
     )
-    if indexed_pages:
-        document["pages"] = [page_index_entry(page) for page in document.get("pages") or []]
-        document["__pagesLoaded"] = False
-    return document
 
 
 class DownloadProgress:

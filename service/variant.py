@@ -4,13 +4,6 @@
 OpenCC 的 ``convert`` 是只读操作（词典只读、无共享可变状态），
 因此同一实例可在多线程间共享，无需加锁。
 
-用法::
-
-    from service.variant import to_simplified, convert
-
-    to_simplified("漢字與後臺的頭髮")    # -> 汉字与后台的头发
-    convert("汉字", "traditional")       # 按变体名转换
-
 变体名（variant）统一为两种：
 - ``"simplified"``  简体（OpenCC ``t2s``，非简即转）
 - ``"traditional"`` 繁体（OpenCC ``s2t``，OpenCC 标准繁体）
@@ -77,11 +70,7 @@ def normalize_variant(variant: str | None) -> str:
 @lru_cache(maxsize=None)
 def _converter(variant: str) -> "opencc.OpenCC":
     """按变体惰性创建并缓存 OpenCC 转换器（进程内单例）。"""
-    try:
-        config = _CONFIG[variant]
-    except KeyError as exc:  # pragma: no cover - 由 normalize_variant 兜底
-        raise ValueError(f"unknown variant: {variant!r}") from exc
-    return opencc.OpenCC(config)
+    return opencc.OpenCC(_CONFIG[variant])
 
 
 def convert(text: str | None, variant: str = SIMPLIFIED) -> str:

@@ -107,7 +107,6 @@ function broadcastPlatformReload() {
   } catch (_) {
     /* 存储不可用时仅本页刷新 */
   }
-  return signal;
 }
 
 // 普通 reload() 只强制主文档回源，styles.css / js/*.js 仍可能吃 HTTP 缓存
@@ -335,12 +334,12 @@ const PENDING_PROCESSING_CANCELS_KEY = `${SITE_STORAGE_PREFIX}.processingCancels
 
 
 function getConversationStorageKey() {
-  const userId = typeof currentUser !== "undefined" ? currentUser?.id : null;
+  const userId = currentUser?.id;
   return userId ? `${CONVERSATION_STORAGE_KEY_PREFIX}.user-${userId}` : "";
 }
 
 function getDeletedConversationStorageKey() {
-  const userId = typeof currentUser !== "undefined" ? currentUser?.id : null;
+  const userId = currentUser?.id;
   return userId ? `${DELETED_CONVERSATION_IDS_STORAGE_KEY_PREFIX}.user-${userId}` : "";
 }
 const SYNC_INTERVAL_MS = 30000;
@@ -367,7 +366,7 @@ let documents = normalizeDocuments(loadCachedDocuments());
 let selectedDocumentId = documents[0]?.id || null;
 let selectedPageId = documents[0]?.pages?.[0]?.id || null;
 let conversations = [];
-let selectedConversationId = conversations[0]?.id || null;
+let selectedConversationId = null;
 let syncCursor = localStorage.getItem(SYNC_CURSOR_STORAGE_KEY) || "";
 let syncChangeCursor = localStorage.getItem(CHANGE_CURSOR_STORAGE_KEY) || "";
 let syncReady = false;
@@ -936,7 +935,7 @@ function normalizeConversationAttachments(values) {
 }
 
 async function initializeServerData() {
-  if (typeof currentUser !== "undefined" && currentUser?.id) {
+  if (currentUser?.id) {
     conversations = loadCachedConversations();
     selectedConversationId = conversations[0]?.id || null;
     deletedConversationIds = loadCachedIdSet(getDeletedConversationStorageKey());
@@ -1065,11 +1064,11 @@ function scheduleShelfPush() {
 
 // 服务端会按当前账号拥有的文献重新规范化书架；与本地不一致时以服务端为准。
 function applyShelfServerEcho(value) {
-  if (!value || shelfDirty || typeof normalizeShelfState !== "function") return;
+  if (!value || shelfDirty) return;
   const next = normalizeShelfState(value);
   if (JSON.stringify(next) === JSON.stringify(getShelfState())) return;
   applyShelfState(next);
-  if (typeof renderDocumentList === "function") renderDocumentList();
+  renderDocumentList();
 }
 
 async function pushShelfState() {
@@ -1230,7 +1229,7 @@ function getSelectedConversation() {
 function createConversation(title = "新对话", mode = "chat") {
   const conversation = {
     id: newId(),
-    ownerId: typeof currentUser !== "undefined" ? currentUser?.id || null : null,
+    ownerId: currentUser?.id || null,
     title,
     mode,
     locked: false,
@@ -1649,40 +1648,6 @@ function normalizeProcessingTask(task) {
     message: task.message || "",
   };
 }
-
-function getProcessingTaskLabel(item) {
-  const task = item.processingTask;
-  if (!task) {
-    return "等待处理";
-  }
-
-  if (task.pausedForRegistration) return "登记准备优先，正文暂缓调度";
-  const total = task.totalPages || 0;
-  const stageProgress = task.stageProgress || {};
-  const ocrDone = stageProgress.ocr?.done || 0;
-  const variantDone = stageProgress.variant?.done ?? 0;
-  const punctuationDone = stageProgress.punctuation?.done ?? 0;
-  const finalized = stageProgress.proofreading?.done || 0;
-
-  // 登记阶段（后端元数据识别）也计入同一条进度显示。
-  if (total === 0 && isDocumentRegistrationPending(item)) {
-    return describeDocumentProcessingState(item.id) || task.status || "等待处理";
-  }
-
-  if (total > 0 && (task.status === "处理中" || task.status === "排队中")) {
-    return `${task.status} 识别 ${ocrDone}/${total} · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
-  }
-
-  if (total > 0 && (task.status === "已完成" || task.status === "已回填")) {
-    if (finalized < total) {
-      return `识别完成 · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
-    }
-    return `处理完成 识别 ${ocrDone}/${total} · 转换 ${variantDone}/${total} · 标点 ${punctuationDone}/${total} · 校对 ${finalized}/${total}`;
-  }
-
-  return task.status || "等待处理";
-}
-
 
 // 只保留 OCR 摘要字段，避免大型版面坐标数据占用 localStorage。
 function normalizeStoredOcr(ocr) {

@@ -256,10 +256,6 @@ def merge_paths(sources, output):
     return counts
 
 
-def merge_sources(rows, output):
-    return merge_paths([(upload_root() / row["path"], row["file_name"]) for row in rows], output)
-
-
 @router.post("/{registration_id}/register")
 def register_upload(registration_id: str, payload: Registration):
     from service import data
@@ -277,7 +273,7 @@ def register_upload(registration_id: str, payload: Registration):
             rows = ready_uploads(connection, payload.uploadIds, user)
         merged = upload_root() / f"merge-{secrets.token_hex(16)}.part" if len(rows) > 1 else None
         if merged:
-            merge_sources(rows, merged)
+            merge_paths([(upload_root() / row["path"], row["file_name"]) for row in rows], merged)
             source = merged
             name = f'{Path(rows[0]["file_name"]).stem}_合并.pdf'
             mime_type = "application/pdf"

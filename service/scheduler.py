@@ -704,7 +704,7 @@ class Scheduler:
                 task["status"] = doc["status"] = "处理中"
                 job["status"] = "running"
 
-    def _launch(self, lane, job, doc, cp, operation, number=0):
+    def _launch(self, lane, doc, operation, number=0):
         # 在线程接手任务前先提交检查点。进程重启后会重试当前阶段，不会重置到第一页。
         with self.data.database() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -799,7 +799,7 @@ class Scheduler:
                     loaded = self._load(connection, job["document_id"])
                 if loaded:
                     job, doc, cp = loaded
-                    self._launch("registration", job, doc, cp, cp.get("registrationStep", "metadata_candidate"))
+                    self._launch("registration", doc, cp.get("registrationStep", "metadata_candidate"))
             return
         if "registration" in self.running:
             return
@@ -830,7 +830,7 @@ class Scheduler:
             return
         if not cp.get("totalPages"):
             if not self.running:
-                self._launch("ocr", job, doc, cp, "prepare")
+                self._launch("ocr", doc, "prepare")
             return
         total = cp["totalPages"]
         if self._body_complete(doc, cp, total) and not self.running:
@@ -859,7 +859,7 @@ class Scheduler:
                 continue
             if cp.get("waiting", {}).get(key, 0) > self.clock():
                 continue
-            self._launch(lane, job, doc, cp, operation, number)
+            self._launch(lane, doc, operation, number)
 
     @classmethod
     def _body_complete(cls, doc, cp, total):

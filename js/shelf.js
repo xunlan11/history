@@ -10,8 +10,8 @@ function getPublicLibraryDocuments() {
   return documents.filter(isPublicLibraryDocument);
 }
 
-function normalizeShelfState(value, items = documents) {
-  items = items.filter((item) => canEditDocument(item));
+function normalizeShelfState(value) {
+  const items = documents.filter((item) => canEditDocument(item));
   const documentIds = new Set(items.map((item) => item.id));
   const assigned = new Set();
   const byId = new Map();
@@ -311,7 +311,7 @@ window.addEventListener("resize", () => {
   });
 });
 
-function createShelfUtilityCard(className, symbol, name, description) {
+function createShelfUtilityCard(className, symbol, name) {
   const card = document.createElement("article");
   card.className = `book-card shelf-utility-card ${className}`;
   const button = document.createElement("button");
@@ -325,18 +325,17 @@ function createShelfUtilityCard(className, symbol, name, description) {
   label.className = "folder-name";
   label.textContent = name;
   const hint = document.createElement("small");
-  hint.textContent = description;
-  // 缺省状态的小字提示一律不显示，只有拖拽变形成故纸堆/解散时才由 setDocumentTrashMode 打开。
-  hint.hidden = !description;
+  // 缺省状态的小字提示不显示，拖拽时由 setDocumentTrashMode / setShelfDissolveMode 写入。
+  hint.hidden = true;
   button.append(icon, label, hint);
   card.append(button);
   return card;
 }
 
-// 同一个入口两种状态：平时是「新增文献」，开始拖拽后由 setDocumentTrashMode 变成「故纸堆」删除区。
+// 「新增文献」工具卡片：平时点击打开登记表单；拖拽时变成「故纸堆」删除区，由 setDocumentTrashMode 切换。
 // 每一层文件夹（含根目录）都渲染同一张卡片，行为完全一致。
 function createShelfAddCard() {
-  const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献", "");
+  const card = createShelfUtilityCard("shelf-add-card", "＋", "新增文献");
   const button = card.querySelector("button");
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
@@ -362,7 +361,7 @@ const SHELF_DISSOLVE_ICON = "↑";
 
 // 「新建子文件夹」同样做成书架卡片，排在「新增文献 / 故纸堆」的下一个。
 function createShelfCreateCard(folderId = "") {
-  const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹", "");
+  const card = createShelfUtilityCard("shelf-create-card", "", "新建文件夹");
   card.querySelector(".shelf-utility-icon").innerHTML = SHELF_CREATE_ICON;
   const button = card.querySelector("button");
   button.onclick = () => {
@@ -374,7 +373,7 @@ function createShelfCreateCard(folderId = "") {
 
 // 公共入口固定在个人书架的工具卡片之后，不参与排序或拖拽。
 function createPublicLibraryCard(listNode) {
-  const card = createShelfUtilityCard("shelf-public-card", "◎", "公开文献库", "");
+  const card = createShelfUtilityCard("shelf-public-card", "◎", "公开文献库");
   const button = card.querySelector("button");
   button.onclick = () => {
     if (Date.now() < suppressDocumentClickUntil) return;
@@ -387,7 +386,7 @@ function createPublicLibraryCard(listNode) {
 
 function createPublicLibraryReturnCard(listNode, folder, state) {
   const name = folder?.name || getShelfRootName(state);
-  const card = createShelfUtilityCard("shelf-parent-card", "↰", name, "");
+  const card = createShelfUtilityCard("shelf-parent-card", "↰", name);
   const button = card.querySelector("button");
   button.onclick = () => setShelfFolder(listNode, folder?.id || "");
   return card;
@@ -474,7 +473,7 @@ function requestDeleteShelfFolder(folderId) {
 function createShelfParentCard(listNode, folder, state) {
   const parent = state.folders.find((entry) => entry.id === folder.parentId);
   const parentName = parent?.name || getShelfRootName(state);
-  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName, "");
+  const card = createShelfUtilityCard("shelf-parent-card", "↰", parentName);
   card.dataset.shelfParent = "";
   card.dataset.folderId = parent?.id || "";
   const button = card.querySelector("button");

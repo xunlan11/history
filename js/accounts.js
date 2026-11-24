@@ -32,8 +32,8 @@
     return data;
   }
 
-  // history 使用本站本地账号，可在对话框内删除账户；SSO 站点（literature）账户由问渠管理。
-  const USE_SSO = typeof SITE_ID === "string" && SITE_ID !== "history";
+  // history 使用本站本地账号，可在对话框内删除账户；SSO 站点账户由问渠管理。
+  const USE_SSO = SITE_ID !== "history";
 
   function isSelf(id) {
     return Boolean(currentUser && String(currentUser.id) === String(id));

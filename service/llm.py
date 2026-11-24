@@ -19,7 +19,7 @@ from service.evidence import BudgetConfig, EvidenceError, NO_RELEVANT_MATERIAL, 
 from service.task_progress import progress_reporter, read_progress
 
 
-# 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口（127.0.0.1:11435）。
+# 数据端通过反向隧道访问服务端 Ollama 的 OpenAI 兼容接口。
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "spark-x2.6:4b-q4_k_m")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "http://127.0.0.1:11435/v1")
@@ -90,7 +90,6 @@ class ExtractMetadataRequest(LlmTaskRequest):
 class ChronicleRequest(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     topic: str = ""
-    documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -98,20 +97,17 @@ class SupplementChronicleRequest(BaseModel):
     topic: str = ""
     previousEntries: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[dict[str, Any]] = Field(default_factory=list)
-    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class SearchRequest(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     query: str
-    documents: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     prompt: str
-    context: list[dict[str, Any]] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -245,7 +241,7 @@ def repair_finalize_result(source: str, output: str) -> tuple[str, list[str]]:
     source_paragraphs = split_paragraphs(source)
     output_paragraphs = split_paragraphs(output)
     source_content = content_characters(source)
-    if not source_content or not source_paragraphs or not output_paragraphs:
+    if not source_content:
         return output, []
     output_content = content_characters(output)
     output_shingles = _shingles(output_content)
@@ -567,7 +563,6 @@ def punctuate(payload: PunctuateRequest) -> dict[str, Any]:
     punctuated_parts: list[str] = []
     uncertain_items: list[Any] = []
     warnings: list[Any] = []
-    punctuated_text = ""
     processed = 0
     raw_outline: list[dict[str, Any]] = []
     paragraph_offset = 0
@@ -906,9 +901,8 @@ def call_text_task(prompt: str, key: str, task: str, on_progress: Any = None,
                    output_tokens: int | None = None) -> dict[str, Any]:
     """生成类任务要求返回正文键（punctuatedText）。
 
-    模型偶尔会忽略返回格式，例如把论文首页当成文献信息页，返回 title/authors/abstract
-    等字段而没有正文。同一个提示词重发往往仍然失败（调度器重试时实测两次都是空正文），
-    所以这里用一次带纠正说明的重试代替。
+    模型偶尔会忽略返回格式，输出别的字段而没有正文。同一个提示词重发往往仍然失败
+    （调度器重试时实测两次都是空正文），所以这里用一次带纠正说明的重试代替。
     """
     result = call_json_task(prompt, on_progress=on_progress,
                             context_tokens=context_tokens, output_tokens=output_tokens)
@@ -932,7 +926,6 @@ def call_text_task(prompt: str, key: str, task: str, on_progress: Any = None,
 def call_chat_completion(
     messages: list[dict[str, Any]],
     temperature: float = 0.1,
-    json_response: bool = True,
     context_tokens: int | None = None,
     output_tokens: int | None = None,
     on_progress: Any = None,
@@ -941,7 +934,7 @@ def call_chat_completion(
         raise LlmServiceError("尚未配置大模型服务（服务端地址 / 模型名）。")
 
     if LLM_PROVIDER == "ollama":
-        return call_ollama_chat_completion(messages, temperature, json_response, context_tokens, output_tokens, on_progress)
+        return call_ollama_chat_completion(messages, temperature, context_tokens, output_tokens, on_progress)
 
     url = f"{LLM_API_BASE.rstrip('/')}/chat/completions"
     payload = {
@@ -949,11 +942,10 @@ def call_chat_completion(
         "messages": messages,
         "temperature": temperature,
         "stream": False,
+        "response_format": {"type": "json_object"},
     }
     if output_tokens is not None:
         payload["max_tokens"] = output_tokens
-    if json_response:
-        payload["response_format"] = {"type": "json_object"}
 
     result = request_json("POST", url, payload=payload, timeout=LLM_TIMEOUT_SECONDS)
 
@@ -966,7 +958,6 @@ def call_chat_completion(
 def call_ollama_chat_completion(
     messages: list[dict[str, Any]],
     temperature: float = 0.1,
-    json_response: bool = True,
     context_tokens: int | None = None,
     output_tokens: int | None = None,
     on_progress: Any = None,
@@ -976,11 +967,12 @@ def call_ollama_chat_completion(
     url = f"{ollama_root}/api/chat"
     payload = {
         "model": LLM_MODEL,
-        "messages": normalize_ollama_messages(messages),
+        "messages": messages,
         # 有进度回调时用流式，才能按已生成字数回报进度；没有回调保持原样一次拿完。
         "stream": bool(on_progress),
         # 关掉思考链：只对思考型模型有效，非思考模型传 false 同样安全。
         "think": LLM_OLLAMA_THINK,
+        "format": "json",
         "options": {
             "temperature": temperature,
             # 模型默认 repeat_penalty 为 1（等于关闭），长文生成时容易整段复读并被
@@ -992,8 +984,6 @@ def call_ollama_chat_completion(
         payload["options"]["num_ctx"] = context_tokens
     if output_tokens is not None:
         payload["options"]["num_predict"] = output_tokens
-    if json_response:
-        payload["format"] = "json"
 
     if not on_progress:
         result = request_json("POST", url, payload=payload, timeout=LLM_TIMEOUT_SECONDS)
@@ -1051,42 +1041,6 @@ def iter_ollama_chat_stream(url: str, payload: dict[str, Any], timeout: int) -> 
         raise LlmServiceUnavailable("大模型请求超时。") from exc
     except OSError as exc:
         raise LlmServiceUnavailable(f"无法连接大模型服务：{exc}") from exc
-
-
-def normalize_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content", "")
-        if not isinstance(content, list):
-            normalized.append(message)
-            continue
-
-        text_parts: list[str] = []
-        images: list[str] = []
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            if part.get("type") == "text":
-                text_parts.append(str(part.get("text", "")))
-            if part.get("type") == "image_url":
-                image_url = part.get("image_url", {})
-                if isinstance(image_url, dict):
-                    images.append(strip_data_url(str(image_url.get("url", ""))))
-
-        normalized_message = {
-            "role": message.get("role", "user"),
-            "content": "\n".join([text for text in text_parts if text]),
-        }
-        if images:
-            normalized_message["images"] = images
-        normalized.append(normalized_message)
-    return normalized
-
-
-def strip_data_url(value: str) -> str:
-    if "," in value and value.startswith("data:"):
-        return value.split(",", 1)[1]
-    return value
 
 
 def request_json(
@@ -1223,7 +1177,7 @@ def dialogue_messages(query: str) -> list[dict[str, Any]]:
 def conversational_reply(query: str, config: BudgetConfig) -> str:
     fallback = "当前材料不足以确认。"
     try:
-        content = call_chat_completion(dialogue_messages(query), temperature=0.1, json_response=True,
+        content = call_chat_completion(dialogue_messages(query),
                                        context_tokens=config.context_tokens, output_tokens=256)
         reply = string_value(parse_json_object(content).get("reply"))
     except (LlmServiceError, ValueError, TypeError):
@@ -1241,7 +1195,7 @@ def run_evidence_task(payload, mode: str, query: str) -> dict[str, Any]:
         config = BudgetConfig.from_env()
         budgeted = fit_prompt_budget(query, mode, evidence, payload.options.get("history", []), config)
         if budgeted.evidence:
-            content = call_chat_completion(budgeted.messages, temperature=0.1, json_response=True,
+            content = call_chat_completion(budgeted.messages,
                                            context_tokens=config.context_tokens, output_tokens=config.output_tokens)
             checked = validate_result_citations(parse_json_object(content), budgeted.evidence, mode)
         else:

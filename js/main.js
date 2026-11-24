@@ -2,7 +2,7 @@ let selectedSmartMode = getSelectedConversation()?.mode || "chat";
 let pendingDeleteConversationId = null;
 let pendingDeleteDocumentId = null;
 
-applyGlobalFont(localStorage.getItem(FONT_STORAGE_KEY) || "hei");
+applyGlobalFont(localStorage.getItem(FONT_STORAGE_KEY));
 
 fontOptionButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -208,11 +208,11 @@ editDocumentButton?.addEventListener("click", async () => {
     setReaderEditing(false);
     renderAll();
     if (getSelectedDocument()?.id === item.id && getSelectedPage()?.id === page.id) renderReader();
-    window.showUploadToast?.("整理文本已保存");
+    showUploadToast("整理文本已保存");
   } catch (error) {
     // 保存失败保留编辑态与输入内容，明确报错。
     editDocumentButton.disabled = false;
-    window.showUploadToast?.(`整理文本保存失败：${error.message}`, 4200);
+    showUploadToast(`整理文本保存失败：${error.message}`, 4200);
   }
 });
 
@@ -227,16 +227,16 @@ searchInput?.addEventListener("keydown", (event) => {
 
 function runSelectedSmartMode() {
   if (selectedSmartMode === "search") {
-    runSmartSearch();
+    sendConversationTurn("search");
     return;
   }
 
   if (selectedSmartMode === "chronicle") {
-    runSmartChronicle();
+    sendConversationTurn("chronicle");
     return;
   }
 
-  runSmartChat();
+  sendConversationTurn("chat");
 }
 
 function renderSmartModeButtons() {
@@ -308,18 +308,6 @@ function closeDeleteConversationDialog() {
   deleteConversationDialog.classList.add("hidden");
   pendingDeleteConversationId = null;
   pendingDeleteDocumentId = null;
-}
-
-function runSmartChat() {
-  return sendConversationTurn("chat");
-}
-
-function runSmartSearch() {
-  return sendConversationTurn("search");
-}
-
-function runSmartChronicle() {
-  return sendConversationTurn("chronicle");
 }
 
 function isLlmServiceConnected() {
@@ -394,16 +382,18 @@ async function initializeApplication() {
   selectedSmartMode = getSelectedConversation()?.mode || selectedSmartMode;
   renderAll();
   renderSmartModeButtons();
-  if (document.body.dataset.page === "documents" && new URL(window.location.href).searchParams.get("new") === "1") {
-    openDocumentForm();
+  if (document.body.dataset.page === "documents") {
     const url = new URL(window.location.href);
-    url.searchParams.delete("new");
-    window.history.replaceState(null, "", url.href);
+    if (url.searchParams.get("new") === "1") {
+      openDocumentForm();
+      url.searchParams.delete("new");
+      window.history.replaceState(null, "", url.href);
+    }
   }
   resumePendingProcessingTasks();
   flushPendingProcessingCancels();
   startPeriodicSync();
-  if (document.body.dataset.page !== "reader" && typeof initializeDocumentPreparation === "function") {
+  if (document.body.dataset.page !== "reader") {
     initializeDocumentPreparation();
   }
 }

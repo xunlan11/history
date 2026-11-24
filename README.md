@@ -24,15 +24,15 @@ uv run python scripts/storage.py restore storage/backups/history-backup-YYYYMMDD
 
 ## 提示词索引
 
-- [页面标点](service/llm.py#L438-L501)
-- [页面校对](service/llm.py#L573-L622)
-- [元数据识别](service/llm.py#L618-L643)
-- [编年补充](service/llm.py#L687-L722)
+- [页面标点](service/llm.py#L475-L538)
+- [页面校对](service/llm.py#L630-L699)
+- [元数据识别](service/llm.py#L742-L769)
+- [编年补充](service/llm.py#L811-L848)
 - [证据回答](service/evidence.py#L101-L109)
 - [证据 JSON 模板](service/evidence.py#L96-L100)
-- [JSON 公共 system](service/llm.py#L761-L766)
-- [缺字段重试](service/llm.py#L792-L798)
-- [无材料对话](service/llm.py#L1084-L1090)
+- [JSON 公共 system](service/llm.py#L886-L891)
+- [缺字段重试](service/llm.py#L918-L924)
+- [无材料对话](service/llm.py#L1210-L1216)
 
 ### 待做
 

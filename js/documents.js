@@ -780,7 +780,7 @@ function renderReader() {
   }
 
   ensureSelectedPage(item);
-  if (typeof ensureDocumentPages === "function" && !documentPagesReady(item)) {
+  if (!documentPagesReady(item)) {
     ensureDocumentPages(item.id).then((loadedPages) => {
       if (!loadedPages) return;
       const current = getSelectedDocument();
@@ -1222,18 +1222,12 @@ function renderReaderSidebar() {
     const rows = [
       ["文献名", item.title || "未识别"],
       ["作者", item.author || "未录"],
-      // 出版时间单独一行：值可以是「1936」「1936年10月」「1936年10月5日」等精度
       ["出版时间", item.year || "未录"],
       ["出版社", item.publisher || "未录"],
     ];
     rows.forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
     appendDocumentAttribution(readerDetailNode, item);
-    [
-      ["标签", item.tags || "未录"],
-      ["处理进度", getProcessingTaskLabel(item)],
-    ]
-      .filter(([, value]) => value !== getProcessingTaskLabel(item))
-      .forEach(([label, value]) => appendDocumentDetailRow(readerDetailNode, [[label, value]]));
+    appendDocumentDetailRow(readerDetailNode, [["标签", item.tags || "未录"]]);
   }
   const visibilityRow = document.createElement("div");
   visibilityRow.className = "reader-visibility-row";
@@ -1345,16 +1339,7 @@ function readerEmptyState(message) {
 function renderSmartEmpty() {
   if (typeof renderConversationTurns === "function") {
     renderConversationTurns();
-    return;
   }
-  if (!searchInput || !searchResults || !chronicleResults) {
-    return;
-  }
-  if (searchInput.value.trim()) {
-    return;
-  }
-
-  clearSmartResults();
 }
 
 function clearSmartResults() {

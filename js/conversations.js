@@ -16,10 +16,6 @@ function getOwnReferenceDocuments() {
 
 function getSmartScopeDocuments(conversation = getSelectedConversation()) {
   const ownDocuments = getOwnReferenceDocuments();
-  if (Array.isArray(conversation?.materialDocumentIds)) {
-    const ids = new Set(conversation.materialDocumentIds);
-    return ownDocuments.filter((item) => ids.has(item.id));
-  }
   const referenceIds = getConversationReferenceDocumentIds(conversation);
   if (!referenceIds.length) {
     return ownDocuments;
@@ -793,7 +789,7 @@ function renderChronicleLlmEntries(entries, warnings = [], container = chronicle
     summary.append(buildCitationMarkers(entry));
 
     content.append(title, summary);
-    if (Array.isArray(warnings) && warnings.length && index === entries.length - 1) {
+    if (warnings.length && index === entries.length - 1) {
       content.append(formatWarnings(warnings));
     }
     result.append(content);
@@ -1127,7 +1123,7 @@ async function saveConversationPromptEdit(conversationId, turnId, value) {
   const prompt = value.trim();
   let { conversation, turn } = getConversationTurn(conversationId, turnId);
   if (!prompt || !turn || conversationTurnRequests.has(conversationId)) return;
-  if (!turn.request?.retrieval || conversationTurnRequests.has(conversationId)) return;
+  if (!turn.request?.retrieval) return;
   const preparing = { turnId };
   conversationTurnRequests.set(conversationId, preparing);
   let request;

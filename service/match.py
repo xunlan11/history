@@ -19,12 +19,9 @@ def normalize_literal(text: str) -> tuple[str, list[int], list[int]]:
     value, starts, ends = [], [], []
     for offset, point in enumerate(text):
         # 汉字/字母/数字一定不是空白或标点，先走这一步省掉逐字查 Unicode 类别。
-        if point.isalnum():
-            folded = point.lower()
-        elif point.isspace() or unicodedata.category(point).startswith("P"):
+        if not point.isalnum() and (point.isspace() or unicodedata.category(point).startswith("P")):
             continue
-        else:
-            folded = point.lower()
+        folded = point.lower()
         value.append(folded)
         if len(folded) == 1:
             starts.append(offset)

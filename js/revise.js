@@ -68,7 +68,7 @@ function openRevisionForm() {
   if (modeInput) modeInput.checked = true;
   const chunkInput = form?.querySelector("#chunk-size-input");
   if (chunkInput) chunkInput.value = String(clampChunkSize(item.processingChunkSize));
-  if (typeof syncProcessingChunkInput === "function") syncProcessingChunkInput();
+  if (syncProcessingChunkInput) syncProcessingChunkInput();
   registrationBatch = {
     id: newId(),
     files: [revisionExistingState(item)],
@@ -103,6 +103,7 @@ function acceptRevisedDocument(payload) {
 
 async function submitDocumentRevision(batch) {
   const existingIndex = batch.files.findIndex((state) => state.existing);
+  const formData = new FormData(form);
   const body = {
     uploadIds: batch.files.filter((state) => !state.existing).map((state) => state.id),
     existingIndex: Math.max(0, existingIndex),
@@ -111,15 +112,15 @@ async function submitDocumentRevision(batch) {
     publisher: revisionFieldValue("publisher"),
     year: revisionFieldValue("year"),
     tags: revisionFieldValue("tags"),
-    processingMode: normalizeProcessingMode(new FormData(form).get("processingMode")),
-    processingChunkSize: clampChunkSize(new FormData(form).get("chunkSize")),
+    processingMode: normalizeProcessingMode(formData.get("processingMode")),
+    processingChunkSize: clampChunkSize(formData.get("chunkSize")),
   };
   batch.status = "submitting";
   batch.error = "";
   renderRegistrationUploads();
   try {
     // 先把本地未同步的改动推上去，避免稍后的推送覆盖刚提交的元数据。
-    if (typeof flushPendingSync === "function") await flushPendingSync();
+    await flushPendingSync();
     const response = await fetch(`${DATA_PROCESSING_URL}/${encodeURIComponent(batch.existing.documentId)}/revise`, {
       method: "POST",
       signal: batch.controller.signal,

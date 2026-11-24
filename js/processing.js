@@ -35,7 +35,7 @@ function applyBackendProcessingDocument(documentId, payload) {
   if ((previous.processingTask?.revision || 0) > (incoming.processingTask?.revision || 0)) return previous;
   // 保留尚未同步的本地备注、文本和元数据编辑；服务端也会拦截过期的处理快照。
   // 轮询响应绝不能标记为本地编辑。
-  if (typeof syncDirty !== "undefined" && syncDirty) {
+  if (syncDirty) {
     for (const key of ["title", "author", "year", "publisher", "tags", "visibility"]) {
       const baseline = previous.processingTask?.metadataSnapshot;
       if (previous[key] !== undefined && (!baseline || !(key in baseline) || previous[key] !== baseline[key])) incoming[key] = previous[key];
@@ -115,10 +115,10 @@ async function requestLlmTask(path, payload, options = {}) {
 }
 
 const PROCESSING_STAGE_CONFIG = [
-  { key: "ocr", label: "文字识别", short: "识别", color: "ocr" },
-  { key: "variant", label: "简繁转换", short: "简繁", color: "variant" },
-  { key: "punctuation", label: "标点符号", short: "标点", color: "punctuation" },
-  { key: "proofreading", label: "校对", short: "校对", color: "proofreading" },
+  { key: "ocr", label: "文字识别", short: "识别" },
+  { key: "variant", label: "简繁转换", short: "简繁" },
+  { key: "punctuation", label: "标点符号", short: "标点" },
+  { key: "proofreading", label: "校对", short: "校对" },
 ];
 let progressStageNodes = new Map();
 let progressStageFills = new Map();
@@ -204,7 +204,7 @@ function isStagePageTerminal(page, stageKey) {
   return status === "done" || status === "failed" || status === "skipped";
 }
 
-// 分块模式同一个阶段会有多页并行（activeStages 键形如 "punctuation:12"）：
+// 分块模式同一个阶段会有多页并行，activeStages 里同一阶段可能并存多条记录：
 // 取页码最小的那条，和右侧环上的数字以及进度快照口径一致。
 function activeStageEntry(task, stageKey) {
   const stages = task?.activeStages || {};
@@ -222,7 +222,7 @@ function activeStageEntry(task, stageKey) {
 
 // 环显示的是「该阶段当前处理到第几页」，环长表示这一页在该阶段的进展：
 // · 正在处理该页 → 实测页内进度；还没有实测值时保持空环（靠 .is-active 呼吸提示进行中），
-//   不画任何假进度，否则第一笔实测值（往往只有 1%~2%）会让环看起来「先涨后缩」；
+//   不画任何假进度，否则第一笔实测值会让环看起来「先涨后缩」；
 // · 该阶段已全部完成 → 满环，数字为总页数；
 // · 该阶段还没轮到该页 → 空环，数字为下一页（而不是已完成页数）。
 function stagePageState(item, task, stageKey, done, total) {
@@ -237,7 +237,7 @@ function stagePageState(item, task, stageKey, done, total) {
 
 function renderStreamProgress(item) {
   const task = item?.processingTask;
-  if (!item || !task) {
+  if (!task) {
     streamProgress?.classList.add("hidden");
     return;
   }

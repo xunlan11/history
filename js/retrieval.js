@@ -120,8 +120,8 @@ function getReaderVisualSource(page, layer) {
       (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase());
     if (!visualId || !itemId || encode(visualId) !== parts[1] || encode(itemId) !== parts[2]) return null;
   } catch { return null; }
-  const cached = page?.visuals == null && typeof getCachedReaderContent === "function" &&
-    typeof getSelectedDocument === "function" ? getCachedReaderContent(getSelectedDocument(), page) : null;
+  const cached = page?.visuals == null && typeof getCachedReaderContent === "function"
+    ? getCachedReaderContent(getSelectedDocument(), page) : null;
   const catalog = page?.visuals ?? cached?.visuals;
   const visuals = Array.isArray(catalog) ? catalog : catalog && typeof catalog === "object" ? Object.values(catalog) : [];
   const visual = visuals.find((entry) => entry?.id === visualId);
@@ -150,7 +150,7 @@ function getReaderEvidenceBodyText() {
 }
 
 function markEvidenceRange(container, start, end) {
-  const body = typeof readerText !== "undefined" && container === readerText && typeof getReaderTextNodes === "function";
+  const body = container === readerText && typeof getReaderTextNodes === "function";
   const nodes = body ? getReaderTextNodes(container) : [];
   if (!body) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);

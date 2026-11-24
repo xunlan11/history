@@ -5,8 +5,7 @@ let registrationBatch = null;
 let draggedUploadId = "";
 
 function getStoredAuthToken() {
-  const key = typeof AUTH_TOKEN_KEY === "string" ? AUTH_TOKEN_KEY : `${SITE_STORAGE_PREFIX}.authToken`;
-  return localStorage.getItem(key) || "";
+  return localStorage.getItem(AUTH_TOKEN_KEY) || "";
 }
 
 function hasActiveDocumentUpload() {
@@ -437,7 +436,7 @@ function refreshDocumentCardStatusIndicators(documentId) {
     }
   });
 
-  if (typeof selectedDocumentId === "string" && selectedDocumentId === documentId) {
+  if (selectedDocumentId === documentId) {
     const item = getLiveDocument(documentId);
     renderReaderDetailActions(item, canEditDocument(item), readerDetailEditing);
     const statusNode = document.querySelector("#reader-stream-status");

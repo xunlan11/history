@@ -1,7 +1,7 @@
 const AUTH_TOKEN_KEY = `${SITE_STORAGE_PREFIX}.authToken`;
 // 认证模式按站点区分：history 保留本站本地账号（登录弹窗 + Bearer Token）；
-// 其余站点（如 literature）走问渠统一登录（wenqu_session Cookie，跳转 /login）。
-const USE_SSO = (typeof SITE_ID === "string" ? SITE_ID : "history") !== "history";
+// 其余站点走问渠统一登录（wenqu_session Cookie，跳转 /login）。
+const USE_SSO = SITE_ID !== "history";
 let currentUser = null;
 
 const originalFetch = window.fetch.bind(window);
@@ -153,8 +153,7 @@ function updateAuthUi() {
   if (!actionNode || !adminNode) return;
   const labelNode = actionNode.querySelector("#auth-label");
   const label = currentUser ? "登出" : "登录";
-  if (labelNode) labelNode.textContent = label;
-  else actionNode.textContent = label;
+  labelNode.textContent = label;
   actionNode.setAttribute("aria-label", currentUser ? "登出" : "登录");
   actionNode.removeAttribute("title");
   const userNode = document.querySelector("#auth-user");
@@ -205,6 +204,6 @@ async function ensureAuthenticated() {
 }
 
 async function manageUsers() {
-  if (!currentUser?.isAdmin || typeof window.openAccountsModal !== "function") return;
+  if (!currentUser?.isAdmin) return;
   window.openAccountsModal();
 }
