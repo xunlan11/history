@@ -160,6 +160,13 @@ async function submitDocumentRevision(batch) {
   }
 }
 
+function revealProcessingProgress() {
+  // 重新处理开始后把「处理」卡片与工具栏一起展开，让用户直接看到任务进度。
+  if (typeof setReaderSidebarCardExpanded === "function") setReaderSidebarCardExpanded("progress", true);
+  if (readerSidebarStack?.hidden && typeof toggleReaderPanel === "function") toggleReaderPanel("sidebar");
+  document.querySelector("#reader-sidebar-progress")?.scrollIntoView({ block: "nearest" });
+}
+
 async function reprocessDocument() {
   const item = getSelectedDocument();
   if (reprocessInFlight) return;
@@ -168,15 +175,17 @@ async function reprocessDocument() {
       ? "文献仍在排队，轮到后会按最新逻辑处理。" : "当前状态无法重新处理。");
     return;
   }
-  if (!window.confirm("确认重新处理这篇文献？\n将复用已保存的简体稿重跑标点与校对，现有结果（含人工修改）会被逐页替换；文献信息不会改动。")) return;
+  if (!window.confirm("确认重新处理这篇文献？")) return;
   reprocessInFlight = true;
   syncReviseDocumentButton(item);
   try {
     const result = await requestBackendProcessing(item.id, { method: "POST", suffix: "/reprocess" });
     if (applyBackendProcessingDocument(item.id, result)) {
-      startProcessingPolling(getLiveDocument(item.id) || item);
+      const current = getLiveDocument(item.id) || item;
+      startProcessingPolling(current);
       renderAll();
-      showUploadToast("已开始重新处理");
+      revealProcessingProgress();
+      refreshProcessingDocument(current, { silent: true }).finally(() => renderAll());
     }
   } catch (error) {
     showUploadToast(error.message);
