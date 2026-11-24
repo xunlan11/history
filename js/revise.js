@@ -1,6 +1,7 @@
 // 阅读页的「修改」入口：复用首次登记的弹窗，把新文件合并到现有原件之前/之后，
 // 也可以只改元数据或处理方式。
 const reviseDocumentButton = document.querySelector("#revise-document");
+const reprocessDocumentButton = document.querySelector("#reprocess-document");
 const reviseFormTitle = document.querySelector("#add-document-title");
 const EXISTING_SOURCE_ID = "existing-source";
 const REVISION_FIELDS = {
@@ -32,11 +33,27 @@ function revisionExistingState(item) {
   };
 }
 
+const REPROCESS_BLOCKED_STATUSES = new Set(["提交中", "登记中", "排队中"]);
+let reprocessInFlight = false;
+
+function canReprocessDocument(item) {
+  return Boolean(item && canEditDocument(item) && item.processingTask?.backendManaged &&
+    !REPROCESS_BLOCKED_STATUSES.has(item.processingTask?.status));
+}
+
 function syncReviseDocumentButton(item) {
-  if (!reviseDocumentButton) return;
-  const canRevise = Boolean(item && canEditDocument(item) && item.processingTask?.backendManaged);
-  reviseDocumentButton.disabled = !canRevise;
-  reviseDocumentButton.classList.toggle("hidden", !item);
+  if (reviseDocumentButton) {
+    const canRevise = Boolean(item && canEditDocument(item) && item.processingTask?.backendManaged);
+    reviseDocumentButton.disabled = !canRevise;
+    reviseDocumentButton.classList.toggle("hidden", !item);
+  }
+  if (!reprocessDocumentButton) return;
+  const canReprocess = !reprocessInFlight && canReprocessDocument(item);
+  reprocessDocumentButton.disabled = !canReprocess;
+  reprocessDocumentButton.classList.toggle("hidden", !item);
+  const status = item?.processingTask?.status;
+  reprocessDocumentButton.title = canReprocess || !item ? ""
+    : status === "排队中" ? "文献仍在排队，轮到后会按最新逻辑处理" : "登记完成后才能重新处理";
 }
 
 function openRevisionForm() {
@@ -143,4 +160,31 @@ async function submitDocumentRevision(batch) {
   }
 }
 
+async function reprocessDocument() {
+  const item = getSelectedDocument();
+  if (reprocessInFlight) return;
+  if (!canReprocessDocument(item)) {
+    showUploadToast(item?.processingTask?.status === "排队中"
+      ? "文献仍在排队，轮到后会按最新逻辑处理。" : "当前状态无法重新处理。");
+    return;
+  }
+  if (!window.confirm("确认重新处理这篇文献？\n将复用已保存的简体稿重跑标点与校对，现有结果（含人工修改）会被逐页替换；文献信息不会改动。")) return;
+  reprocessInFlight = true;
+  syncReviseDocumentButton(item);
+  try {
+    const result = await requestBackendProcessing(item.id, { method: "POST", suffix: "/reprocess" });
+    if (applyBackendProcessingDocument(item.id, result)) {
+      startProcessingPolling(getLiveDocument(item.id) || item);
+      renderAll();
+      showUploadToast("已开始重新处理");
+    }
+  } catch (error) {
+    showUploadToast(error.message);
+  } finally {
+    reprocessInFlight = false;
+    syncReviseDocumentButton(getSelectedDocument());
+  }
+}
+
 reviseDocumentButton?.addEventListener("click", openRevisionForm);
+reprocessDocumentButton?.addEventListener("click", reprocessDocument);

@@ -345,11 +345,12 @@ def preserve_manual_page_text(connection, document_id, pages):
         page["manualTextAt"] = stored.get("manualTextAt", "")
 
 
-def save_job_state(data, connection, job, doc, cp, page_ids=None):
+def save_job_state(data, connection, job, doc, cp, page_ids=None, *, preserve_manual=True):
     """保存任务状态与页内容。
 
     `page_ids`：None = 全量对账（结构变化、浏览器推送）；[] = 只保存任务状态；
     非空列表 = 只写这些页。阶段完成时只传当前页，不重写整本文献的每一页。
+    `preserve_manual`：重新处理需要让新结果覆盖人工稿时传 False。
     """
     stamp = data.now_iso()
     doc["updatedAt"] = stamp
@@ -361,7 +362,8 @@ def save_job_state(data, connection, job, doc, cp, page_ids=None):
     data.materialize_document_assets(connection, doc["id"], doc, stamp, page_ids=allowed)
     pages = doc.get("pages") or []
     touched = pages if allowed is None else [page for page in pages if page.get("id") in allowed]
-    preserve_manual_page_text(connection, doc["id"], touched)
+    if preserve_manual:
+        preserve_manual_page_text(connection, doc["id"], touched)
     source_pdf = data.document_source_pdf(connection, doc["id"])
     for page in touched:
         reader_index.reconcile_reader_index(connection, doc["id"], page, stamp, source_pdf=source_pdf)

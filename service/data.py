@@ -2186,6 +2186,32 @@ def page_status_after_clearing_failure(page: dict[str, Any]) -> str:
     return "待整理"
 
 
+def reset_page_for_reprocess(page: dict[str, Any]) -> None:
+    """重新处理前重置一页：复用已存稿，只重跑其后的阶段。
+
+    有简体稿直接从标点开始，没有则退回简繁，连 OCR 稿都没有才退回 OCR。
+    旧文本保留到新结果写回，页面不会先被清空。
+    """
+    stages = processing_scheduler.PROCESSING_STAGES
+    if not str(page.get("normalizedText") or "").strip():
+        start = 1 if str(page.get("ocrText") or "").strip() else 0
+    else:
+        start = 2
+    status = page.setdefault("stageStatus", {})
+    for stage in stages[:start]:
+        page[f"{stage}Done"] = True
+        status[stage] = "done"
+    for stage in stages[start:]:
+        page[f"{stage}Done"] = False
+        status.pop(stage, None)
+    page.pop("failureStage", None)
+    page.pop("failureMessage", None)
+    # 人工保存过的整理文本也参与重跑：显式清除标记，否则自动结果会被原样保留。
+    page["manualText"] = False
+    page.pop("manualTextAt", None)
+    page["status"] = page_status_after_clearing_failure(page)
+
+
 @app.delete("/api/documents/{document_id}/processing/failed-pages/{page_number}")
 def clear_failed_processing_page(document_id: str, page_number: int):
     """清除一页的失败标记：页、页序与已保存的正文都不动。"""
@@ -2291,6 +2317,73 @@ def retry_document_processing(document_id: str):
             record_change(connection, "document", document_id, timestamp=stamp)
             bump_sync_version(connection)
         return {"document": public_processing_document(connection, document_id, user)}
+
+
+@app.post("/api/documents/{document_id}/processing/reprocess")
+def reprocess_document(document_id: str):
+    """复用已存的简体稿，重跑标点与校对；元数据与页结构不动。"""
+    user = current_user()
+    with database() as connection:
+        require_owned_document(connection, document_id, user)
+        job_row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+    if not job_row:
+        raise HTTPException(status_code=409, detail="文献没有后端任务，无法重新处理")
+    if job_row["phase"] != "body":
+        raise HTTPException(status_code=409, detail="文献尚未完成登记，无法重新处理")
+    if job_row["status"] == "queued":
+        raise HTTPException(status_code=409, detail="文献仍在排队，轮到后会按最新逻辑处理，无需重新处理")
+    worker = _scheduler_worker
+    held = False
+    try:
+        # 处理中点击时先等在飞的页落库，否则旧结果会在重置后写回。
+        if worker is not None and job_row["status"] in {"running", "waiting"}:
+            if not worker.hold_document(document_id):
+                raise HTTPException(status_code=409, detail="文献正在处理当前页，请稍后再试")
+            held = True
+        with database() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            require_owned_document(connection, document_id, user)
+            job_row = connection.execute("SELECT * FROM processing_jobs WHERE document_id=?", (document_id,)).fetchone()
+            if not job_row or job_row["phase"] != "body":
+                raise HTTPException(status_code=409, detail="文献任务状态已变化，请重试")
+            if job_row["status"] == "queued":
+                raise HTTPException(status_code=409, detail="文献仍在排队，轮到后会按最新逻辑处理，无需重新处理")
+            document = attach_document_pages(connection, json_load(
+                connection.execute("SELECT payload FROM documents WHERE id=?", (document_id,)).fetchone()["payload"]))
+            pages = [page for page in document.get("pages") or [] if int(page.get("pageNumber") or 0) > 0]
+            total = max((int(page["pageNumber"]) for page in pages), default=0)
+            if not total:
+                raise HTTPException(status_code=409, detail="文献还没有可复用的页面，无法重新处理")
+            stamp = now_iso()
+            for page in pages:
+                reset_page_for_reprocess(page)
+            checkpoint = json_load(job_row["checkpoint"])
+            checkpoint["totalPages"] = total
+            for key in ("attempts", "retries", "waiting", "errors", "stageErrors"):
+                checkpoint[key] = {}
+            job = dict(job_row)
+            job.update(phase="body", status="queued", retry_at=0)
+            mode = job["mode"]
+            chunk_size = processing_scheduler.normalize_chunk_size(job["chunk_size"])
+            task = document.setdefault("processingTask", {})
+            progress = processing_scheduler.Scheduler._stage_progress(document, checkpoint, total)
+            task.update(
+                mode=mode, chunkSize=chunk_size, totalPages=total,
+                completedPages=progress["ocr"]["done"], finalizedPages=progress["proofreading"]["done"],
+                stageProgress=progress, failedPages=[],
+                status="排队中", message="已开始重新处理",
+                finishedAt="", activeStages={}, pausedForRegistration=False,
+                currentPage=0, currentPageStage="", currentPageProgress=0,
+                revision=int(task.get("revision") or 0) + 1,
+                metadataSnapshot=processing_scheduler.metadata(document),
+            )
+            document.update(processingMode=mode, processingChunkSize=chunk_size, status="排队中", updatedAt=stamp)
+            processing_scheduler.save_job_state(sys.modules[__name__], connection, job, document, checkpoint,
+                                                preserve_manual=False)
+            return {"document": public_processing_document(connection, document_id, user)}
+    finally:
+        if held:
+            worker.release_document(document_id)
 
 
 class DocumentRevision(BaseModel):

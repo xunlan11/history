@@ -181,7 +181,7 @@ function renderFailedProcessingPages(item) {
     button.addEventListener("contextmenu", async (event) => {
       event.preventDefault();
       if (!canEditDocument(getLiveDocument(item.id))) return;
-      if (!window.confirm(`确认删除第 ${entry.pageNumber} 页的失败标记？页面与已保存的文字不受影响。`)) return;
+      if (!window.confirm(`确认删除第 ${entry.pageNumber} 页的失败标记吗？`)) return;
       try {
         await flushPendingSync();
         if (syncDirty) throw new Error("本地修改尚未同步，请稍后再删除。");
