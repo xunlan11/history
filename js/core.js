@@ -378,12 +378,38 @@ let syncPushInFlight = null;
 let syncPullInFlight = null;
 let syncRevision = 0;
 // 书架（文件夹与排序）有自己的保存通道：拖拽只提交书架 JSON，不重传文献与对话。
-// 脏标记同样跨页面保留，下一页加载时先补推，避免被服务端旧书架盖掉。
-let shelfDirty = localStorage.getItem(SHELF_DIRTY_STORAGE_KEY) === "1";
+// 脏标记跨页面保留，且按账号分存：换账号后不会把上一个账号的未同步状态推到新账号的书架上。
+let shelfDirty = false;
+let shelfDirtyUserId = null;
 let shelfPushTimer = null;
 let shelfPushInFlight = null;
 let shelfRevision = 0;
 let shelfPushFailureNotified = false;
+
+function getShelfDirtyKey() {
+  const userId = currentUser?.id;
+  return userId ? `${SHELF_DIRTY_STORAGE_KEY}.user-${userId}` : "";
+}
+
+// 当前账号是否有尚未保存到服务端的书架改动（首次访问时从 localStorage 恢复）。
+function isShelfDirty() {
+  const userId = String(currentUser?.id || "");
+  if (userId !== shelfDirtyUserId) {
+    shelfDirtyUserId = userId;
+    const key = getShelfDirtyKey();
+    shelfDirty = Boolean(key) && localStorage.getItem(key) === "1";
+  }
+  return shelfDirty;
+}
+
+function setShelfDirty(value) {
+  shelfDirty = Boolean(value);
+  shelfDirtyUserId = String(currentUser?.id || "");
+  const key = getShelfDirtyKey();
+  if (!key) return;
+  if (shelfDirty) localStorage.setItem(key, "1");
+  else localStorage.removeItem(key);
+}
 let deletedDocumentIds = loadCachedIdSet(DELETED_DOCUMENT_IDS_STORAGE_KEY);
 let deletedConversationIds = new Set();
 
@@ -610,7 +636,7 @@ function applyServerState(payload) {
 
   documents = nextDocuments;
   conversations = nextConversations;
-  if (Object.hasOwn(payload, "shelf") && !shelfDirty) applyShelfState(payload.shelf);
+  if (Object.hasOwn(payload, "shelf") && !isShelfDirty()) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -733,7 +759,7 @@ function applyServerChanges(payload) {
     }
   }
 
-  if (payload.shelf && !shelfDirty) applyShelfState(payload.shelf);
+  if (payload.shelf && !isShelfDirty()) applyShelfState(payload.shelf);
 
   selectedDocumentId = documents.some((item) => item.id === selectedDocumentId)
     ? selectedDocumentId
@@ -950,14 +976,16 @@ async function initializeServerData() {
     syncReady = true;
     if (syncDirty) {
       await pushServerSnapshot();
-      if (shelfDirty) await pushShelfState();
+      if (isShelfDirty()) await pushShelfState();
+      // 书架与整库快照各自独立：本地书架没有未同步改动时，直接采用服务端的书架。
+      else if (payload.shelf) applyShelfState(payload.shelf);
       return true;
     }
 
     applyServerState(payload);
     syncDirty = false;
-    // 服务端快照里的书架已被跳过（shelfDirty），这里把本地书架补推上去。
-    if (shelfDirty) await pushShelfState();
+    // 书架有未同步改动时服务端快照里的书架会被跳过，这里把本地书架补推上去。
+    if (isShelfDirty()) await pushShelfState();
     return true;
   } catch (error) {
     syncReady = false;
@@ -991,11 +1019,9 @@ async function pushServerSnapshot() {
   }
 
   const pushedRevision = syncRevision;
-  // 整库快照里也带着书架：推送成功且期间书架没再改动，就不用再单独推一次书架。
-  const pushedShelfRevision = shelfRevision;
+  // 整库快照只提交文献与对话；书架另走 PUT /api/shelf，避免一次快照推送把书架改成某个页面的快照版本。
   const payload = {
     schemaVersion: DATA_SCHEMA_VERSION,
-    shelf: getShelfState(),
     documents,
     conversations,
     deletedDocumentIds: Array.from(deletedDocumentIds),
@@ -1031,10 +1057,6 @@ async function pushServerSnapshot() {
       } else {
         scheduleServerPush();
       }
-      if (shelfDirty && shelfRevision === pushedShelfRevision) {
-        shelfDirty = false;
-        localStorage.removeItem(SHELF_DIRTY_STORAGE_KEY);
-      }
 
       return true;
     })
@@ -1048,9 +1070,8 @@ async function pushServerSnapshot() {
 
 // 书架单独保存：只提交文件夹与排序（几 KB），不重传文献与对话。
 function scheduleShelfPush() {
-  shelfDirty = true;
+  setShelfDirty(true);
   shelfRevision += 1;
-  localStorage.setItem(SHELF_DIRTY_STORAGE_KEY, "1");
 
   if (!syncReady) {
     return;
@@ -1064,7 +1085,7 @@ function scheduleShelfPush() {
 
 // 服务端会按当前账号拥有的文献重新规范化书架；与本地不一致时以服务端为准。
 function applyShelfServerEcho(value) {
-  if (!value || shelfDirty) return;
+  if (!value || isShelfDirty()) return;
   const next = normalizeShelfState(value);
   if (JSON.stringify(next) === JSON.stringify(getShelfState())) return;
   applyShelfState(next);
@@ -1094,8 +1115,7 @@ async function pushShelfState() {
       const result = await response.json().catch(() => ({}));
       shelfPushFailureNotified = false;
       if (shelfRevision === pushedRevision) {
-        shelfDirty = false;
-        localStorage.removeItem(SHELF_DIRTY_STORAGE_KEY);
+        setShelfDirty(false);
         applyShelfServerEcho(result.shelf);
       } else {
         scheduleShelfPush();
@@ -1128,7 +1148,7 @@ async function flushPendingSync() {
   shelfPushTimer = null;
 
   let shelfPushed = false;
-  if (shelfDirty) {
+  if (isShelfDirty()) {
     shelfPushed = (await pushShelfState()) || shelfPushed;
   }
 
@@ -1207,7 +1227,7 @@ function startPeriodicSync() {
     }
 
     // 之前没推上去的书架改动在这里补推，不必等用户下一次操作。
-    if (shelfDirty) {
+    if (isShelfDirty()) {
       await pushShelfState();
     }
     syncFromServer({ render: true });

@@ -103,12 +103,12 @@ async def auth_middleware(request: Request, call_next):
 
 
 class SyncPayload(BaseModel):
+    """整库快照推送：只包含文献与对话；书架走 PUT /api/shelf。"""
     schemaVersion: int
     documents: list[dict[str, Any]] = Field(default_factory=list)
     conversations: list[dict[str, Any]] = Field(default_factory=list)
     deletedDocumentIds: list[str] = Field(default_factory=list)
     deletedConversationIds: list[str] = Field(default_factory=list)
-    shelf: dict[str, Any] | None = None
 
 
 class ShelfSavePayload(BaseModel):
@@ -3359,8 +3359,6 @@ def push(payload: SyncPayload) -> dict[str, Any]:
                     timestamp,
                     user,
                 )
-                if payload.shelf is not None:
-                    save_shelf(connection, user, payload.shelf)
                 cursor = bump_sync_version(connection)
                 incremental_cursor = change_cursor(connection)
         return {

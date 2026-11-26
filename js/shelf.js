@@ -11,15 +11,21 @@ function getPublicLibraryDocuments() {
 }
 
 function normalizeShelfState(value) {
-  const items = documents.filter((item) => canEditDocument(item));
-  const documentIds = new Set(items.map((item) => item.id));
+  // 只剔除「本地已知但不可编辑」的文献；本地还没拿到的文献（文档缓存缺失或尚未同步）保留在文件夹里，
+  // 至于它是否真的还在库中，由服务端按当前账号拥有的文献判断。
+  const editableIds = new Set();
+  const readOnlyIds = new Set();
+  for (const item of documents) {
+    if (canEditDocument(item)) editableIds.add(item.id);
+    else readOnlyIds.add(item.id);
+  }
   const assigned = new Set();
   const byId = new Map();
   for (const source of Array.isArray(value?.folders) ? value.folders : []) {
     if (typeof source?.id !== "string" || !source.id || byId.has(source.id)) continue;
     const members = [];
     for (const id of Array.isArray(source.documentIds) ? source.documentIds : []) {
-      if (!documentIds.has(id) || assigned.has(id)) continue;
+      if (typeof id !== "string" || assigned.has(id) || readOnlyIds.has(id)) continue;
       assigned.add(id);
       members.push(id);
     }
@@ -51,8 +57,15 @@ function normalizeShelfState(value) {
     validByParent.set(folder.id, new Set(folder.documentIds.map((id) => `document:${id}`)));
   }
   for (const folder of folders) validByParent.get(folder.parentId).add(`folder:${folder.id}`);
-  for (const item of items) {
-    if (!assigned.has(item.id)) validByParent.get("").add(`document:${item.id}`);
+  for (const item of documents) {
+    if (editableIds.has(item.id) && !assigned.has(item.id)) validByParent.get("").add(`document:${item.id}`);
+  }
+  // 根目录里本地还没拿到的文献同样保留原位置，避免一次「文档列表不完整」的加载把它们挤到末尾。
+  for (const key of Array.isArray(value?.order) ? value.order : []) {
+    if (typeof key !== "string" || !key.startsWith("document:")) continue;
+    const id = key.slice(9);
+    if (assigned.has(id) || readOnlyIds.has(id)) continue;
+    validByParent.get("").add(key);
   }
   const normalizeOrder = (source, valid) => {
     const order = [];
@@ -273,10 +286,11 @@ function countShelfDocuments(state = getShelfState(), folderId = "") {
     if (!childrenByParent.has(key)) childrenByParent.set(key, []);
     childrenByParent.get(key).push(folder);
   }
+  const knownIds = new Set(documents.map((item) => item.id));
   const inAnyFolder = new Set(state.folders.flatMap((folder) => folder.documentIds));
   const countFrom = (id) => {
     const own = id
-      ? state.folders.find((folder) => folder.id === id)?.documentIds.length || 0
+      ? (state.folders.find((folder) => folder.id === id)?.documentIds || []).filter((key) => knownIds.has(key)).length
       : documents.filter((item) => canEditDocument(item) && !inAnyFolder.has(item.id)).length;
     return own + (childrenByParent.get(id) || []).reduce((sum, child) => sum + countFrom(child.id), 0);
   };
@@ -506,7 +520,9 @@ function createShelfFolderCard(folder, state = getShelfState()) {
   button.type = "button";
   button.className = "book-open folder-open";
   const children = state.folders.filter((entry) => entry.parentId === folder.id);
-  const countText = children.length ? `${folder.documentIds.length} 文献 · ${children.length} 文件夹` : `${folder.documentIds.length} 项文献`;
+  const byId = new Map(documents.map((item) => [item.id, item]));
+  const visibleIds = folder.documentIds.filter((id) => byId.has(id));
+  const countText = children.length ? `${visibleIds.length} 文献 · ${children.length} 文件夹` : `${visibleIds.length} 项文献`;
   button.setAttribute("aria-label", `打开文件夹：${folder.name}，${countText}`);
   const cover = document.createElement("span");
   cover.className = "folder-cover";
@@ -515,15 +531,14 @@ function createShelfFolderCard(folder, state = getShelfState()) {
   icon.setAttribute("aria-hidden", "true");
   const previews = document.createElement("span");
   previews.className = "folder-previews";
-  const byId = new Map(documents.map((item) => [item.id, item]));
-  for (const id of folder.documentIds.slice(0, 4)) {
+  for (const id of visibleIds.slice(0, 4)) {
     const item = byId.get(id);
     const preview = document.createElement("span");
     preview.className = `folder-mini-book cover-${normalizeCoverVariant(item.coverVariant, documents.indexOf(item))}`;
     preview.textContent = getDocumentDisplayTitle(item);
     previews.append(preview);
   }
-  for (const child of children.slice(0, Math.max(0, 4 - folder.documentIds.length))) {
+  for (const child of children.slice(0, Math.max(0, 4 - visibleIds.length))) {
     const preview = document.createElement("span");
     preview.className = "folder-mini-book folder-mini-folder";
     preview.textContent = `▱ ${child.name}`;
